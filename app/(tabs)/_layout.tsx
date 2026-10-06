@@ -1,66 +1,80 @@
 import { SymbolView } from 'expo-symbols';
-import { Link, Tabs } from 'expo-router';
-import { Platform, Pressable } from 'react-native';
+import { Tabs } from 'expo-router';
 
-import Colors from '@/constants/Colors';
-import { useColorScheme } from '@/components/useColorScheme';
-import { useClientOnlyValue } from '@/components/useClientOnlyValue';
+import { useTheme } from '@/components/m3';
+import { strings } from '@/constants/strings';
+import { typography } from '@/constants/theme';
 
+/**
+ * 四個 Tab：搜尋 / 練習 / 字庫 / 我的
+ *
+ * 依 docs/ARCHITECTURE.md §11。headerShown 為 false，各頁自繪標題
+ * （與 UI references 的大字標題一致）。
+ */
 export default function TabLayout() {
-  const colorScheme = useColorScheme();
+  const { colors } = useTheme();
 
   return (
     <Tabs
       screenOptions={{
-        tabBarActiveTintColor: Colors[colorScheme].tint,
-        // Disable the static render of the header on web
-        // to prevent a hydration error in React Navigation v6.
-        headerShown: useClientOnlyValue(false, true),
-      }}>
+        headerShown: false,
+        tabBarActiveTintColor: colors.primary,
+        tabBarInactiveTintColor: colors.onSurfaceVariant,
+        tabBarStyle: {
+          backgroundColor: colors.surfaceContainer,
+          borderTopColor: colors.outlineVariant,
+        },
+        tabBarLabelStyle: typography.labelMedium,
+      }}
+    >
       <Tabs.Screen
         name="index"
         options={{
-          title: 'Tab One',
+          title: strings.tabs.search,
           tabBarIcon: ({ color }) => (
             <SymbolView
-              name={{
-                ios: 'chevron.left.forwardslash.chevron.right',
-                android: 'code',
-                web: 'code',
-              }}
+              name={{ ios: 'magnifyingglass', android: 'search', web: 'search' }}
               tintColor={color}
-              size={28}
+              size={26}
             />
-          ),
-          headerRight: () => (
-            <Link href="/modal" asChild>
-              <Pressable style={{ marginRight: 15 }}>
-                {({ pressed }) => (
-                  <SymbolView
-                    name={{ ios: 'info.circle', android: 'info', web: 'info' }}
-                    size={25}
-                    tintColor={Colors[colorScheme].text}
-                    style={{ opacity: pressed ? 0.5 : 1 }}
-                  />
-                )}
-              </Pressable>
-            </Link>
           ),
         }}
       />
       <Tabs.Screen
-        name="two"
+        name="practice"
         options={{
-          title: 'Tab Two',
+          title: strings.tabs.practice,
           tabBarIcon: ({ color }) => (
             <SymbolView
-              name={{
-                ios: 'chevron.left.forwardslash.chevron.right',
-                android: 'code',
-                web: 'code',
-              }}
+              name={{ ios: 'play.circle', android: 'play_circle', web: 'play_circle' }}
               tintColor={color}
-              size={28}
+              size={26}
+            />
+          ),
+        }}
+      />
+      <Tabs.Screen
+        name="vocab"
+        options={{
+          title: strings.tabs.vocab,
+          tabBarIcon: ({ color }) => (
+            <SymbolView
+              name={{ ios: 'bookmark', android: 'bookmark', web: 'bookmark' }}
+              tintColor={color}
+              size={26}
+            />
+          ),
+        }}
+      />
+      <Tabs.Screen
+        name="profile"
+        options={{
+          title: strings.tabs.profile,
+          tabBarIcon: ({ color }) => (
+            <SymbolView
+              name={{ ios: 'person', android: 'person', web: 'person' }}
+              tintColor={color}
+              size={26}
             />
           ),
         }}

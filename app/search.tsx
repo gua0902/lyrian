@@ -123,9 +123,9 @@ export function parseLrcTime(timeStr: string): number {
 /**
  * 解析 syncedLyrics 文字為歌詞行與時間
  */
-export function parseSyncedLyrics(syncedLyrics: string): Array<{ text: string; time: number }> {
+export function parseSyncedLyrics(syncedLyrics: string): { text: string; time: number }[] {
   const lines = syncedLyrics.split('\n');
-  const result: Array<{ text: string; time: number }> = [];
+  const result: { text: string; time: number }[] = [];
 
   for (const rawLine of lines) {
     const trimmed = rawLine.trim();
@@ -167,9 +167,26 @@ export default function SearchScreen() {
   const [activeBlankIndex, setActiveBlankIndex] = useState(0);
   const [bottomOptions, setBottomOptions] = useState<string[]>([]);
 
-  // 播放時間與當前高亮行
+  // 播放時間
   const [currentSeconds, setCurrentSeconds] = useState(0);
-  const [currentLine, setCurrentLine] = useState<number>(-1);
+
+  /**
+   * 當前高亮行：**純粹由 currentSeconds 推導**，不需要用 state 存放。
+   * （原本以 state + effect 實作，會造成 cascading render 並被 lint 擋下。）
+   */
+  const currentLine = useMemo(() => {
+    if (questions.length === 0) return -1;
+
+    let activeIdx = -1;
+    for (let i = 0; i < questions.length; i++) {
+      if (currentSeconds >= questions[i].timeSeconds) {
+        activeIdx = i;
+      } else {
+        break;
+      }
+    }
+    return activeIdx;
+  }, [currentSeconds, questions]);
 
   const [loading, setLoading] = useState(false);
   const [errorMsg, setErrorMsg] = useState('');
@@ -195,7 +212,7 @@ export default function SearchScreen() {
 
   // 1. Timer 每秒累加，到達 totalDuration 自動停止
   useEffect(() => {
-    let interval: NodeJS.Timeout | null = null;
+    let interval: ReturnType<typeof setInterval> | null = null;
 
     if (status === 'isPlaying') {
       interval = setInterval(() => {
@@ -215,38 +232,23 @@ export default function SearchScreen() {
     };
   }, [status, totalDuration]);
 
-  // 2. 播放中跟隨 currentSeconds 自動更新 currentLine 與 auto scroll
+  // 2. 播放中自動捲動到當前句（外部系統副作用，與上面的純推導分離）
+  const lastScrolledLineRef = useRef(-1);
   useEffect(() => {
-    if (questions.length === 0) {
-      setCurrentLine(-1);
-      return;
-    }
+    if (status !== 'isPlaying' || currentLine < 0) return;
+    if (lastScrolledLineRef.current === currentLine) return;
+    lastScrolledLineRef.current = currentLine;
 
-    let activeIdx = -1;
-    for (let i = 0; i < questions.length; i++) {
-      if (currentSeconds >= questions[i].timeSeconds) {
-        activeIdx = i;
-      } else {
-        break;
-      }
+    try {
+      flatListRef.current?.scrollToIndex({
+        index: currentLine,
+        animated: true,
+        viewPosition: 0.3,
+      });
+    } catch {
+      // FlatList 尚未 render 完成
     }
-
-    if (activeIdx !== currentLine) {
-      setCurrentLine(activeIdx);
-
-      if (status === 'isPlaying' && activeIdx >= 0 && flatListRef.current) {
-        try {
-          flatListRef.current.scrollToIndex({
-            index: activeIdx,
-            animated: true,
-            viewPosition: 0.3,
-          });
-        } catch {
-          // FlatList 尚未 render 完成
-        }
-      }
-    }
-  }, [currentSeconds, questions, status, currentLine]);
+  }, [currentLine, status]);
 
   // 3. 搜尋 API 與初始化
   const handleSearch = async () => {
@@ -264,9 +266,9 @@ export default function SearchScreen() {
     setAllAnswers([]);
     setUserSelections({});
     setCurrentSeconds(0);
-    setCurrentLine(-1);
     setActiveBlankIndex(0);
     setBottomOptions([]);
+    lastScrolledLineRef.current = -1;
 
     try {
       const url = `https://lrclib.net/api/get?artist_name=${encodeURIComponent(
@@ -292,7 +294,7 @@ export default function SearchScreen() {
       const syncedLyrics: string | undefined = data.syncedLyrics;
       const plainLyrics: string | undefined = data.plainLyrics;
 
-      let parsedItems: Array<{ text: string; time: number }> = [];
+      let parsedItems: { text: string; time: number }[] = [];
 
       if (syncedLyrics && syncedLyrics.trim().length > 0) {
         parsedItems = parseSyncedLyrics(syncedLyrics);
@@ -500,6 +502,7 @@ export default function SearchScreen() {
                   onPress={() => {
                     setStatus('isSearching');
                     setCurrentSeconds(0);
+                    setActiveBlankIndex(0);
                     setUserSelections({});
                     setQuestions([]);
                   }}
