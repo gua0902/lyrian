@@ -97,3 +97,48 @@ git config user.name "你的名字"
 git config user.email "你的信箱"
 git commit --amend --reset-author
 ```
+
+---
+
+## TASK-03：P0 地基（M3 + 四 Tab + 放棄 Capacitor）
+
+### 目標
+建立 Material 3 設計地基與四個 Tab 骨架，並確立 Android 交付路線。
+
+### 進度紀錄
+
+| 日期 | 步驟 | 狀態 |
+|------|------|------|
+| 2026-10-06 | 查證 Expo SDK 57 的 `expo-sqlite` / `expo-secure-store` 平台支援 | ✅ |
+| 2026-10-06 | **決策：放棄 Capacitor，改走 Expo 原生 Android** | ✅ |
+| 2026-10-06 | 新增 `constants/theme.ts`（M3 token，Light + Dark） | ✅ |
+| 2026-10-06 | 新增 `components/m3/`（Button / TextField / Card / SegmentedButton / ThemeProvider） | ✅ |
+| 2026-10-06 | 新增 `constants/strings.ts`（繁中文字單一來源） | ✅ |
+| 2026-10-06 | 新增 `db/schema.ts`（7 張表的純 SQL） | ✅ |
+| 2026-10-06 | 四 Tab 骨架：搜尋 / 練習 / 字庫 / 我的 | ✅ |
+| 2026-10-06 | 移除 Capacitor 依賴與 `capacitor.config.ts` | ✅ |
+| 2026-10-06 | 正名 `app.json`：`temp_init` → `Lyrian` / `lyrian`，補 `android.package` | ✅ |
+| 2026-10-06 | 移除 11 個範本殘留檔 | ✅ |
+| 2026-10-06 | 修正既有 `search.tsx` 的 setState-in-effect | ✅ |
+| 2026-10-06 | lint + tsc + Metro bundle 驗證 | ✅ commit `e3a3d24` |
+
+### 為什麼放棄 Capacitor（重要）
+原方案是 Capacitor WebView 載入 Expo 的 web bundle。但儲存層需要兩個 **Expo 原生模組**：
+
+| 模組 | 官方平台支援 | WebView 結果 |
+|---|---|---|
+| `expo-secure-store` | `android, ios, tvos, expo-go`（**無 web**）| ❌ 不能用，BYOK 金鑰無處安全存放 |
+| `expo-sqlite` | 含 web，但需 WASM + `SharedArrayBuffer`，且標示 alpha | ⚠️ Android WebView 的 SharedArrayBuffer 不可靠 |
+
+而 `AGENTS.md` 與 `.gitignore`（`# generated native folders /ios /android`）本來就假設 Expo prebuild。
+**Capacitor 才是偏離。** 已定案改回 Expo 原生 Android，詳見 `docs/ARCHITECTURE.md` §2.1。
+
+### 順手修好的既有問題
+移除 Capacitor 時，`@types/node` 因不再是傳遞依賴而被裁掉，暴露出 `search.tsx` 既有的
+`NodeJS.Timeout` 型別錯誤。另外 lint 擋下 `currentLine` 的 setState-in-effect——該值其實是
+由 `currentSeconds` 純推導，已改為 `useMemo`，並把「自動捲動」拆成獨立 effect。
+
+### 待處理
+- Android build 需重新驗證（Expo SDK 57 / RN 0.86 的 JDK 需求）。
+- 其餘待決事項見 `docs/ARCHITECTURE.md` §13。
+

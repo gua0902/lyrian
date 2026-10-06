@@ -32,7 +32,7 @@
 | 單字庫 / 持久化 | ❌ 完全沒有 | `userSelections` 只在記憶體 |
 | 音樂播放 | ❌ 完全沒有 | 練習頁只有假 timer |
 | AI（英翻中） | ❌ 完全沒有 | 無 BYOK、無 provider 層 |
-| APK 打包 | ✅ 已成功 | Capacitor 6 + JDK 17（見 `docs/DEVLOG.md` TASK-01）|
+| APK 打包 | ⚠️ 已作廢 | 曾以 Capacitor 6 + JDK 17 成功（見 `docs/DEVLOG.md` TASK-01），但已於 §2.1 決策放棄 Capacitor，改走 Expo 原生 Android |
 | Git 版本控制 | ⚠️ 0 commits | repo 已 init 但無任何 commit |
 
 **技術債**：`app.json` 仍是範本值（`name`/`slug` = `temp_init`，scheme `tempinit`）；`components/` 為 Expo 範本殘留（`EditScreenInfo`、`StyledText`）。
@@ -45,7 +45,7 @@
 |---|---|---|
 | 框架 | Expo 57 + React Native 0.86 + TypeScript | 沿用現有 |
 | 路由 | Expo Router（`app/`） | 沿用現有 |
-| 打包 | Capacitor 6 → Android APK | TASK-01 已驗證（JDK 17 相容線）|
+| 打包 | **Expo 原生 Android**（prebuild / EAS）| 2026-10-06 決策變更，放棄 Capacitor。理由見 §2.1 |
 | 樣式 | **自建 M3 Design Token 層**（`constants/theme.ts`）| RN 沒有原生 M3 元件；用 token 實作 M3 視覺 |
 | 本地資料庫 | `expo-sqlite` | 字庫、快取、統計 |
 | 機密儲存 | `expo-secure-store` | API Key / Spotify Client ID |
@@ -74,8 +74,29 @@
 |---|---|---|
 | 「所有文字放 `strings.xml`」| `docs/DESIGN.md` 第 7 點 | **不可行**。RN 無 `strings.xml`。改為集中式字串模組 `constants/strings.ts`（單一來源、可日後接 i18n）|
 | 「只能用 Material 3 原生元件」| `docs/DESIGN.md` 第 1 點 | **不可行**。RN 無原生 M3 widget。改為以 M3 token 自建元件庫（`components/m3/`）|
-| Expo Router vs Capacitor | AGENTS.md vs DEVLOG | 兩者不衝突：Expo Router 管路由，Capacitor 只負責把 web build 包成 APK。維持現狀 |
+| Expo Router vs Capacitor | AGENTS.md vs DEVLOG | **已裁決：放棄 Capacitor，改走 Expo 原生 Android**（見 §2.1）|
 | 「禁止付費 API」| `docs/REQUIREMENTS.md` 核心規則 1 | **以 BYOK 解套**：App 本身不內建、不轉售任何付費 API。使用者自帶 key，成本與責任在使用者端 |
+
+### 2.1 交付路線變更：放棄 Capacitor（2026-10-06）
+
+**原方案**：Capacitor WebView 載入 Expo 的 web bundle，包成 Android APK（見 `docs/DEVLOG.md` TASK-01）。
+
+**問題**：本 App 的儲存層需要兩個 **Expo 原生模組**，而它們在 web 上不可用或不穩定。
+
+| 模組 | 官方平台支援 | 在 Capacitor WebView 的結果 |
+|---|---|---|
+| `expo-secure-store` | `android, ios, tvos, expo-go`（**無 web**）| ❌ 完全不能用——BYOK 金鑰無處安全存放 |
+| `expo-sqlite` | 含 web，但需 WASM + `SharedArrayBuffer`（COOP/COEP 跨源隔離），且標示 alpha | ⚠️ Android WebView 的 `SharedArrayBuffer` 是已知痛點 |
+
+**決策**：改走 **Expo 原生 Android**（`expo prebuild` / EAS Build）。
+
+**支持理由**
+1. `AGENTS.md` 通篇即為 Expo 原生而寫（CNG、config plugins、EAS）。
+2. 專案的 `.gitignore` 本身標註 `# generated native folders /ios /android`——那是標準 Expo prebuild 的假設。**Capacitor 才是後來為了繞 JDK 問題而加的偏離。**
+3. 上述兩個模組，以及未來的 Spotify App Remote SDK（原生），都能直接用。
+4. 避免為 Capacitor 另外重寫一套資料層。
+
+**代價 / 待驗證**：Android build 需重新驗證（Expo SDK 57 / RN 0.86 的 JDK 需求）。
 
 ---
 
@@ -210,10 +231,10 @@ Deezer API（同樣免 key）為備選。
 | 方案 | 原生插件 | 免費帳號 | 精度 | 成本 |
 |---|---|---|---|---|
 | **A. Web API + PKCE** | 不需要 | ❌ 需 Premium | `progress_ms` 輪詢 + 本地內插 | 低 |
-| **B. App Remote SDK** | 需寫 Capacitor plugin | ✅ 可用 | 官方「always in sync」 | 中 |
+| **B. App Remote SDK** | 需寫 Expo native module / config plugin | ✅ 可用 | 官方「always in sync」 | 中 |
 
 > **擁有者已持有 Premium**，故方案 A 可行且成本低得多。
-> ⚠️ **安全**：**不要在使用者裝置放 Client Secret。** 行動端用 **PKCE**，只需 Client ID。若日後要做 Web Playback SDK，注意 Capacitor Android WebView **不具備 Widevine DRM**，該路線不可行。
+> ⚠️ **安全**：**不要在使用者裝置放 Client Secret。** 行動端用 **PKCE**，只需 Client ID。若日後要做 Web Playback SDK，注意行動端 WebView（Android WebView）**不具備 Widevine DRM**，該路線不可行。
 
 > **⚠️ 名詞界定（重要，勿混淆）**
 > **BYOK 專指 AI API 金鑰**（見 §9），與 Spotify 憑證是**兩件完全獨立**的事。
@@ -705,7 +726,7 @@ app/
 
 | Phase | 內容 | 產出 |
 |---|---|---|
-| **P0 地基** | M3 token 層；4 Tab 骨架；SQLite schema 建立；移除範本殘留；修 `app.json` | App 能開、四個空頁面、M3 外觀正確 |
+| **P0 地基** ✅ **已完成 2026-10-06** | M3 token 層；4 Tab 骨架；SQLite schema；移除範本殘留；修 `app.json`；放棄 Capacitor | commit `e3a3d24`——lint + tsc + Metro bundle 全通過 |
 | **P1 核心循環** | 搜尋頁（LRCLIB 真搜尋 + iTunes 封面 + 曲風）、練習模式 Bottom Sheet、`fill-choice` 模式（接 `lyricsfile`、ECDICT 選字） | **完整可玩的純文字循環** |
 | **P2 AI** | 設定頁 + BYOK provider 清單 + KeyPool + 連接測試；`zh-translate` 模式；手勢（長按查字、滑動反白） | 兩種練習模式齊備 |
 | **P3 字庫** | 單字收集（lemma 去重）、FSRS 排程、學測式複習題型（詞彙題／文意選填／搭配詞／詞形） | 字庫可複習 |
@@ -724,7 +745,7 @@ app/
 | R1 | **ECDICT 授權未確認** | 🔴 高 | 散布前必須查 `LICENSE`。若不容許再散布，需改為使用者自行下載 |
 | R2 | LRCLIB 無封面 | 🟡 中 | 已定案外接 iTunes，但增加一次網路往返與失敗點 |
 | R3 | Spotify SDK 官方標示 Beta | 🟡 中 | 「functionality is likely to change significantly without warning」；P6 才處理 |
-| R4 | Capacitor WebView 無 Widevine | 🟡 中 | 確定 Web Playback SDK 路線不可行，只能走 Web API 或 App Remote |
+| R4 | 行動端 WebView 無 Widevine DRM | 🟡 中 | 確定 Web Playback SDK 路線不可行，只能走 Web API 或 App Remote SDK |
 | R5 | 長按 vs 長按滑動的手勢衝突 | 🟡 中 | P2 需先做原型驗證，否則兩者會互搶事件 |
 | R6 | 英翻中評分客觀性 | 🟡 中 | LLM 評分有變異性；`score` 閾值需實測調校 |
 | R7 | LRCLIB 歌詞品質參差 | 🟡 中 | 社群貢獻，可能有錯字／時間軸偏差；需容錯與回報機制 |
@@ -753,6 +774,8 @@ app/
 | Operit 的 BYOK 架構＝自定義兼容端點 + 密鑰池 + 連接測試 | [Mavaebrook/Operit](https://github.com/Mavaebrook/Operit) |
 | Nibomo 用 FSRS 排程，MCP 公開 `sql_query`/`sql_execute`/`next_review_card`/`submit_review` 等 8 工具 | [kirill-markin/flashcards-open-source-app](https://github.com/kirill-markin/flashcards-open-source-app) |
 | 學測英文詞彙題考點已從「單字字義」轉向「常用搭配」| [115 學測最前線 英文科](https://www.ltedu.com.tw/QRApp/mocktest/61001N/115%E5%AD%B8%E6%B8%AC%E6%9C%80%E5%89%8D%E7%B7%9A-%E8%8B%B1%E6%96%87%E7%A7%91.pdf) |
+| `expo-secure-store` **無 web 實作**（平台僅 `android, ios, tvos, expo-go`）| [Expo SDK 57 SecureStore 文件](https://docs.expo.dev/versions/v57.0.0/sdk/securestore/) |
+| `expo-sqlite` 在 web 需 WASM + `SharedArrayBuffer`（COOP/COEP），且標示 alpha | [Expo SDK 57 SQLite 文件](https://docs.expo.dev/versions/v57.0.0/sdk/sqlite/) |
 
 ---
 
