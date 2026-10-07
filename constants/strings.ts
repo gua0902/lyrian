@@ -126,3 +126,16 @@ export const strings = {
 } as const;
 
 export type Strings = typeof strings;
+
+/**
+ * 簡易樣板替換，用來填 `{name}` 這類佔位符。
+ *
+ * @example
+ * format(strings.profile.greetingFormat, { name: '小林' })   // '嗨，小林！'
+ * format(strings.vocab.bannerSubtitle, { collected: 32, due: 8 })
+ */
+export function format(template: string, values: Record<string, string | number>): string {
+  return template.replace(/\{(\w+)\}/g, (match, key: string) =>
+    key in values ? String(values[key]) : match
+  );
+}

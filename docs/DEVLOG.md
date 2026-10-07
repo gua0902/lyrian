@@ -139,6 +139,69 @@ git commit --amend --reset-author
 由 `currentSeconds` 純推導，已改為 `useMemo`，並把「自動捲動」拆成獨立 effect。
 
 ### 待處理
-- Android build 需重新驗證（Expo SDK 57 / RN 0.86 的 JDK 需求）。
+- Android build 需重新驗證（Expo SDK 57 / RN 0.86 的 JDK 需求）。→ 已於 TASK-04 驗證完成。
 - 其餘待決事項見 `docs/ARCHITECTURE.md` §13。
+
+---
+
+## TASK-04：Android 原生交付驗證
+
+### 目標
+驗證從 Capacitor 改走 Expo 原生 Android 後，`expo prebuild` + Gradle 能成功產出 APK。
+
+### 結果
+✅ **BUILD SUCCESSFUL in 13m 55s** → `app-debug.apk`（75.72 MB）
+
+| 項目 | 值 |
+|---|---|
+| compileSdk / targetSdk | 36 |
+| buildTools | 36.0.0 |
+| minSdk | 24 |
+| NDK | 27.1.12297006 |
+| Kotlin | 2.1.20 |
+| JDK | 17.0.19（Microsoft build） |
+| Gradle | 9.3.1 |
+
+→ 確認 **JDK 17 足夠**。當初卡住的是 Capacitor 8 硬要 Java 21，**不是** React Native 的需求。
+
+### 為什麼第一次建置特別慢（近 14 分鐘）
+不是「電腦慢」，是四個具體原因：
+
+| 原因 | 影響 | 處理 |
+|---|---|---|
+| **CMake 3.22.1 未預先安裝**，Gradle 在建置中途沈默下載 | 看起來像卡死（daemon 停在 ~5% CPU 等網路） | Gradle 已自動裝好，位於 `...\Android\Sdk\cmake\3.22.1` |
+| **`reactNativeArchitectures` 預設四種 ABI** | 原生 C++ 被編譯 **4 次** | 改為 `arm64-v8a`，並用 `expo-build-properties` 永久化 |
+| 首次下載 Gradle 發行版 + Maven 相依 | 約 975 MB + 2 GB | 一次性成本，之後走快取 |
+| `org.gradle.jvmargs` 僅 2 GB | GC 壓力 | 手動提高可加速；但 prebuild 會還原（見下） |
+
+另外一個**人為因素**：輸出被 `Select-Object -Last N` 接管線會緩衝全部內容，
+導致看不到進度、誤判為卡死。正確做法是加 `--console=plain` 且不接管線。
+
+### 永久化設定
+`android/` 是 prebuild 產生物，手改會被覆蓋。已在 `app.json` 加入：
+
+```json
+["expo-build-properties", {
+  "android": { "buildArchs": ["arm64-v8a"], "useDayNightTheme": true }
+}]
+```
+
+**已實測驗證**：plugin 確實會寫入 `reactNativeArchitectures=arm64-v8a` 與 `android.useDayNightTheme=true`。
+
+### 兩個 prebuild 會清掉、且無法進版控的項目
+1. **`android/local.properties`**（Gradle 靠它找 SDK）——每次 prebuild 都會消失。
+   建議永久設定環境變數，一勞永逸：
+   ```powershell
+   setx ANDROID_HOME "C:\Users\cheny\AppData\Local\Android\Sdk"
+   ```
+2. **`org.gradle.jvmargs`**——`expo-build-properties` 不管理此項，prebuild 會還原成 2 GB。
+   要永久提高需自寫小型 config plugin。（放在 `~/.gradle/gradle.properties` 無效，因為專案層會覆蓋。）
+
+### 順帶發現
+- **`react-native-gesture-handler` 已在依賴中** → P2 的手勢功能（長按查字／長按滑動反白）現成可用。
+- prebuild 警告 `userInterfaceStyle: automatic` 需要 `expo-system-ui` → **已安裝**（否則 Android 不跟隨系統深色模式）。
+
+### 注意
+`expo prebuild` 會清除 `android/app/build`，因此驗證當時產出的 APK 已被清掉。
+設定已永久化，下次建置會更快（相依快取與 `.cxx` 皆保留）。
 
