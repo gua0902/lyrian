@@ -187,7 +187,7 @@ export default function PracticeTabScreen() {
           onPress={handleChangeSong}
           accessibilityRole="button"
           accessibilityLabel={strings.practice.changeSong}
-          hitSlop={8}
+          style={styles.appBarButton}
         >
           <SymbolView
             name={{ ios: 'arrow.left', android: 'arrow_back', web: 'arrow_back' }}
@@ -403,7 +403,11 @@ export default function PracticeTabScreen() {
                 {strings.practice.fillBlankLabel}
               </Text>
               {answeredRecord ? (
-                <Pressable onPress={handleNextBlank} accessibilityRole="button" hitSlop={8}>
+                <Pressable
+                  onPress={handleNextBlank}
+                  accessibilityRole="button"
+                  style={styles.nextButton}
+                >
                   <Text style={[typography.bodySmall, styles.nextLink, { color: colors.primary }]}>
                     {`${strings.practice.nextBlank} ›`}
                   </Text>
@@ -463,9 +467,13 @@ export default function PracticeTabScreen() {
                       },
                     ]}
                   >
-                    {state === 'correct' ? (
+                    {state !== 'idle' ? (
                       <SymbolView
-                        name={{ ios: 'checkmark', android: 'check', web: 'check' }}
+                        name={
+                          state === 'correct'
+                            ? { ios: 'checkmark', android: 'check', web: 'check' }
+                            : { ios: 'xmark', android: 'close', web: 'close' }
+                        }
                         tintColor={palette.text}
                         size={16}
                         style={styles.optionCheck}
@@ -529,6 +537,14 @@ const styles = StyleSheet.create({
   },
   appBarSubtitle: {
     marginTop: 2,
+  },
+  /** 觸控目標至少 48dp（MD3 無障礙要求） */
+  appBarButton: {
+    width: 48,
+    height: 48,
+    alignItems: 'center',
+    justifyContent: 'center',
+    marginLeft: -spacing.sm,
   },
   scrollContent: {
     paddingHorizontal: spacing.lg,
@@ -609,6 +625,13 @@ const styles = StyleSheet.create({
   },
   nextLink: {
     fontWeight: '700',
+  },
+  /** 觸控目標至少 48dp（MD3 無障礙要求） */
+  nextButton: {
+    minHeight: 48,
+    minWidth: 48,
+    alignItems: 'flex-end',
+    justifyContent: 'center',
   },
   optionGrid: {
     flexDirection: 'row',

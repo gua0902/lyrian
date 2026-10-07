@@ -124,26 +124,59 @@ function createQuestion(
 }
 
 /**
+ * 每首歌最多挖幾個空。
+ *
+ * 依 `UI references/Lyrian · 搜尋.png` 與 `Lyrian · 歌詞練習.png`——兩首歌都顯示
+ * 「10 個填空」／「共 10 個」。實測 Adele《Hello》在門檻 4 之下有 48 行可挖，
+ * 若不設上限，一輪練習會變成 48 題（不符參考圖，也不是好的練習長度）。
+ */
+export const DEFAULT_MAX_BLANKS = 10;
+
+/**
+ * 從清單中**均勻取樣** count 個項目，讓挖空涵蓋整首歌而不是只集中在前半段。
+ *
+ * 這是上限的選擇策略；P1.5 接上 ECDICT 後會改由詞頻決定要挑哪些字。
+ */
+export function pickEvenlySpaced<T>(items: readonly T[], count: number): T[] {
+  if (count <= 0 || items.length === 0) return [];
+  if (count >= items.length) return [...items];
+  if (count === 1) return [items[0]];
+
+  const picked: T[] = [];
+  for (let i = 0; i < count; i += 1) {
+    picked.push(items[Math.round((i * (items.length - 1)) / (count - 1))]);
+  }
+  return picked;
+}
+
+/**
  * 把整首歌詞轉成題目集。
  *
- * 每一行**最多挖一個空**（需求書 Spec 2：「每句隨機挖 1 個單字」）。
+ * 每一行**最多挖一個空**（需求書 Spec 2：「每句隨機挖 1 個單字」），
+ * 但整首最多 `maxBlanks` 題（預設 10，依參考圖）。
  * 沒有合格單字的行不會產生題目，但仍保留在 `lines` 中供歌詞流顯示。
  */
 export function buildFillChoiceDataset(
   lines: readonly LyricLine[],
-  options: { rng?: Rng; minWordLength?: number } = {}
+  options: { rng?: Rng; minWordLength?: number; maxBlanks?: number } = {}
 ): FillChoiceDataset {
   const rng = options.rng ?? defaultRng;
   const minWordLength = options.minWordLength ?? BLANK_MIN_WORD_LENGTH;
-  const questions: FillChoiceQuestion[] = [];
+  const maxBlanks = options.maxBlanks ?? DEFAULT_MAX_BLANKS;
 
+  const blankable: Array<{ line: LyricLine; candidates: BlankCandidate[] }> = [];
   for (const line of lines) {
     const candidates = findBlankCandidates(line.text, minWordLength);
-    if (candidates.length === 0) continue;
-
-    const pick = Math.min(candidates.length - 1, Math.floor(rng() * candidates.length));
-    questions.push(createQuestion(line, questions.length, candidates[pick]));
+    if (candidates.length > 0) blankable.push({ line, candidates });
   }
+
+  const questions = pickEvenlySpaced(blankable, maxBlanks).map((entry, blankIndex) => {
+    const pick = Math.min(
+      entry.candidates.length - 1,
+      Math.floor(rng() * entry.candidates.length)
+    );
+    return createQuestion(entry.line, blankIndex, entry.candidates[pick]);
+  });
 
   return { lines: [...lines], questions };
 }
@@ -152,14 +185,16 @@ export function buildFillChoiceDataset(
  * 只計算「可挖空的行數」，不產生題目。
  *
  * 搜尋結果清單要顯示「N 個填空」（對應參考圖的「10 個填空」）時使用，
- * 避免為 20 筆結果各建立一份完整題目集。
+ * 避免為 20 筆結果各建立一份完整題目集。上限與 `buildFillChoiceDataset` 一致。
  */
 export function countBlankableLines(
   lines: readonly LyricLine[],
-  minWordLength: number = BLANK_MIN_WORD_LENGTH
+  minWordLength: number = BLANK_MIN_WORD_LENGTH,
+  maxBlanks: number = DEFAULT_MAX_BLANKS
 ): number {
   let count = 0;
   for (const line of lines) {
+    if (count >= maxBlanks) break;
     if (findBlankCandidates(line.text, minWordLength).length > 0) count += 1;
   }
   return count;

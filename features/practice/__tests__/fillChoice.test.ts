@@ -1,14 +1,17 @@
 import {
   BLANK_MIN_WORD_LENGTH,
+  DEFAULT_MAX_BLANKS,
   OPTION_COUNT,
   buildFillChoiceDataset,
   buildOptions,
   computeProgress,
+  countBlankableLines,
   createSeededRng,
   findBlankCandidates,
   gradeChoice,
   indexQuestionsByLine,
   normalizeAnswer,
+  pickEvenlySpaced,
   shuffle,
 } from '../fillChoice';
 import type { ChoiceRecord, FillChoiceQuestion, LyricLine } from '../types';
@@ -207,6 +210,77 @@ describe('buildFillChoiceDataset', () => {
       minWordLength: 5,
     });
     expect(questions).toHaveLength(0);
+  });
+});
+
+describe('pickEvenlySpaced', () => {
+  it('取樣數量大於等於長度時回傳全部', () => {
+    expect(pickEvenlySpaced([1, 2, 3], 5)).toEqual([1, 2, 3]);
+    expect(pickEvenlySpaced([1, 2, 3], 3)).toEqual([1, 2, 3]);
+  });
+
+  it('取樣 0 或空清單回傳空陣列', () => {
+    expect(pickEvenlySpaced([1, 2, 3], 0)).toEqual([]);
+    expect(pickEvenlySpaced([], 3)).toEqual([]);
+  });
+
+  it('取樣 1 個時取第一個', () => {
+    expect(pickEvenlySpaced([1, 2, 3, 4], 1)).toEqual([1]);
+  });
+
+  it('涵蓋頭尾且數量正確', () => {
+    const picked = pickEvenlySpaced([0, 1, 2, 3, 4, 5, 6, 7, 8, 9], 5);
+    expect(picked).toHaveLength(5);
+    expect(picked[0]).toBe(0);
+    expect(picked[4]).toBe(9);
+  });
+
+  it('結果遞增且不重複', () => {
+    const picked = pickEvenlySpaced(
+      Array.from({ length: 48 }, (_, i) => i),
+      10
+    );
+    expect(picked).toEqual([...picked].sort((a, b) => a - b));
+    expect(new Set(picked).size).toBe(picked.length);
+  });
+});
+
+describe('每首歌的挖空上限', () => {
+  // 實測 Adele《Hello》在門檻 4 之下有 48 行可挖
+  const manyLines = Array.from({ length: 48 }, (_, i) => line(i, `wonderful morning number ${i}`));
+
+  it('預設上限為 10（依參考圖的「共 10 個」）', () => {
+    expect(DEFAULT_MAX_BLANKS).toBe(10);
+    expect(buildFillChoiceDataset(manyLines, { rng: seededRng(1) }).questions).toHaveLength(10);
+  });
+
+  it('maxBlanks 可覆寫', () => {
+    const { questions } = buildFillChoiceDataset(manyLines, { rng: seededRng(1), maxBlanks: 3 });
+    expect(questions).toHaveLength(3);
+  });
+
+  it('可挖空的行少於上限時全部挖空', () => {
+    const few = [line(0, 'wonderful morning'), line(1, 'another lovely day')];
+    expect(buildFillChoiceDataset(few, { rng: seededRng(1) }).questions).toHaveLength(2);
+  });
+
+  it('取樣涵蓋整首歌，而不是只挖前半段', () => {
+    const { questions } = buildFillChoiceDataset(manyLines, { rng: seededRng(1) });
+    expect(questions[0].lineIndex).toBe(0);
+    expect(questions[questions.length - 1].lineIndex).toBe(47);
+  });
+});
+
+describe('countBlankableLines', () => {
+  const manyLines = Array.from({ length: 48 }, (_, i) => line(i, `wonderful morning number ${i}`));
+
+  it('受上限限制，與 buildFillChoiceDataset 一致', () => {
+    expect(countBlankableLines(manyLines)).toBe(DEFAULT_MAX_BLANKS);
+    expect(countBlankableLines(manyLines, BLANK_MIN_WORD_LENGTH, 3)).toBe(3);
+  });
+
+  it('沒有可挖空的行時為 0', () => {
+    expect(countBlankableLines([line(0, 'a b c')])).toBe(0);
   });
 });
 

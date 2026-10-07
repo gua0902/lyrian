@@ -42,3 +42,6 @@ yarn-error.*
 
 # test coverage
 coverage/
+
+# agent tooling（由 `npx skills add` 安裝，非 App 原始碼）
+.agents/
