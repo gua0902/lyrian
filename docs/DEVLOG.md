@@ -234,12 +234,13 @@ git commit --amend --reset-author
   改用**縮排層級**判斷（首次遇到的層級為頂層，更深的視為巢狀並忽略），並以測試覆蓋。
 - `findBlankCandidates` 每次建立新的 `RegExp`，避免共用 `lastIndex` 的狀態污染（有測試覆蓋）。
 
-### ⚠️ 需要裁決的規格衝突
-`docs/REQUIREMENTS.md` Spec 2 寫「挖空單字長度 **> 4**」，
-但 `UI references/Lyrian · 歌詞練習.png` 的答案是 **`Hope`(4)** 與 **`Love`(4)**，都比門檻短。
+### 規格衝突（已裁決）
+`docs/REQUIREMENTS.md` Spec 2 寫「挖空單字長度 **> 4**」（即 ≥ 5），
+但 `UI references/Lyrian · 歌詞練習.png` 的答案是 **`Hope`(4)** 與 **`Love`(4)**。
 
-目前門檻是參數（`minWordLength`，預設 5，依需求書）。改成符合參考圖只需傳 4。
-**待擁有者決定以哪個為準**，詳見 `docs/ARCHITECTURE.md` §6.2。
+**2026-10-06 裁決：以參考圖為準，門檻 = 4。**
+理由：love / hope / hold / heart 這類學習者最需要的常用字才挖得到，可挖的行數也更多。
+門檻仍保留為 `minWordLength` 參數，需要更嚴格時可覆寫。
 
 ### 測試環境備註
 - Windows 上安裝語法需加 `"--"`：`npx expo install jest-expo jest @types/jest "--" --dev`。

@@ -16,13 +16,16 @@ import type {
 } from './types';
 
 /**
- * 只有長度 >= 5 的純字母單字才會被挖空（需求書 Spec 2：「長度 > 4」）。
+ * 可挖空單字的最小長度（4）。
  *
- * ⚠️ 已知衝突：`UI references/Lyrian · 歌詞練習.png` 的答案是 Hope(4) 與 Love(4)，
- * 都比這個門檻短。此門檻因此設計為**可傳入覆寫**，要改只是一行的事。
- * 參見 `findBlankCandidates` 的 `minWordLength` 參數。
+ * **以 `UI references/Lyrian · 歌詞練習.png` 為準**——該參考圖的答案是 Hope 與 Love，皆為 4 字母。
+ * 這與 `docs/REQUIREMENTS.md` Spec 2 的「長度 > 4」不同，已於 2026-10-06 由擁有者裁決：
+ * **以參考圖為準**，因為 love / hope / hold / heart 這類學習者最需要的常用字才挖得到。
+ *
+ * 需要更嚴格的門檻時，傳 `minWordLength` 給 `findBlankCandidates` 或
+ * `buildFillChoiceDataset` 即可覆寫。
  */
-export const BLANK_MIN_WORD_LENGTH = 5;
+export const BLANK_MIN_WORD_LENGTH = 4;
 
 /** 每題固定 4 個選項（依 UI references 的 2x2 選項格）。 */
 export const OPTION_COUNT = 4;

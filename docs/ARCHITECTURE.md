@@ -382,13 +382,13 @@ interface GradeResult {
 - 原解析器只吃 `start` 時間 → 現在吃 `lyricsfile` 的 `start_ms` **與** `end_ms`。
 - 所有隨機行為接受可注入的 `rng`，讓測試可重現。
 
-> ⚠️ **待決衝突（需擁有者裁決）**
+> **已裁決（2026-10-06）：以參考圖為準，門檻 = 4。**
 > `docs/REQUIREMENTS.md` Spec 2 寫「挖空單字長度 **> 4**」（即 ≥ 5），
-> 但 `UI references/Lyrian · 歌詞練習.png` 的答案是 **`Hope`(4 字母)** 與 **`Love`(4 字母)**，都比門檻短。
+> 但 `UI references/Lyrian · 歌詞練習.png` 的答案是 **`Hope`(4 字母)** 與 **`Love`(4 字母)**。
 >
-> 目前處理：門檻做成 `findBlankCandidates(text, minWordLength)` 與
-> `buildFillChoiceDataset(lines, { minWordLength })` 的參數，**預設 5**（依需求書）。
-> 要改成符合參考圖，只需傳 `minWordLength: 4`。**請裁決要以哪個為準。**
+> 裁決理由：love / hope / hold / heart 這類學習者最需要的常用字才挖得到，且可挖的行數更多。
+> 門檻仍保留為 `findBlankCandidates(text, minWordLength)` 與
+> `buildFillChoiceDataset(lines, { minWordLength })` 的參數，需要更嚴格時可覆寫。
 
 **延後項目**：第 2、3 點（用 ECDICT 詞頻選字與挑干擾項）移至 P1.5，
 需先解決 ECDICT 授權（`docs/ARCHITECTURE.md` §13 R1）。

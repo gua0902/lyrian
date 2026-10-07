@@ -31,23 +31,25 @@ function record(isCorrect: boolean): ChoiceRecord {
 }
 
 describe('findBlankCandidates', () => {
-  it('找出長度 >= 5 的純字母單字', () => {
+  it('預設找出長度 >= 4 的純字母單字（依參考圖）', () => {
     expect(findBlankCandidates('A little love is ours to hold').map((c) => c.word)).toEqual([
       'little',
+      'love',
+      'ours',
+      'hold',
     ]);
   });
 
   it('回報正確的起訖位置', () => {
-    const [candidate] = findBlankCandidates('I keep a little hope inside');
+    const text = 'I keep a little hope inside';
+    const [candidate] = findBlankCandidates(text, 6);
     expect(candidate.word).toBe('little');
-    expect('I keep a little hope inside'.slice(candidate.start, candidate.end)).toBe('little');
+    expect(text.slice(candidate.start, candidate.end)).toBe('little');
   });
 
-  it('minWordLength 可覆寫（參考圖使用 4 字母答案）', () => {
-    expect(findBlankCandidates('A little love is ours', 4).map((c) => c.word)).toEqual([
+  it('minWordLength 可調高以限制候選', () => {
+    expect(findBlankCandidates('A little love is ours to hold', 6).map((c) => c.word)).toEqual([
       'little',
-      'love',
-      'ours',
     ]);
   });
 
@@ -152,13 +154,20 @@ describe('buildFillChoiceDataset', () => {
     expect(questions[0].endMs).toBe(9_000);
   });
 
-  it('minWordLength 可傳入以放寬門檻', () => {
+  it('預設門檻 4 可挖到 love / hold', () => {
     const { questions } = buildFillChoiceDataset([line(0, 'A love to hold')], {
       rng: seededRng(1),
-      minWordLength: 4,
     });
     expect(questions).toHaveLength(1);
     expect(['love', 'hold']).toContain(questions[0].answer);
+  });
+
+  it('minWordLength 可調高以排除短字', () => {
+    const { questions } = buildFillChoiceDataset([line(0, 'A love to hold')], {
+      rng: seededRng(1),
+      minWordLength: 5,
+    });
+    expect(questions).toHaveLength(0);
   });
 });
 
