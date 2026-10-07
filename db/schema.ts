@@ -14,6 +14,10 @@
  *   attempt           作答紀錄（所有練習模式的唯一收斂點）
  *   daily_stat        每日統計（「我的」頁）
  *   provider_config   BYOK provider 設定（金鑰本體存 SecureStore，此表只存別名）
+ *
+ * **刪除語意（重要）**：`song` 只是 LRCLIB 資料的快取，清掉它**不該弄丟使用者的資料**。
+ * 因此 `lyric_line` 隨歌曲 CASCADE（純快取），但 `vocab` 與 `attempt` 只把參照設為 NULL
+ * （字庫與練習紀錄屬於使用者，必須留下）。`vocab_schedule` 隨 vocab CASCADE。
  */
 
 /** 目前 schema 版本，寫入 SQLite 的 `PRAGMA user_version`。每次變更結構時 +1。 */
@@ -63,7 +67,7 @@ CREATE TABLE IF NOT EXISTS vocab (
   pos                 TEXT,
   bnc                 INTEGER,
   frq                 INTEGER,
-  first_song_id       INTEGER REFERENCES song(id),
+  first_song_id       INTEGER REFERENCES song(id) ON DELETE SET NULL,
   context_line        TEXT,
   context_translation TEXT,
   error_count         INTEGER NOT NULL DEFAULT 0,
@@ -91,9 +95,9 @@ CREATE INDEX IF NOT EXISTS idx_schedule_due ON vocab_schedule(due_at);
 CREATE TABLE IF NOT EXISTS attempt (
   id              INTEGER PRIMARY KEY,
   mode_id         TEXT NOT NULL,
-  song_id         INTEGER REFERENCES song(id),
+  song_id         INTEGER REFERENCES song(id) ON DELETE SET NULL,
   line_index      INTEGER,
-  vocab_id        INTEGER REFERENCES vocab(id),
+  vocab_id        INTEGER REFERENCES vocab(id) ON DELETE SET NULL,
   prompt          TEXT,
   user_answer     TEXT,
   correct_answer  TEXT,

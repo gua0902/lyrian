@@ -7,6 +7,8 @@ import { SafeAreaView } from 'react-native-safe-area-context';
 import { M3Button, M3ProgressBar, useTheme } from '@/components/m3';
 import { format, strings } from '@/constants/strings';
 import { radius, spacing, typography } from '@/constants/theme';
+import { getDatabase } from '@/db/database';
+import { logPracticeAnswer } from '@/db/repositories/practiceLog';
 import {
   buildFillChoiceDataset,
   buildOptions,
@@ -16,10 +18,12 @@ import {
   indexQuestionsByLine,
   normalizeAnswer,
   parseLyrics,
+  vocabCandidateFromAttempt,
+  type Attempt,
   type ChoiceRecord,
 } from '@/features/practice';
 import { clearPendingSession, peekPendingSession, type PracticeSession } from '@/features/session';
-import { formatDuration } from '@/utils/time';
+import { formatDuration, toDayKey } from '@/utils/time';
 
 /** 播完前的環境音提示用的固定間隔（真正的音訊播放是 Phase 6）。 */
 const TIMER_INTERVAL_MS = 1000;
@@ -48,6 +52,9 @@ export default function PracticeTabScreen() {
   /** 記住目前載入的是哪一首歌，避免每次取得焦點都重置作答狀態。 */
   const sessionKeyRef = useRef<string | null>(null);
 
+  /** 歌詞行只在該首歌的第一次作答時寫入快取。 */
+  const lyricsSavedRef = useRef(false);
+
   // 搜尋頁選好歌後會寫入 pending session；取得焦點時讀進來。
   useFocusEffect(
     useCallback(() => {
@@ -58,6 +65,7 @@ export default function PracticeTabScreen() {
       if (sessionKeyRef.current === key) return;
 
       sessionKeyRef.current = key;
+      lyricsSavedRef.current = false;
       setSession(pending);
       setActiveBlankIndex(0);
       setSelections({});
@@ -121,6 +129,58 @@ export default function PracticeTabScreen() {
 
   const answeredRecord = currentQuestion ? selections[currentQuestion.blankIndex] : undefined;
 
+  /**
+   * 把一次作答落庫：寫入 attempt、答錯的字收進字庫、累加每日統計。
+   *
+   * 刻意**不 await**——寫入失敗不該卡住或中斷練習（見 ARCHITECTURE.md §3
+   * 「AI 絕不在關鍵路徑上」的同一原則：外掛依賴不阻擋主流程）。
+   */
+  const persistAnswer = useCallback(
+    async (attempt: Attempt, choice: string) => {
+      if (!session || !currentQuestion) return;
+
+      const now = Date.now();
+
+      try {
+        const database = await getDatabase();
+
+        await logPracticeAnswer(database, {
+          modeId: 'fill-choice',
+          lineIndex: attempt.lineIndex,
+          prompt: attempt.prompt,
+          userAnswer: choice,
+          correctAnswer: attempt.correctAnswer,
+          score: attempt.score,
+          isCorrect: attempt.isCorrect,
+          durationMs: null,
+          vocabCandidate: vocabCandidateFromAttempt(currentQuestion, attempt, null),
+          song: {
+            lrclibId: session.song.lrclibId,
+            title: session.song.title,
+            artist: session.song.artist,
+            album: session.song.album,
+            durationMs: session.song.durationMs,
+            coverUrl: session.song.coverUrl,
+            genre: session.song.genre,
+            // 難度需要 ECDICT 詞頻，P1.5 才會填
+            difficulty: null,
+            now,
+          },
+          // 歌詞行只在第一次作答時寫入，之後不必重複 delete + insert
+          lyrics: lyricsSavedRef.current ? null : lines,
+          day: toDayKey(new Date(now)),
+          now,
+        });
+
+        lyricsSavedRef.current = true;
+      } catch (error) {
+        // 落庫失敗只記錄，不打斷練習
+        console.warn('[Lyrian] 記錄作答失敗：', error);
+      }
+    },
+    [currentQuestion, lines, session]
+  );
+
   const handleSelectOption = useCallback(
     (choice: string) => {
       if (!currentQuestion || answeredRecord) return;
@@ -130,8 +190,10 @@ export default function PracticeTabScreen() {
         ...prev,
         [currentQuestion.blankIndex]: { choice, isCorrect: attempt.isCorrect },
       }));
+
+      void persistAnswer(attempt, choice);
     },
-    [answeredRecord, currentQuestion]
+    [answeredRecord, currentQuestion, persistAnswer]
   );
 
   const handleNextBlank = useCallback(() => {

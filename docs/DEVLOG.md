@@ -339,3 +339,57 @@ git commit --amend --reset-author
 - ECDICT 授權確認（`docs/ARCHITECTURE.md` §13 R1），之後才能接詞頻選字與難度。
 - P2：BYOK AI 設定頁、`zh-translate` 模式、手勢（長按查字／長按滑動反白）。
 
+---
+
+## TASK-08：P1.5 持久化 — 資料真的存下來了
+
+### 目標
+接上 `expo-sqlite`，讓作答、字庫與統計不再隨畫面關閉而消失。
+
+### 完成事項
+
+| 日期 | 項目 | 狀態 |
+|------|------|------|
+| 2026-10-07 | 安裝 `expo-sqlite`（`~57.0.4`） | ✅ |
+| 2026-10-07 | 新增 `db/types.ts`（`SqlDatabase` 抽象介面） | ✅ |
+| 2026-10-07 | 新增 `db/migrate.ts`（`PRAGMA user_version` 遷移，不依賴驅動） | ✅ |
+| 2026-10-07 | 新增 `db/database.ts`（expo-sqlite 開啟 + 遷移） | ✅ |
+| 2026-10-07 | 新增 `db/transaction.ts`（**可重入**交易輔助） | ✅ |
+| 2026-10-07 | 新增 repositories：`songs` / `attempts` / `vocab` / `stats` / `practiceLog` | ✅ |
+| 2026-10-07 | 練習畫面接上落庫（作答、字庫、每日統計） | ✅ |
+| 2026-10-07 | 字庫 Tab 改為顯示真實資料 | ✅ |
+| 2026-10-07 | 測試 198 個（10 個 suite） | ✅ 全通過 |
+
+### ★ 測試策略：用**真正的 SQLite** 驗證 SQL
+`expo-sqlite` 是原生模組，jest 開不了檔——但**用假物件測 repository 等於沒測**。
+
+解法：Node 24 **內建 `node:sqlite`**。只要 repository 依賴一個最小介面
+（`db/types.ts` 的 `SqlDatabase`，刻意與 expo-sqlite 結構相容），
+就能在測試中傳入真 SQLite（`db/testing/createNodeDatabase.ts`），
+App 端則傳入 expo-sqlite。**同一份 SQL 兩邊共用**。
+
+這招立刻抓到兩個真實缺陷（見下）。
+
+### ★ 抓到的兩個真實缺陷
+1. **FK 刪除語意錯誤**：`vocab.first_song_id` 沒有 `ON DELETE` 子句，導致清除歌曲快取時
+   因為字庫還在引用它而**整個 DELETE 失敗**。
+   更根本的問題是語意：**`song` 只是 LRCLIB 的快取，清掉它不該弄丟使用者的資料**。
+   已改為 `lyric_line` 隨歌曲 CASCADE（純快取），而 `vocab` / `attempt` 只把參照設為 **NULL**（使用者資料必須留下）。
+
+2. **巢狀交易**：`logPracticeAnswer` 開了交易，裡面呼叫的 `addVocabFromError` 又開一次，
+   SQLite 不支援巢狀 `BEGIN`，直接拋錯。已把 `withTransaction` 改成**可重入**
+   （用 `WeakSet` 追蹤進行中的交易，內層沿用外層，成敗交由最外層決定）。
+
+### 設計決策
+1. **`SqlDatabase` 抽象層**——repository 不知道自己是跑在 expo-sqlite 還是 node:sqlite 上。
+2. **一次作答包在單一交易**——避免 attempt 進去了但字庫沒進去這種半截狀態。
+3. **落庫失敗不中斷練習**——`persistAnswer` 刻意不 `await`，失敗只記錄（同 ARCHITECTURE.md §3 的原則）。
+4. **歌詞行只寫一次**——用 ref 記住，避免每次作答都 delete + insert 50 行。
+5. **`toDayKey` 用本地時區**——不用 `toISOString()`，否則跨時區會跨日。
+
+### 已知缺口
+- **字庫的中文釋義仍是空的**——需要 ECDICT（P1.5 只做持久化，沒接字典）。
+- **FSRS 排程尚未計算**——`vocab_schedule` 會建立列，但 `due_at` / `stability` 還是空的。
+- **難度欄位未填**——需要 ECDICT 詞頻。
+- 字庫右側參考圖顯示的是「錯誤 Love」（當時選錯的字），目前顯示「錯誤 N 次」。
+

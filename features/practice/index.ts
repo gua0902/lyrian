@@ -7,3 +7,4 @@
 export * from './types';
 export * from './lyrics';
 export * from './fillChoice';
+export * from './vocabCandidate';

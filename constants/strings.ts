@@ -90,9 +90,12 @@ export const strings = {
     sectionRecentWrong: '最近答錯的單字',
     sectionCollectedAt: '已收藏時間',
     wrongPrefix: '錯誤',
+    /** 參考圖右側顯示的是「錯誤 Love」（當時選錯的字）；我們記錄的是次數 */
+    errorCountFormat: '錯誤 {count} 次',
     emptyHint: '還沒有收藏任何單字。去練習一首歌吧！',
     emptyFiltered: '這個分類目前沒有單字。',
     remindFooter: '重聽一遍，讓單字留在記憶裡。',
+    loadFailed: '讀取字庫失敗，請稍後再試。',
   },
 
   /** 我的頁 */

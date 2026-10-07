@@ -18,3 +18,19 @@ export function formatDuration(ms: number | null | undefined): string | null {
 
   return `${String(minutes).padStart(2, '0')}:${String(seconds).padStart(2, '0')}`;
 }
+
+/**
+ * 轉成 `YYYY-MM-DD`（**本地時區**）。
+ *
+ * `daily_stat.day` 的主鍵，也是「連續學習天數」的計算基礎。
+ * 刻意不用 `toISOString()`——那會轉成 UTC，導致跨時區時日期跑掉。
+ *
+ * @example
+ * toDayKey(new Date(2026, 9, 7))  // '2026-10-07'
+ */
+export function toDayKey(date: Date = new Date()): string {
+  const year = date.getFullYear();
+  const month = String(date.getMonth() + 1).padStart(2, '0');
+  const day = String(date.getDate()).padStart(2, '0');
+  return `${year}-${month}-${day}`;
+}
