@@ -8,6 +8,7 @@ export { M3ThemeProvider, useTheme, type M3Theme } from './ThemeProvider';
 export { M3Button, type M3ButtonProps, type M3ButtonVariant, type M3ButtonSize } from './Button';
 export { M3TextField, type M3TextFieldProps } from './TextField';
 export { M3Card, type M3CardProps, type M3CardVariant } from './Card';
+export { M3BottomSheet, type M3BottomSheetProps } from './BottomSheet';
 export {
   M3SegmentedButton,
   type M3SegmentedButtonProps,

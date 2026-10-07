@@ -250,3 +250,45 @@ git commit --amend --reset-author
 - 專案**不需要** `babel.config.js`，`jest-expo` preset 可直接運作（已實測）。
 - 執行：`npm test`（單次）／`npm run test:watch`（監看）。
 
+---
+
+## TASK-06：P1 Step 2–3 — 搜尋頁接 LRCLIB + iTunes，與練習模式選擇
+
+### 目標
+把搜尋頁做成真的能用：輸入歌手與歌名 → 取得歌曲清單（含封面）→ 點歌選練習模式。
+
+### 完成事項
+
+| 日期 | 項目 | 狀態 |
+|------|------|------|
+| 2026-10-06 | 新增 `features/search/`（LRCLIB 用戶端、iTunes 用戶端、名稱正規化、搜尋編排） | ✅ |
+| 2026-10-06 | 新增 `utils/time.ts`（`formatDuration`） | ✅ |
+| 2026-10-06 | 新增 `components/m3/BottomSheet.tsx`（M3 modal bottom sheet） | ✅ |
+| 2026-10-06 | 新增 `features/session.ts`（搜尋 → 練習的資料交接） | ✅ |
+| 2026-10-06 | 重寫 `app/(tabs)/index.tsx` 為真正的搜尋頁 | ✅ |
+| 2026-10-06 | 測試總數 122 個 | ✅ 全通過 |
+| 2026-10-06 | lint + tsc + Metro bundle | ✅ 皆通過 |
+
+### 實測到的 API 事實（2026-10）
+| 事實 | 影響 |
+|---|---|
+| LRCLIB `/api/search` 一次回 **20 筆且每筆都含完整歌詞** | 只取前 10 筆；但也因此**不用再打第二次**就能算「N 個填空」 |
+| LRCLIB 的 `artistName` 很髒：`"Adele, Adele"`、`"Adele/Adele"` | 以 `normalizeArtist` 去重，並靠它把重複條目合併 |
+| `duration` 單位是**秒**（浮點） | 轉為毫秒後再格式化 |
+| LRCLIB **沒有封面** | 由 iTunes 補；實測 `artworkUrl100` 可換成 `600x600bb` |
+| iTunes 需要 `entity=song` | 一次 `term=<artist> <track>` 查詢即覆蓋整批結果，**只打一次** |
+
+### 設計決策
+1. **iTunes 失敗不影響搜尋** — 封面與曲風是加分資訊，失敗時 `coverUrl`/`genre` 為 `null`，其餘照常顯示。
+2. **一次 iTunes 查詢覆蓋整批** — 不是每首歌各打一次，避免 10 次請求。
+3. **只回傳能挖空的歌** — 純演奏曲或無合格歌詞者（`blankCount === 0`）會被過濾掉。
+4. **歌詞隨結果帶回** — 存在 `features/session.ts` 交接，選歌後不需二次請求。
+
+### ⚠️ 與參考圖的已知差異
+1. **難度（初級／中級）未實作** — 需要 ECDICT 的詞頻資料（P1.5）。
+2. **「生活英語」標籤未實作** — 那是**學習主題**，LRCLIB 與 iTunes 都沒有這個資料。目前顯示的是真實的音樂曲風（iTunes `primaryGenreName`，已翻成繁中）。
+3. **輸入框標籤位置** — 參考圖把「歌手名稱：」放在欄位**內**；目前依 M3 標準放在欄位**上方**（placeholder 消失時標籤仍在，可存取性較好）。若要比照參考圖可再調整。
+
+### 尚未處理
+- `app/search.tsx`（舊的 889 行過渡畫面）仍在，待 Step 4 練習畫面完成後移除。
+

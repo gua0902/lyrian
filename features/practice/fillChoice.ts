@@ -132,6 +132,23 @@ export function buildFillChoiceDataset(
 }
 
 /**
+ * 只計算「可挖空的行數」，不產生題目。
+ *
+ * 搜尋結果清單要顯示「N 個填空」（對應參考圖的「10 個填空」）時使用，
+ * 避免為 20 筆結果各建立一份完整題目集。
+ */
+export function countBlankableLines(
+  lines: readonly LyricLine[],
+  minWordLength: number = BLANK_MIN_WORD_LENGTH
+): number {
+  let count = 0;
+  for (const line of lines) {
+    if (findBlankCandidates(line.text, minWordLength).length > 0) count += 1;
+  }
+  return count;
+}
+
+/**
  * 產生一題的 4 個選項：正解 + 3 個干擾項。
  *
  * 干擾項優先取自**同一首歌的其他答案**（與參考圖一致），不足時才由備援字庫補齊，
