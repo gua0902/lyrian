@@ -292,3 +292,50 @@ git commit --amend --reset-author
 ### 尚未處理
 - `app/search.tsx`（舊的 889 行過渡畫面）仍在，待 Step 4 練習畫面完成後移除。
 
+---
+
+## TASK-07：P1 Step 4 — 練習畫面 M3 化（P1 完成）
+
+### 目標
+把練習畫面做成真的能玩，對齊 `UI references/Lyrian · 歌詞練習.png`，並移除舊的過渡畫面。
+
+### 完成事項
+
+| 日期 | 項目 | 狀態 |
+|------|------|------|
+| 2026-10-06 | 新增 `createSeededRng`（讓挖字與選項在重繪時穩定） | ✅ |
+| 2026-10-06 | 新增 `components/m3/ProgressBar.tsx` | ✅ |
+| 2026-10-06 | 重寫 `app/(tabs)/practice.tsx` | ✅ |
+| 2026-10-06 | **移除 `app/search.tsx`**（889 行過渡畫面）與其路由 | ✅ |
+| 2026-10-06 | 移除已無人使用的 `TransitionAction` | ✅ |
+| 2026-10-06 | 測試 126 個、lint（零警告）、tsc、Metro bundle | ✅ 全通過 |
+
+### 參考圖如何對應到實作
+| 參考圖元素 | 實作 |
+|---|---|
+| 標題列「← Hello, Tomorrow / June Harper · 01:23 / 03:45」 | 返回鍵＋歌名＋歌手·已播/總長 |
+| 「聽見旋律，補上單字」＋「第 3 個空格 / 共 10 個」 | `strings.practice.title` / `blankOrdinalFormat` |
+| 細長紫色進度條 | `M3ProgressBar` |
+| 「01:23 / 03:45」＋「跟著歌詞一起聽」 | `listenAlong` |
+| **當前空格行抽成黃色大卡**（「正在播放 · 填空 03」） | `lyricHighlight` 卡，只有 `blankIndex === activeBlankIndex` 的行會變成卡片 |
+| 已答過的行以彩色字顯示答案 | `prefix` ＋ 彩色 `choice` ＋ `suffix` |
+| 其餘歌詞灰色 | `lyricUpcoming` |
+| 「再聽一次，正確答案是 Hope。」 | `feedbackWrongFormat`，底色依對錯切換 success/error 容器 |
+| 紫色方形暫停鍵 | 播放／暫停／重播三態 |
+| 2×2 選項膠囊（答對綠、答錯紅） | `successContainer` / `errorContainer`，答對項加 ✓ |
+| 「作答進度：2 / 10 正確（20%）」 | `computeProgress`，分母是全部空格數 |
+
+### 兩個實作決策
+1. **以種子隨機取代 `Math.random`**——UI 每次重繪都會重算選項，用 `Math.random` 會讓選項整組跳動。
+   現在以 `blankIndex` 為種子，同一題的選項穩定，且同一首歌每次進來挖的字都一樣。
+2. **音訊未實作（Phase 6）**——播放鍵目前只驅動畫面計時與進度條，這點在 UI 上以「跟著歌詞一起聽」表達，
+   不假裝有聲音。`end_ms` 已解析好，接上 Spotify 後即可直接用。
+
+### 與參考圖的已知差異
+1. **難度（初級／中級）未顯示**——需要 ECDICT 詞頻（P1.5）。
+2. **需要「下一題」**——參考圖沒有前進到下一個空格的控件。答完後右側提示會變成可點的「下一題 ›」。
+
+### 待處理
+- ECDICT 授權確認（`docs/ARCHITECTURE.md` §13 R1），之後才能接詞頻選字與難度。
+- P2：BYOK AI 設定頁、`zh-translate` 模式、手勢（長按查字／長按滑動反白）。
+

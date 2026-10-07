@@ -4,6 +4,7 @@ import {
   buildFillChoiceDataset,
   buildOptions,
   computeProgress,
+  createSeededRng,
   findBlankCandidates,
   gradeChoice,
   indexQuestionsByLine,
@@ -87,6 +88,44 @@ describe('shuffle', () => {
 
   it('相同種子產生相同結果（可重現）', () => {
     expect(shuffle([1, 2, 3, 4, 5], seededRng(42))).toEqual(shuffle([1, 2, 3, 4, 5], seededRng(42)));
+  });
+});
+
+describe('createSeededRng', () => {
+  it('相同種子產生相同序列（讓畫面重繪時選項不跳動）', () => {
+    const a = createSeededRng(7);
+    const b = createSeededRng(7);
+    expect([a(), a(), a()]).toEqual([b(), b(), b()]);
+  });
+
+  it('不同種子產生不同序列', () => {
+    expect(createSeededRng(1)()).not.toBe(createSeededRng(2)());
+  });
+
+  it('值域落在 [0, 1)', () => {
+    const rng = createSeededRng(123);
+    for (let i = 0; i < 200; i += 1) {
+      const value = rng();
+      expect(value).toBeGreaterThanOrEqual(0);
+      expect(value).toBeLessThan(1);
+    }
+  });
+
+  it('能讓同一題的選項穩定重現', () => {
+    const question: FillChoiceQuestion = {
+      blankIndex: 2,
+      lineIndex: 3,
+      prefix: 'I keep a little ',
+      answer: 'hope',
+      suffix: ' inside',
+      startMs: 0,
+      endMs: null,
+    };
+
+    const first = buildOptions(question, ['love', 'heart'], { rng: createSeededRng(3) });
+    const second = buildOptions(question, ['love', 'heart'], { rng: createSeededRng(3) });
+    expect(first).toEqual(second);
+    expect(first).toHaveLength(OPTION_COUNT);
   });
 });
 

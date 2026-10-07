@@ -9,6 +9,7 @@ export { M3Button, type M3ButtonProps, type M3ButtonVariant, type M3ButtonSize }
 export { M3TextField, type M3TextFieldProps } from './TextField';
 export { M3Card, type M3CardProps, type M3CardVariant } from './Card';
 export { M3BottomSheet, type M3BottomSheetProps } from './BottomSheet';
+export { M3ProgressBar, type M3ProgressBarProps } from './ProgressBar';
 export {
   M3SegmentedButton,
   type M3SegmentedButtonProps,

@@ -754,7 +754,7 @@ app/
 | Phase | 內容 | 產出 |
 |---|---|---|
 | **P0 地基** ✅ **已完成 2026-10-06** | M3 token 層；4 Tab 骨架；SQLite schema；移除範本殘留；修 `app.json`；放棄 Capacitor | commit `e3a3d24`——lint + tsc + Metro bundle 全通過 |
-| **P1 核心循環** | 搜尋頁（LRCLIB 真搜尋 + iTunes 封面 + 曲風）、練習模式 Bottom Sheet、`fill-choice` 模式（接 `lyricsfile`、ECDICT 選字） | **完整可玩的純文字循環** |
+| **P1 核心循環** ✅ **已完成 2026-10-06** | 搜尋頁（LRCLIB 真搜尋 + iTunes 封面 + 曲風）、練習模式 Bottom Sheet、`fill-choice` 模式（接 `lyricsfile` 的 `start_ms`/`end_ms`）| commits `88d22ad`→`93bdd79`；126 個單元測試、lint + tsc + Metro 全通過 |
 | **P2 AI** | 設定頁 + BYOK provider 清單 + KeyPool + 連接測試；`zh-translate` 模式；手勢（長按查字、滑動反白） | 兩種練習模式齊備 |
 | **P3 字庫** | 單字收集（lemma 去重）、FSRS 排程、學測式複習題型（詞彙題／文意選填／搭配詞／詞形） | 字庫可複習 |
 | **P4 我的** | 累積總分、已學會單字、連續學習天數、每日統計 | 參考圖「我的」實作完成 |

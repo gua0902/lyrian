@@ -3,7 +3,6 @@ import { StatusBar } from 'expo-status-bar';
 import 'react-native-reanimated';
 
 import { M3ThemeProvider, useTheme } from '@/components/m3';
-import { strings } from '@/constants/strings';
 
 export {
   // Catch any errors thrown by the Layout component.
@@ -52,8 +51,6 @@ function RootLayoutNav() {
         }}
       >
         <Stack.Screen name="(tabs)" options={{ headerShown: false }} />
-        {/* 過渡期：既有的搜尋畫面，P1 會把它的邏輯抽出並 M3 化後移除本路由。 */}
-        <Stack.Screen name="search" options={{ title: strings.search.action }} />
       </Stack>
     </ThemeProvider>
   );

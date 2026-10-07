@@ -85,6 +85,23 @@ export function shuffle<T>(items: readonly T[], rng: Rng = defaultRng): T[] {
   return result;
 }
 
+/**
+ * 以種子建立可重現的隨機函式（Park-Miller LCG）。
+ *
+ * 為什麼需要：UI 每次重繪都會重新呼叫 `buildOptions` / `buildFillChoiceDataset`。
+ * 若直接用 `Math.random`，選項會在畫面更新時整組跳動。給定種子後結果就穩定，
+ * 而且同一首歌每次進來挖的字與選項都一致。
+ */
+export function createSeededRng(seed: number): Rng {
+  let state = seed % 2_147_483_647;
+  if (state <= 0) state += 2_147_483_646;
+
+  return () => {
+    state = (state * 16_807) % 2_147_483_647;
+    return (state - 1) / 2_147_483_646;
+  };
+}
+
 /** 比較答案時統一大小寫與前後空白。 */
 export function normalizeAnswer(value: string): string {
   return value.trim().toLowerCase();

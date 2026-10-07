@@ -54,14 +54,25 @@ export const strings = {
     modeZhTranslateDesc: '寫出中文意思，由 AI 給你回饋',
     needsAiSetup: '需先設定 AI',
     needsAudioSetup: '需先連接 Spotify',
+    /** 練習頁的標語（參考圖：「聽見旋律，補上單字」） */
+    title: '聽見旋律，補上單字',
     fillBlankLabel: '填入空格',
     nowPlaying: '正在播放',
-    blankOrdinal: '填  空',
-    hintListenAgain: '再聽一次',
-    correctAnswerIs: '正確答案是',
+    /** 黃色卡左上角的標籤，例如「填空 03」 */
+    blankCardLabel: '填空',
+    /** 例如「第 3 個空格 / 共 10 個」 */
+    blankOrdinalFormat: '第 {ordinal} 個空格 / 共 {total} 個',
+    listenAlong: '跟著歌詞一起聽',
+    feedbackCorrect: '答對了！',
+    /** 答錯時的提示（參考圖：「再聽一次，正確答案是 Hope。」） */
+    feedbackWrongFormat: '再聽一次，正確答案是 {answer}。',
     tryAgain: '聽清楚，再試一次',
+    nextBlank: '下一題',
     progressFormat: '作答進度：{correct} / {total} 正確（{percent}%）',
     emptyLines: '這首歌沒有可用歌詞',
+    noSongTitle: '還沒有選歌',
+    noSongHint: '先到搜尋頁挑一首歌，再回來這裡練習。',
+    goSearch: '去搜尋',
     startPlayback: '開始',
     pause: '暫停',
     replay: '重新挑戰',

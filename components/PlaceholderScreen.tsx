@@ -6,12 +6,12 @@
  */
 import { SymbolView } from 'expo-symbols';
 import type { ReactNode } from 'react';
-import { ScrollView, StyleSheet, Text, View } from 'react-native';
+import { ScrollView, StyleSheet, Text } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 
 import { spacing, typography } from '@/constants/theme';
 import { strings } from '@/constants/strings';
-import { M3Button, M3Card, useTheme } from './m3';
+import { M3Card, useTheme } from './m3';
 import { ScreenHeader } from './ScreenHeader';
 
 export interface PlaceholderScreenProps {
@@ -59,25 +59,6 @@ export function PlaceholderScreen({
   );
 }
 
-/** 過渡期入口：連到既有（尚未 M3 化）的畫面。 */
-export function TransitionAction({
-  label,
-  onPress,
-}: {
-  label: string;
-  onPress: () => void;
-}) {
-  const { colors } = useTheme();
-  return (
-    <View style={styles.transition}>
-      <Text style={[typography.bodySmall, { color: colors.onSurfaceVariant }]}>
-        {strings.common.comingSoon}
-      </Text>
-      <M3Button label={label} variant="outlined" onPress={onPress} fullWidth style={styles.transitionButton} />
-    </View>
-  );
-}
-
 const styles = StyleSheet.create({
   safe: {
     flex: 1,
@@ -89,11 +70,5 @@ const styles = StyleSheet.create({
   },
   description: {
     marginTop: spacing.sm,
-  },
-  transition: {
-    gap: spacing.sm,
-  },
-  transitionButton: {
-    marginTop: spacing.xs,
   },
 });
