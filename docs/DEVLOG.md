@@ -205,3 +205,47 @@ git commit --amend --reset-author
 `expo prebuild` 會清除 `android/app/build`，因此驗證當時產出的 APK 已被清掉。
 設定已永久化，下次建置會更快（相依快取與 `.cxx` 皆保留）。
 
+---
+
+## TASK-05：P1 Step 1 — 抽出 fill-choice 純邏輯 + 單元測試
+
+### 目標
+把 `app/search.tsx` 的練習邏輯抽成與 UI 無關、可測試的模組，並修正三個既有缺陷。
+
+### 完成事項
+
+| 日期 | 項目 | 狀態 |
+|------|------|------|
+| 2026-10-06 | 建立測試環境（`jest-expo` + `jest` + `@types/jest`，依 Expo 57 官方文件） | ✅ |
+| 2026-10-06 | 新增 `features/practice/types.ts`（領域型別） | ✅ |
+| 2026-10-06 | 新增 `features/practice/lyrics.ts`（三來源優先序解析） | ✅ |
+| 2026-10-06 | 新增 `features/practice/fillChoice.ts`（題目/選項/評分/進度） | ✅ |
+| 2026-10-06 | 單元測試 62 個 | ✅ 全通過 |
+| 2026-10-06 | lint + tsc 驗證 | ✅ 皆 0 |
+
+### 修正的三個既有缺陷
+1. **選項湊不滿 4 個**——原 `generateRandomOptions` 從本歌答案池抽干擾項，答案不足時會給出少於 4 個選項。
+   現在不足時由備援字庫補齊，**保證 4 個**，且正解恰好出現一次。
+2. **只吃開始時間**——新增 `parseLyricsFile` 解析 LRCLIB 的 `lyricsfile`，取得 `start_ms` **與** `end_ms`。
+3. **隨機不可測**——所有隨機行為改為接受可注入的 `rng`，測試可重現。
+
+### 順手處理的健壯性問題
+- `lyricsfile` 若含逐字同步的巢狀 `words:` 陣列，原構想會誤判為新歌詞行。
+  改用**縮排層級**判斷（首次遇到的層級為頂層，更深的視為巢狀並忽略），並以測試覆蓋。
+- `findBlankCandidates` 每次建立新的 `RegExp`，避免共用 `lastIndex` 的狀態污染（有測試覆蓋）。
+
+### ⚠️ 需要裁決的規格衝突
+`docs/REQUIREMENTS.md` Spec 2 寫「挖空單字長度 **> 4**」，
+但 `UI references/Lyrian · 歌詞練習.png` 的答案是 **`Hope`(4)** 與 **`Love`(4)**，都比門檻短。
+
+目前門檻是參數（`minWordLength`，預設 5，依需求書）。改成符合參考圖只需傳 4。
+**待擁有者決定以哪個為準**，詳見 `docs/ARCHITECTURE.md` §6.2。
+
+### 測試環境備註
+- Windows 上安裝語法需加 `"--"`：`npx expo install jest-expo jest @types/jest "--" --dev`。
+- `expo install` 會把套件放進 `dependencies`，需手動移到 `devDependencies`。
+- **必須**在 `tsconfig.json` 加 `"types": ["jest"]`，否則 `describe` / `it` / `expect` 會讓 tsc 失敗
+  （實測 TypeScript 6.0.3 不會自動載入 `@types/jest`）。
+- 專案**不需要** `babel.config.js`，`jest-expo` preset 可直接運作（已實測）。
+- 執行：`npm test`（單次）／`npm run test:watch`（監看）。
+

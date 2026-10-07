@@ -366,6 +366,33 @@ interface GradeResult {
   3. 干擾項改用 **ECDICT 同詞性、詞頻相近**的字，而非從本歌答案池隨機抽（現行做法在答案少於 4 個時會湊不滿選項）。
 - 答錯的 `blankTarget` → 進字庫候選。
 
+#### 實作狀態（P1 Step 1 完成，2026-10-06）
+
+純邏輯已抽出至 **`features/practice/`**（不 import 任何 React / React Native，可完整單元測試），
+共 **62 個單元測試**通過。
+
+| 檔案 | 內容 |
+|---|---|
+| `features/practice/types.ts` | `LyricLine` / `FillChoiceQuestion` / `FillChoiceDataset` / `Attempt` / `Progress` |
+| `features/practice/lyrics.ts` | `parseLyricsFile`（含 `end_ms`）→ `parseSyncedLyrics` → `parsePlainLyrics` 的優先序鏈 |
+| `features/practice/fillChoice.ts` | `buildFillChoiceDataset` / `buildOptions` / `gradeChoice` / `computeProgress` |
+
+**已解決的既有缺陷**：
+- 原 `generateRandomOptions` 在同歌答案少於 4 個時會湊不滿選項 → 現在有備援字庫，**保證 4 個選項**。
+- 原解析器只吃 `start` 時間 → 現在吃 `lyricsfile` 的 `start_ms` **與** `end_ms`。
+- 所有隨機行為接受可注入的 `rng`，讓測試可重現。
+
+> ⚠️ **待決衝突（需擁有者裁決）**
+> `docs/REQUIREMENTS.md` Spec 2 寫「挖空單字長度 **> 4**」（即 ≥ 5），
+> 但 `UI references/Lyrian · 歌詞練習.png` 的答案是 **`Hope`(4 字母)** 與 **`Love`(4 字母)**，都比門檻短。
+>
+> 目前處理：門檻做成 `findBlankCandidates(text, minWordLength)` 與
+> `buildFillChoiceDataset(lines, { minWordLength })` 的參數，**預設 5**（依需求書）。
+> 要改成符合參考圖，只需傳 `minWordLength: 4`。**請裁決要以哪個為準。**
+
+**延後項目**：第 2、3 點（用 ECDICT 詞頻選字與挑干擾項）移至 P1.5，
+需先解決 ECDICT 授權（`docs/ARCHITECTURE.md` §13 R1）。
+
 ### 6.3 模式 B：`zh-translate` 英翻中翻譯
 
 - 使用者看到英文歌詞行，輸入**中文翻譯**；AI 評分並給回饋。
