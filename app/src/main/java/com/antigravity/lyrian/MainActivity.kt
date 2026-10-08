@@ -6,9 +6,11 @@ import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
 import androidx.compose.material3.windowsizeclass.ExperimentalMaterial3WindowSizeClassApi
 import androidx.compose.material3.windowsizeclass.calculateWindowSizeClass
+import com.antigravity.lyrian.data.active.PracticeSessionStore
 import com.antigravity.lyrian.ui.LyrianApp
 import com.antigravity.lyrian.ui.theme.LyrianTheme
 import dagger.hilt.android.AndroidEntryPoint
+import javax.inject.Inject
 
 /**
  * 唯一的 Activity。整個 App 由 Compose 繪製。
@@ -22,13 +24,21 @@ import dagger.hilt.android.AndroidEntryPoint
 @OptIn(ExperimentalMaterial3WindowSizeClassApi::class)
 @AndroidEntryPoint
 class MainActivity : ComponentActivity() {
+
+    /** 搜尋 → 練習的資料交接。由 Hilt 提供。 */
+    @Inject
+    lateinit var sessionStore: PracticeSessionStore
+
     override fun onCreate(savedInstanceState: Bundle?) {
         enableEdgeToEdge()
         super.onCreate(savedInstanceState)
 
         setContent {
             LyrianTheme {
-                LyrianApp(windowSizeClass = calculateWindowSizeClass(this))
+                LyrianApp(
+                    windowSizeClass = calculateWindowSizeClass(this),
+                    sessionStore = sessionStore,
+                )
             }
         }
     }

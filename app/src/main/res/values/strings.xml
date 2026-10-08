@@ -47,6 +47,14 @@
     <string name="practice_mode_zh_translate_desc">寫出中文意思，由 AI 給你回饋</string>
     <string name="practice_needs_ai">需先設定 AI 金鑰</string>
     <string name="practice_estimate_unknown">—</string>
+    <string name="practice_progress_count">%1$d / %2$d</string>
+    <string name="practice_accuracy">正確率 %1$d%%</string>
+    <string name="practice_complete_title">全部答完了！</string>
+    <string name="practice_complete_score">得分 %1$d / %2$d</string>
+    <string name="practice_replay">重新挑戰</string>
+    <string name="practice_back_to_search">重選歌曲</string>
+    <string name="practice_error_no_session">找不到這首歌的練習資料，請重新搜尋。</string>
+    <string name="practice_error_no_blank">這首歌沒有可挖空的歌詞。</string>
 
     <!-- 設定分類（PRD v2 六類） -->
     <string name="settings_appearance">外觀與語言</string>

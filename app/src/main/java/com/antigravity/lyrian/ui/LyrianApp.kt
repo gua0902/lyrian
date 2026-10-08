@@ -14,15 +14,20 @@ import androidx.compose.runtime.remember
 import androidx.compose.ui.Modifier
 import androidx.navigation.NavDestination.Companion.hierarchy
 import androidx.navigation.NavGraph.Companion.findStartDestination
+import androidx.navigation.NavType
 import androidx.navigation.compose.NavHost
 import androidx.navigation.compose.composable
 import androidx.navigation.compose.currentBackStackEntryAsState
 import androidx.navigation.compose.rememberNavController
+import androidx.navigation.navArgument
+import com.antigravity.lyrian.data.active.PracticeSessionStore
 import com.antigravity.lyrian.ui.navigation.LyrianNavigationBar
 import com.antigravity.lyrian.ui.navigation.LyrianNavigationRail
+import com.antigravity.lyrian.ui.navigation.Routes
 import com.antigravity.lyrian.ui.navigation.TopLevelDestination
 import com.antigravity.lyrian.ui.screens.MyScreenPlaceholder
 import com.antigravity.lyrian.ui.screens.WordbankScreenPlaceholder
+import com.antigravity.lyrian.ui.screens.practice.PracticeScreen
 import com.antigravity.lyrian.ui.screens.search.SearchScreen
 
 /**
@@ -31,21 +36,28 @@ import com.antigravity.lyrian.ui.screens.search.SearchScreen
  * 導覽結構：
  *  - 三個頂層目的地（首頁／字庫／我的）共用同一個 Scaffold 與導覽列
  *  - 寬度 >= Medium 時自動改用 [LyrianNavigationRail]（MD3 適應性原則）
- *  - 非頂層畫面（練習頁、設定頁）之後會用獨立的 NavHost 分支處理
+ *  - 練習頁是**全螢幕**的（不顯示導覽列），因為它需要完整的垂直空間
  */
 @Composable
-fun LyrianApp(windowSizeClass: WindowSizeClass?) {
+fun LyrianApp(
+    windowSizeClass: WindowSizeClass?,
+    sessionStore: PracticeSessionStore,
+) {
     val navController = rememberNavController()
     val snackbarHostState = remember { SnackbarHostState() }
 
     val backStackEntry by navController.currentBackStackEntryAsState()
     val currentDestination = backStackEntry?.destination
+    val currentRoute = currentDestination?.route
+
+    // 練習頁是全螢幕的，不顯示導覽列
+    val isFullScreen = currentRoute?.startsWith("practice/") == true
 
     val currentTopLevel = TopLevelDestination.entries.firstOrNull { destination ->
         currentDestination?.hierarchy?.any { it.route == destination.route } == true
     }
 
-    val useRail = when (windowSizeClass?.widthSizeClass) {
+    val useRail = !isFullScreen && when (windowSizeClass?.widthSizeClass) {
         WindowWidthSizeClass.Medium, WindowWidthSizeClass.Expanded -> true
         else -> false
     }
@@ -67,7 +79,7 @@ fun LyrianApp(windowSizeClass: WindowSizeClass?) {
         Scaffold(
             snackbarHost = { SnackbarHost(snackbarHostState) },
             bottomBar = {
-                if (!useRail) {
+                if (!useRail && !isFullScreen) {
                     LyrianNavigationBar(current = currentTopLevel, onSelect = navigateToTopLevel)
                 }
             },
@@ -77,9 +89,40 @@ fun LyrianApp(windowSizeClass: WindowSizeClass?) {
                 startDestination = TopLevelDestination.START.route,
                 modifier = Modifier.padding(innerPadding),
             ) {
-                composable(TopLevelDestination.HOME.route) { SearchScreen() }
+                composable(TopLevelDestination.HOME.route) {
+                    SearchScreen(
+                        onSongSelected = { song, mode ->
+                            // 把手上的歌詞交給練習頁，避免二次請求
+                            sessionStore.put(
+                                PracticeSessionStore.Session(
+                                    songId = song.lrclibId,
+                                    title = song.title,
+                                    artist = song.artist,
+                                    album = song.album,
+                                    durationMs = song.durationMs,
+                                    coverUrl = song.coverUrl,
+                                    genre = song.genre,
+                                    lyricsFile = song.lyricsFile,
+                                    syncedLyrics = song.syncedLyrics,
+                                    plainLyrics = song.plainLyrics,
+                                ),
+                            )
+                            navController.navigate(Routes.practice(song.lrclibId))
+                        },
+                    )
+                }
+
                 composable(TopLevelDestination.WORDBANK.route) { WordbankScreenPlaceholder() }
                 composable(TopLevelDestination.MY.route) { MyScreenPlaceholder() }
+
+                composable(
+                    route = Routes.PRACTICE,
+                    arguments = listOf(
+                        navArgument(Routes.ARG_SONG_ID) { type = NavType.StringType },
+                    ),
+                ) {
+                    PracticeScreen(onBack = { navController.popBackStack() })
+                }
             }
         }
     }
