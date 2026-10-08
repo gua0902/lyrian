@@ -33,13 +33,26 @@ class MainActivity : ComponentActivity() {
         enableEdgeToEdge()
         super.onCreate(savedInstanceState)
 
+        // Onboarding 是否已完成。用 DataStore 之外的簡單儲存即可——
+        // 這只是一個旗標，不需要加密或結構化查詢。
+        val prefs = getSharedPreferences("lyrian_prefs", MODE_PRIVATE)
+        val onboardingCompleted = prefs.getBoolean(KEY_ONBOARDING_COMPLETED, false)
+
         setContent {
             LyrianTheme {
                 LyrianApp(
                     windowSizeClass = calculateWindowSizeClass(this),
                     sessionStore = sessionStore,
+                    onboardingCompleted = onboardingCompleted,
+                    onOnboardingCompleted = {
+                        prefs.edit().putBoolean(KEY_ONBOARDING_COMPLETED, true).apply()
+                    },
                 )
             }
         }
+    }
+
+    private companion object {
+        const val KEY_ONBOARDING_COMPLETED = "onboarding_completed"
     }
 }

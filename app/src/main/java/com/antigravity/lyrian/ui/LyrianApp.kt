@@ -25,23 +25,28 @@ import com.antigravity.lyrian.ui.navigation.LyrianNavigationBar
 import com.antigravity.lyrian.ui.navigation.LyrianNavigationRail
 import com.antigravity.lyrian.ui.navigation.Routes
 import com.antigravity.lyrian.ui.navigation.TopLevelDestination
-import com.antigravity.lyrian.ui.screens.MyScreenPlaceholder
-import com.antigravity.lyrian.ui.screens.WordbankScreenPlaceholder
+import com.antigravity.lyrian.ui.screens.my.MyScreen
+import com.antigravity.lyrian.ui.screens.onboarding.OnboardingScreen
 import com.antigravity.lyrian.ui.screens.practice.PracticeScreen
 import com.antigravity.lyrian.ui.screens.search.SearchScreen
+import com.antigravity.lyrian.ui.screens.settings.SettingsScreen
+import com.antigravity.lyrian.ui.screens.wordbank.WordbankScreen
 
 /**
  * App 的根 Composable。
  *
  * 導覽結構：
+ *  - **Onboarding**：首次啟動時顯示（`startDestination` 決定），可全部略過
  *  - 三個頂層目的地（首頁／字庫／我的）共用同一個 Scaffold 與導覽列
  *  - 寬度 >= Medium 時自動改用 [LyrianNavigationRail]（MD3 適應性原則）
- *  - 練習頁是**全螢幕**的（不顯示導覽列），因為它需要完整的垂直空間
+ *  - 練習頁與設定頁是**全螢幕**的（不顯示導覽列）
  */
 @Composable
 fun LyrianApp(
     windowSizeClass: WindowSizeClass?,
     sessionStore: PracticeSessionStore,
+    onboardingCompleted: Boolean,
+    onOnboardingCompleted: () -> Unit,
 ) {
     val navController = rememberNavController()
     val snackbarHostState = remember { SnackbarHostState() }
@@ -50,8 +55,10 @@ fun LyrianApp(
     val currentDestination = backStackEntry?.destination
     val currentRoute = currentDestination?.route
 
-    // 練習頁是全螢幕的，不顯示導覽列
-    val isFullScreen = currentRoute?.startsWith("practice/") == true
+    // 這些畫面是全螢幕的，不顯示底部導覽
+    val isFullScreen = currentRoute == Routes.ONBOARDING ||
+        currentRoute?.startsWith("practice/") == true ||
+        currentRoute?.startsWith("settings") == true
 
     val currentTopLevel = TopLevelDestination.entries.firstOrNull { destination ->
         currentDestination?.hierarchy?.any { it.route == destination.route } == true
@@ -64,7 +71,6 @@ fun LyrianApp(
 
     val navigateToTopLevel: (TopLevelDestination) -> Unit = { destination ->
         navController.navigate(destination.route) {
-            // 切換 Tab 時不堆疊：回到起始目的地並保留各 Tab 的狀態
             popUpTo(navController.graph.findStartDestination().id) { saveState = true }
             launchSingleTop = true
             restoreState = true
@@ -86,13 +92,33 @@ fun LyrianApp(
         ) { innerPadding ->
             NavHost(
                 navController = navController,
-                startDestination = TopLevelDestination.START.route,
+                startDestination = if (onboardingCompleted) {
+                    TopLevelDestination.START.route
+                } else {
+                    Routes.ONBOARDING
+                },
                 modifier = Modifier.padding(innerPadding),
             ) {
+                composable(Routes.ONBOARDING) {
+                    OnboardingScreen(
+                        onFinish = {
+                            onOnboardingCompleted()
+                            navController.navigate(TopLevelDestination.START.route) {
+                                popUpTo(Routes.ONBOARDING) { inclusive = true }
+                            }
+                        },
+                        onSetupAi = {
+                            onOnboardingCompleted()
+                            navController.navigate(Routes.SETTINGS_AI) {
+                                popUpTo(Routes.ONBOARDING) { inclusive = true }
+                            }
+                        },
+                    )
+                }
+
                 composable(TopLevelDestination.HOME.route) {
                     SearchScreen(
                         onSongSelected = { song, mode ->
-                            // 把手上的歌詞交給練習頁，避免二次請求
                             sessionStore.put(
                                 PracticeSessionStore.Session(
                                     songId = song.lrclibId,
@@ -112,8 +138,13 @@ fun LyrianApp(
                     )
                 }
 
-                composable(TopLevelDestination.WORDBANK.route) { WordbankScreenPlaceholder() }
-                composable(TopLevelDestination.MY.route) { MyScreenPlaceholder() }
+                composable(TopLevelDestination.WORDBANK.route) { WordbankScreen() }
+
+                composable(TopLevelDestination.MY.route) {
+                    MyScreen(
+                        onOpenSettings = { navController.navigate(Routes.SETTINGS) },
+                    )
+                }
 
                 composable(
                     route = Routes.PRACTICE,
@@ -122,6 +153,19 @@ fun LyrianApp(
                     ),
                 ) {
                     PracticeScreen(onBack = { navController.popBackStack() })
+                }
+
+                composable(Routes.SETTINGS) {
+                    SettingsScreen(
+                        onBack = { navController.popBackStack() },
+                        onOpenAiSettings = { navController.navigate(Routes.SETTINGS_AI) },
+                    )
+                }
+
+                composable(Routes.SETTINGS_AI) {
+                    com.antigravity.lyrian.ui.screens.settings.AiSettingsScreen(
+                        onBack = { navController.popBackStack() },
+                    )
                 }
             }
         }

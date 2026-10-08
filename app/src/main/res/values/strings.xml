@@ -14,26 +14,18 @@
     <string name="action_back">返回</string>
     <string name="action_retry">重試</string>
     <string name="action_confirm">確定</string>
-    <string name="action_next">下一步</string>
+    <string name="action_save">儲存</string>
+    <string name="action_next">繼續</string>
     <string name="action_skip">略過</string>
     <string name="action_done">完成</string>
     <string name="loading">載入中…</string>
-    <string name="coming_soon">這個畫面即將推出</string>
-    <string name="settings_title">設定</string>
-
-    <!-- 佔位畫面 -->
-    <string name="placeholder_search">這裡會是歌詞搜尋：輸入歌手與歌名，從 LRCLIB 取得歌詞，並在點歌後選擇練習方式。</string>
-    <string name="placeholder_wordbank">這裡會是你的字庫：每個答錯的單字連同歌詞原句一起收進來，並依排程複習。</string>
-    <string name="placeholder_my">這裡會是你的學習總覽：連續學習天數、已學會的單字、今日待複習，以及設定入口。</string>
+    <string name="coming_soon">即將推出</string>
 
     <!-- 搜尋 -->
     <string name="search_artist_label">歌手名稱</string>
-    <string name="search_artist_placeholder">例如：Adele</string>
     <string name="search_track_label">歌曲名稱</string>
-    <string name="search_track_placeholder">例如：Hello</string>
     <string name="search_result_title">找到你的下一首</string>
     <string name="search_result_count">%1$d 首歌曲</string>
-    <string name="search_blank_count">%1$d 個填空</string>
     <string name="search_hint">輸入歌手與歌名，開始你的第一首歌。</string>
     <string name="search_empty_result">找不到可練習的歌曲，換個關鍵字試試。</string>
     <string name="search_error_no_input">請輸入歌手與歌名</string>
@@ -46,30 +38,78 @@
     <string name="practice_mode_zh_translate">翻譯 AI 打分</string>
     <string name="practice_mode_zh_translate_desc">寫出中文意思，由 AI 給你回饋</string>
     <string name="practice_needs_ai">需先設定 AI 金鑰</string>
-    <string name="practice_estimate_unknown">—</string>
     <string name="practice_progress_count">%1$d / %2$d</string>
     <string name="practice_accuracy">正確率 %1$d%%</string>
     <string name="practice_complete_title">全部答完了！</string>
     <string name="practice_complete_score">得分 %1$d / %2$d</string>
     <string name="practice_replay">重新挑戰</string>
-    <string name="practice_audio_coming_soon">音源開發中</string>
     <string name="practice_back_to_search">重選歌曲</string>
-    <string name="practice_error_no_session">找不到這首歌的練習資料，請重新搜尋。</string>
-    <string name="practice_error_no_blank">這首歌沒有可挖空的歌詞。</string>
+    <string name="practice_audio_coming_soon">音源開發中</string>
 
-    <!-- 設定分類（PRD v2 六類） -->
+    <!-- 字庫 -->
+    <string name="wordbank_banner_title">每個錯字，都是進步</string>
+    <string name="wordbank_banner_subtitle">已收藏 %1$d 個 · %2$d 個等你複習</string>
+    <string name="wordbank_filter_all">全部</string>
+    <string name="wordbank_filter_mastered">已掌握</string>
+    <string name="wordbank_filter_reviewing">待複習</string>
+    <string name="wordbank_empty">還沒有收藏任何單字。去練習一首歌吧！</string>
+    <string name="wordbank_empty_filtered">這個分類目前沒有單字。</string>
+    <string name="wordbank_error_count">錯誤 %1$d 次</string>
+
+    <!-- 我的 -->
+    <string name="my_streak">連續學習 %1$d 天</string>
+    <string name="my_total_score">累積總分</string>
+    <string name="my_mastered_words">已學會的單字</string>
+    <string name="my_due_today">今天待複習</string>
+    <string name="my_section_learning">依你的節奏學習</string>
+    <string name="my_footer">今天的旋律，也會成為明天的進步。</string>
+
+    <!-- 設定 -->
+    <string name="settings_title">設定</string>
+    <string name="settings_subtitle">外觀、播放、學習、AI、資料</string>
+    <string name="settings_daily_reminder">每日學習提醒</string>
+    <string name="settings_history">學習紀錄</string>
+    <string name="settings_coming_soon">即將推出</string>
     <string name="settings_appearance">外觀與語言</string>
     <string name="settings_playback">播放與音源</string>
     <string name="settings_learning">學習與複習</string>
     <string name="settings_ai">AI 與內容</string>
     <string name="settings_data">資料與儲存</string>
     <string name="settings_about">關於</string>
+    <string name="settings_privacy_line">無帳號，資料只在本地</string>
+
+    <!-- AI 設定（BYOK） -->
+    <string name="ai_title">AI 設定</string>
+    <string name="ai_description">填你自己的 LLM API 金鑰。金鑰加密存在這台裝置上，不會上傳。</string>
+    <string name="ai_provider">服務提供者</string>
+    <string name="ai_base_url">API 端點</string>
+    <string name="ai_model">模型</string>
+    <string name="ai_api_key">API 金鑰</string>
+    <string name="ai_add_key">新增金鑰</string>
+    <string name="ai_key_count">目前有 %1$d 把金鑰會輪替使用</string>
+    <string name="ai_key_pool_hint">多把金鑰會自動輪替，可繞過免費層的速率限制。</string>
+    <string name="ai_test_connection">連接測試</string>
+    <string name="ai_testing">測試中…</string>
+    <string name="ai_test_success">連線成功（%1$d 毫秒）</string>
+    <string name="ai_test_invalid_key">金鑰無效</string>
+    <string name="ai_test_not_found">找不到端點或模型</string>
+    <string name="ai_test_rate_limited">已達速率限制——可新增更多金鑰來輪替</string>
+    <string name="ai_test_server_error">服務暫時無法使用（%1$d）</string>
+    <string name="ai_test_network_error">無法連線：%1$s</string>
 
     <!-- Onboarding -->
     <string name="onboarding_welcome_title">用英文歌學單字</string>
     <string name="onboarding_welcome_body">搜尋你喜歡的歌，把歌詞挖空，邊聽邊把單字記下來。</string>
     <string name="onboarding_privacy_title">無帳號，資料只在本地</string>
-    <string name="onboarding_privacy_body">你的字庫與學習紀錄只存在這台裝置上，我們不會上傳任何資料。</string>
+    <string name="onboarding_privacy_body">你的字庫與學習紀錄只存在這台裝置上。</string>
+    <string name="onboarding_privacy_outbound_title">唯一會連外的三種情況</string>
+    <string name="onboarding_privacy_outbound_lyrics">搜尋歌詞（LRCLIB，免費）</string>
+    <string name="onboarding_privacy_outbound_cover">取得封面（iTunes）</string>
+    <string name="onboarding_privacy_outbound_ai">使用 AI 功能時（用你自己的金鑰）</string>
     <string name="onboarding_byok_title">自備 AI 金鑰（選用）</string>
     <string name="onboarding_byok_body">翻譯練習需要你自己的 LLM API 金鑰。沒有金鑰也能使用單字填空。</string>
+    <string name="onboarding_byok_why_title">為什麼要自備？</string>
+    <string name="onboarding_byok_why_body">App 不內建金鑰，所以沒有額度限制、也不會轉售 API。金鑰加密存在這台裝置上，支援多把金鑰輪替以繞過速率限制。</string>
+    <string name="onboarding_setup_key">設定金鑰</string>
+    <string name="onboarding_later">稍後再說</string>
 </resources>
