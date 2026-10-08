@@ -80,8 +80,11 @@ import com.antigravity.lyrian.domain.model.FillChoiceQuestion
 import com.antigravity.lyrian.domain.model.LyricLine
 import kotlinx.coroutines.delay
 
-/** 答錯後停頓再前進的時間。 */
+/** 答錯後的停頓：要讓使用者看清正確答案。 */
 private const val WRONG_ANSWER_DELAY_MS = 900L
+
+/** 答對後的停頓：短一些，維持流暢的節奏。 */
+private const val CORRECT_ANSWER_DELAY_MS = 450L
 
 /**
  * 練習頁：四選一填空。
@@ -142,14 +145,23 @@ private fun PracticeContent(
     val listState = rememberLazyListState()
     val currentLineIndex = state.currentQuestion?.lineIndex ?: 0
 
-    // 答錯時震動，然後自動前進；答對則停在使用者按「下一題」
+    /**
+     * 答完就自動前進（不分對錯）。
+     *
+     * 保留一小段延遲讓使用者看到回饋：
+     *  - 答錯延遲較長（[WRONG_ANSWER_DELAY_MS]），因為要看清正確答案
+     *  - 答對延遲較短，節奏更流暢
+     * 答錯時額外震動一下。
+     */
     LaunchedEffect(state.currentRecord, state.activeBlankIndex) {
         val record = state.currentRecord ?: return@LaunchedEffect
+
         if (!record.isCorrect) {
             haptics.performHapticFeedback(HapticFeedbackType.LongPress)
-            delay(WRONG_ANSWER_DELAY_MS)
-            onNext()
         }
+
+        delay(if (record.isCorrect) CORRECT_ANSWER_DELAY_MS else WRONG_ANSWER_DELAY_MS)
+        onNext()
     }
 
     Column(modifier = modifier.fillMaxSize()) {
@@ -188,8 +200,6 @@ private fun PracticeContent(
             current = state.activeBlankIndex + 1,
             total = state.total,
             percent = state.percent,
-            hasRecord = state.currentRecord != null,
-            onNext = onNext,
         )
     }
 }
@@ -605,21 +615,15 @@ private enum class OptionVisualState { Idle, Correct, Wrong }
 /**
  * 底部資訊列。
  *
- * 答對後**沒有自動前進**，因為需要讓使用者看清楚自己答對了；
- * 因此這裡提供明確的「下一題」按鈕。
+ * **沒有「下一題」按鈕**——答完會自動前進（見 [PracticeContent] 的 LaunchedEffect）。
+ * 這裡只顯示進度與正確率。
  */
 @Composable
-private fun BottomStats(
-    current: Int,
-    total: Int,
-    percent: Int,
-    hasRecord: Boolean,
-    onNext: () -> Unit,
-) {
+private fun BottomStats(current: Int, total: Int, percent: Int) {
     Row(
         modifier = Modifier
             .fillMaxWidth()
-            .padding(horizontal = 16.dp, vertical = 10.dp),
+            .padding(horizontal = 20.dp, vertical = 12.dp),
         horizontalArrangement = Arrangement.SpaceBetween,
         verticalAlignment = Alignment.CenterVertically,
     ) {
@@ -628,22 +632,11 @@ private fun BottomStats(
             style = MaterialTheme.typography.bodyMedium,
             color = MaterialTheme.colorScheme.secondary,
         )
-
-        if (hasRecord) {
-            androidx.compose.material3.TextButton(onClick = onNext) {
-                Text(
-                    text = "${stringResource(R.string.practice_next)} ›",
-                    style = MaterialTheme.typography.bodyMedium,
-                    fontWeight = FontWeight.Bold,
-                )
-            }
-        } else {
-            Text(
-                text = stringResource(R.string.practice_accuracy, percent),
-                style = MaterialTheme.typography.bodyMedium,
-                color = MaterialTheme.colorScheme.secondary,
-            )
-        }
+        Text(
+            text = stringResource(R.string.practice_accuracy, percent),
+            style = MaterialTheme.typography.bodyMedium,
+            color = MaterialTheme.colorScheme.secondary,
+        )
     }
 }
 

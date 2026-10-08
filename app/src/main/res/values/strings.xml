@@ -52,7 +52,6 @@
     <string name="practice_complete_title">全部答完了！</string>
     <string name="practice_complete_score">得分 %1$d / %2$d</string>
     <string name="practice_replay">重新挑戰</string>
-    <string name="practice_next">下一題</string>
     <string name="practice_audio_coming_soon">音源開發中</string>
     <string name="practice_back_to_search">重選歌曲</string>
     <string name="practice_error_no_session">找不到這首歌的練習資料，請重新搜尋。</string>
