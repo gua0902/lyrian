@@ -88,6 +88,9 @@ class PracticeViewModel @Inject constructor(
     private var lyricsPersisted = false
     private var localSongId: Long? = null
 
+    /** 全部題目的選項**預先算好**，避免每次換題重算（也讓上下題的選項穩定）。 */
+    private var optionsByBlank: Map<Int, List<String>> = emptyMap()
+
     init {
         val songId = savedStateHandle.get<String>(Routes.ARG_SONG_ID)?.toLongOrNull()
         load(songId)
@@ -124,7 +127,11 @@ class PracticeViewModel @Inject constructor(
         }
 
         val allAnswers = dataset.questions.map { it.answer }
-        val firstOptions = FillChoiceBuilder.buildOptions(dataset.questions.first(), allAnswers)
+
+        // 一次把所有題目的選項算好並快取——換題時不必重算，選項也不會跳動
+        optionsByBlank = dataset.questions.associate { question ->
+            question.blankIndex to FillChoiceBuilder.buildOptions(question, allAnswers)
+        }
 
         _uiState.update {
             it.copy(
@@ -134,7 +141,7 @@ class PracticeViewModel @Inject constructor(
                 coverUrl = session.coverUrl,
                 lines = dataset.lines,
                 questions = dataset.questions,
-                options = firstOptions,
+                options = optionsByBlank[0].orEmpty(),
             )
         }
     }
@@ -161,28 +168,37 @@ class PracticeViewModel @Inject constructor(
         if (state.currentRecord == null) return
 
         val nextIndex = state.activeBlankIndex + 1
-        val nextQuestion = state.questions.getOrNull(nextIndex)
-        val allAnswers = state.questions.map { it.answer }
 
         _uiState.update {
             it.copy(
                 activeBlankIndex = nextIndex,
-                options = nextQuestion?.let { q -> FillChoiceBuilder.buildOptions(q, allAnswers) }
-                    ?: emptyList(),
+                options = optionsByBlank[nextIndex].orEmpty(),
+            )
+        }
+    }
+
+    /** 跳到指定題（拖曳進度條時使用）。 */
+    fun onSeekTo(blankIndex: Int) {
+        val state = _uiState.value
+        val clamped = blankIndex.coerceIn(0, (state.questions.size - 1).coerceAtLeast(0))
+
+        _uiState.update {
+            it.copy(
+                activeBlankIndex = clamped,
+                options = optionsByBlank[clamped].orEmpty(),
             )
         }
     }
 
     fun onReplay() {
         val state = _uiState.value
-        val first = state.questions.firstOrNull() ?: return
-        val allAnswers = state.questions.map { it.answer }
+        if (state.questions.isEmpty()) return
 
         _uiState.update {
             it.copy(
                 activeBlankIndex = 0,
                 selections = emptyMap(),
-                options = FillChoiceBuilder.buildOptions(first, allAnswers),
+                options = optionsByBlank[0].orEmpty(),
             )
         }
     }
