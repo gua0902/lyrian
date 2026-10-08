@@ -42,7 +42,11 @@
     <!-- 練習 -->
     <string name="practice_choose_mode">你想怎麼練這首歌？</string>
     <string name="practice_mode_fill_choice">單字填空</string>
+    <string name="practice_mode_fill_choice_desc">聽歌補上缺漏的單字，四選一</string>
     <string name="practice_mode_zh_translate">翻譯 AI 打分</string>
+    <string name="practice_mode_zh_translate_desc">寫出中文意思，由 AI 給你回饋</string>
+    <string name="practice_needs_ai">需先設定 AI 金鑰</string>
+    <string name="practice_estimate_unknown">—</string>
 
     <!-- 設定分類（PRD v2 六類） -->
     <string name="settings_appearance">外觀與語言</string>

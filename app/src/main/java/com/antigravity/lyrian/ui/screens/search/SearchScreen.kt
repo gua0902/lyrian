@@ -28,6 +28,9 @@ import androidx.compose.material3.Text
 import androidx.compose.material3.TopAppBar
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -41,6 +44,7 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import coil.compose.AsyncImage
 import com.antigravity.lyrian.R
 import com.antigravity.lyrian.data.remote.SongSearchResult
+import com.antigravity.lyrian.domain.practice.PracticeMode
 
 /**
  * 首頁的搜尋（PRD v2 的 Home）。
@@ -53,10 +57,13 @@ import com.antigravity.lyrian.data.remote.SongSearchResult
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun SearchScreen(
-    onSongSelected: (SongSearchResult) -> Unit = {},
+    onSongSelected: (SongSearchResult, PracticeMode) -> Unit = { _, _ -> },
     viewModel: SearchViewModel = hiltViewModel(),
 ) {
     val state by viewModel.uiState.collectAsStateWithLifecycle()
+
+    // 點歌後先彈出模式選擇，而不是直接進練習
+    var pendingSong by remember { mutableStateOf<SongSearchResult?>(null) }
 
     androidx.compose.material3.Scaffold(
         topBar = {
@@ -120,9 +127,22 @@ fun SearchScreen(
                     items = state.results,
                     key = { it.lrclibId },
                 ) { song ->
-                    SongCard(song = song, onClick = { onSongSelected(song) })
+                    SongCard(song = song, onClick = { pendingSong = song })
                 }
             }
+        }
+
+        pendingSong?.let { song ->
+            PracticeModeSheet(
+                questionCount = song.blankCount,
+                // BYOK 尚未實作，一律視為未設定——讓 UI 的停用狀態可以被驗證
+                aiConfigured = false,
+                onDismiss = { pendingSong = null },
+                onSelect = { mode ->
+                    pendingSong = null
+                    onSongSelected(song, mode)
+                },
+            )
         }
     }
 }
