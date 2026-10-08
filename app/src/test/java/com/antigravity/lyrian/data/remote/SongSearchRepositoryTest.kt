@@ -1,6 +1,5 @@
 package com.antigravity.lyrian.data.remote
 
-import com.antigravity.lyrian.domain.practice.FillChoiceBuilder
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
 import org.junit.Test
@@ -120,19 +119,6 @@ class SongSearchRepositoryTest {
     fun `保留原始歌詞供選歌後直接使用`() {
         val result = repository.toSearchResult(lrclibEntry(), emptyList())
         assertTrue(result.lyricsFile!!.contains("I keep a little hope"))
-    }
-
-    @Test
-    fun `blankCount 與 FillChoiceBuilder 的上限一致（不超過 10）`() {
-        val manyLines = buildString {
-            append("lines:\n")
-            repeat(48) { i ->
-                append("- text: wonderful morning number $i\n  start_ms: ${i * 1000}\n  end_ms: ${i * 1000 + 500}\n")
-            }
-        }
-
-        val result = repository.toSearchResult(lrclibEntry(lyricsFile = manyLines), emptyList())
-        assertEquals(FillChoiceBuilder.DEFAULT_MAX_BLANKS, result.blankCount)
     }
 
     // ---------- dedupe ----------

@@ -2,6 +2,7 @@ package com.antigravity.lyrian.domain.practice
 
 import com.antigravity.lyrian.domain.model.LyricLine
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
@@ -29,12 +30,13 @@ class FillChoiceBuilderTest {
     // ---------- findBlankCandidates ----------
 
     @Test
-    fun `預設找出長度大於等於 4 的純字母單字`() {
+    fun `預設找出長度大於等於 3 且非虛詞的單字`() {
         val words = FillChoiceBuilder
             .findBlankCandidates("A little love is ours to hold")
             .map { it.word }
 
-        assertEquals(listOf("little", "love", "ours", "hold"), words)
+        // "A" 過短；"is" 與 "ours" 是虛詞；其餘保留
+        assertEquals(listOf("little", "love", "hold"), words)
     }
 
     @Test
@@ -57,8 +59,9 @@ class FillChoiceBuilderTest {
 
     @Test
     fun `忽略縮寫造成的短片段`() {
-        assertEquals(emptyList<FillChoiceBuilder.BlankCandidate>(),
-            FillChoiceBuilder.findBlankCandidates("it's a don't"))
+        // don't 會切出 "don"（3 字母）→ 這是候選；"it's" 切出的 "it" 與 "s" 都太短
+        val words = FillChoiceBuilder.findBlankCandidates("it's a don't").map { it.word }
+        assertEquals(listOf("don"), words)
     }
 
     @Test
@@ -73,46 +76,6 @@ class FillChoiceBuilderTest {
             FillChoiceBuilder.findBlankCandidates("a b c"))
         assertEquals(emptyList<FillChoiceBuilder.BlankCandidate>(),
             FillChoiceBuilder.findBlankCandidates(""))
-    }
-
-    // ---------- pickEvenlySpaced ----------
-
-    @Test
-    fun `取樣數量大於等於長度時回傳全部`() {
-        assertEquals(listOf(1, 2, 3), FillChoiceBuilder.pickEvenlySpaced(listOf(1, 2, 3), 5))
-        assertEquals(listOf(1, 2, 3), FillChoiceBuilder.pickEvenlySpaced(listOf(1, 2, 3), 3))
-    }
-
-    @Test
-    fun `取樣 0 或空清單回傳空清單`() {
-        assertEquals(
-            emptyList<Int>(),
-            FillChoiceBuilder.pickEvenlySpaced(listOf(1, 2, 3), 0),
-        )
-        assertEquals(
-            emptyList<Int>(),
-            FillChoiceBuilder.pickEvenlySpaced(emptyList<Int>(), 3),
-        )
-    }
-
-    @Test
-    fun `取樣 1 個時取第一個`() {
-        assertEquals(listOf(1), FillChoiceBuilder.pickEvenlySpaced(listOf(1, 2, 3, 4), 1))
-    }
-
-    @Test
-    fun `涵蓋頭尾且數量正確`() {
-        val picked = FillChoiceBuilder.pickEvenlySpaced((0..9).toList(), 5)
-        assertEquals(5, picked.size)
-        assertEquals(0, picked.first())
-        assertEquals(9, picked.last())
-    }
-
-    @Test
-    fun `結果遞增且不重複`() {
-        val picked = FillChoiceBuilder.pickEvenlySpaced((0 until 48).toList(), 10)
-        assertEquals(picked.sorted(), picked)
-        assertEquals(picked.size, picked.toSet().size)
     }
 
     // ---------- buildDataset ----------
@@ -170,49 +133,86 @@ class FillChoiceBuilderTest {
     }
 
     @Test
-    fun `預設上限為 10 題`() {
-        val manyLines = (0 until 48).map { line(it, "wonderful morning number $it") }
-        val questions = FillChoiceBuilder.buildDataset(manyLines, Random(1)).questions
-
-        assertEquals(FillChoiceBuilder.DEFAULT_MAX_BLANKS, questions.size)
-        assertEquals(10, questions.size)
-    }
-
-    @Test
-    fun `maxBlanks 可覆寫`() {
-        val manyLines = (0 until 48).map { line(it, "wonderful morning number $it") }
-        val questions = FillChoiceBuilder.buildDataset(manyLines, Random(1), maxBlanks = 3).questions
-
-        assertEquals(3, questions.size)
-    }
-
-    @Test
     fun `可挖空的行少於上限時全部挖空`() {
         val few = listOf(line(0, "wonderful morning"), line(1, "another lovely day"))
         assertEquals(2, FillChoiceBuilder.buildDataset(few, Random(1)).questions.size)
     }
 
     @Test
-    fun `取樣涵蓋整首歌而不是只挖前半段`() {
+    fun `每一句都挖一個空（不設上限、不跳著挖）`() {
+        // 擁有者指定：每句都挖，除非整句都 <= 2 字母。
+        // 之前的「每首上限 10 題 + 均勻取樣」會讓歌詞跳著挖，已移除。
         val manyLines = (0 until 48).map { line(it, "wonderful morning number $it") }
         val questions = FillChoiceBuilder.buildDataset(manyLines, Random(1)).questions
 
-        assertEquals(0, questions.first().lineIndex)
-        assertEquals(47, questions.last().lineIndex)
-    }
-
-    // ---------- countBlankableLines ----------
-
-    @Test
-    fun `countBlankableLines 受上限限制`() {
-        val manyLines = (0 until 48).map { line(it, "wonderful morning number $it") }
-        assertEquals(10, FillChoiceBuilder.countBlankableLines(manyLines))
-        assertEquals(3, FillChoiceBuilder.countBlankableLines(manyLines, maxBlanks = 3))
+        assertEquals(48, questions.size)
+        assertEquals(manyLines.indices.toList(), questions.map { it.lineIndex })
     }
 
     @Test
-    fun `countBlankableLines 沒有可挖空的行時為 0`() {
-        assertEquals(0, FillChoiceBuilder.countBlankableLines(listOf(line(0, "a b c"))))
+    fun `題數等於可挖空的行數`() {
+        val lines = listOf(
+            line(0, "The morning paints the sky in gold"),
+            line(1, "oh oh oh"),           // 全部 <= 2 字母 → 跳過
+            line(2, "A little love is ours"),
+        )
+        assertEquals(2, FillChoiceBuilder.buildDataset(lines, Random(1)).questions.size)
+    }
+
+    @Test
+    fun `整句都是短字時不挖空`() {
+        val lines = listOf(
+            line(0, "Oh oh oh"),
+            line(1, "I am"),
+            line(2, "na na na"),
+        )
+        assertEquals(0, FillChoiceBuilder.buildDataset(lines, Random(1)).questions.size)
+    }
+
+    // ---------- 虛詞排除 ----------
+
+    @Test
+    fun `不挖常見虛詞`() {
+        assertFalse(FillChoiceBuilder.isWorthDrilling("the"))
+        assertFalse(FillChoiceBuilder.isWorthDrilling("and"))
+        assertFalse(FillChoiceBuilder.isWorthDrilling("you"))
+        // 大小寫不影響
+        assertFalse(FillChoiceBuilder.isWorthDrilling("The"))
+        assertFalse(FillChoiceBuilder.isWorthDrilling("with"))
+        assertFalse(FillChoiceBuilder.isWorthDrilling("are"))
+    }
+
+    @Test
+    fun `挖有實意的字`() {
+        assertTrue(FillChoiceBuilder.isWorthDrilling("love"))
+        assertTrue(FillChoiceBuilder.isWorthDrilling("hope"))
+        assertTrue(FillChoiceBuilder.isWorthDrilling("morning"))
+        assertTrue(FillChoiceBuilder.isWorthDrilling("sky"))
+    }
+
+    @Test
+    fun `長度不足 3 的字不挖`() {
+        assertFalse(FillChoiceBuilder.isWorthDrilling("am"))
+        assertFalse(FillChoiceBuilder.isWorthDrilling("oh"))
+        assertFalse(FillChoiceBuilder.isWorthDrilling("a"))
+    }
+
+    @Test
+    fun `findBlankCandidates 會排除虛詞`() {
+        val words = FillChoiceBuilder
+            .findBlankCandidates("The morning paints the sky and you")
+            .map { it.word }
+
+        // the / and / you 被排除；morning / paints / sky 保留
+        assertEquals(listOf("morning", "paints", "sky"), words)
+    }
+
+    @Test
+    fun `整句都是虛詞時不挖空`() {
+        assertEquals(
+            emptyList<FillChoiceBuilder.BlankCandidate>(),
+            FillChoiceBuilder.findBlankCandidates("and you are the"),
+        )
     }
 
     // ---------- buildOptions ----------

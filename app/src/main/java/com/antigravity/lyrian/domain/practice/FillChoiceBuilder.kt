@@ -19,26 +19,60 @@ import kotlin.random.Random
 object FillChoiceBuilder {
 
     /**
-     * 可挖空單字的最小長度（4）。
+     * 可挖空單字的最小長度（3）。
      *
-     * **以 `UI references/Lyrian · 歌詞練習.png` 為準**——該參考圖的答案是 Hope 與 Love，
-     * 皆為 4 字母。這與 `docs/REQUIREMENTS.md` Spec 2 的「長度 > 4」不同，
-     * 已於 2026-10-06 由擁有者裁決：**以參考圖為準**，
-     * 因為 love / hope / hold / heart 這類學習者最需要的常用字才挖得到。
+     * 規則來源（擁有者指定）：「每一句都挖一個空，除非該句所有單字都 ≤ 2 字母」。
+     * 因此可挖的最小長度是 3。
+     *
+     * 注意：3 字母的**虛詞**（the / and / you）由 [isWorthDrilling] 排除，
+     * 只挖有實意的字——這更符合「學單字」的目的。
      */
-    const val BLANK_MIN_WORD_LENGTH = 4
+    const val BLANK_MIN_WORD_LENGTH = 3
 
     /** 每題固定 4 個選項（依參考圖的 2x2 選項格）。 */
     const val OPTION_COUNT = 4
 
     /**
-     * 每首歌最多挖幾個空。
+     * 不值得挖空的常見虛詞。
      *
-     * 依 UI references——兩首歌都顯示「10 個填空」／「共 10 個」。
-     * 實測 Adele《Hello》在門檻 4 之下有 48 行可挖，若不設上限，
-     * 一輪練習會變成 48 題（不符參考圖，也不是好的練習長度）。
+     * 這些字出現頻率極高、幾乎沒有學習價值（學習者早就會了），
+     * 挖它們只會讓題目變多卻沒有學習效果。
+     *
+     * **這是一份暫時的靜態清單**。擁有者已指示之後會改用 **CEFR 分級**篩選
+     * （依 Europe 語言共同參考框架，只挖 A2/B1 以上的字）。
+     * 屆時只要替換 [isWorthDrilling] 的實作即可，呼叫端不需改動。
      */
-    const val DEFAULT_MAX_BLANKS = 10
+    private val STOP_WORDS: Set<String> = setOf(
+        // 冠詞、代名詞
+        "the", "and", "you", "your", "yours", "she", "her", "hers", "him", "his",
+        "they", "them", "their", "theirs", "our", "ours", "its", "who", "whom",
+        "this", "that", "these", "those", "all", "any", "both", "each", "few",
+        "more", "most", "other", "some", "such", "own", "same", "than", "too",
+        "very", "just", "only", "also", "even", "still", "yet", "ever", "never",
+        // be 動詞與助動詞
+        "are", "was", "were", "been", "being", "has", "had", "have", "does",
+        "did", "doing", "will", "would", "can", "could", "shall", "should",
+        "may", "might", "must", "ought",
+        // 介系詞、連接詞
+        "for", "not", "but", "out", "into", "onto", "over", "under", "about",
+        "with", "from", "off", "per", "via", "nor", "because", "while", "when",
+        "where", "what", "which", "how", "why", "there", "here", "then", "now",
+        "once", "upon", "among", "between", "through", "during", "before",
+        "after", "above", "below", "again", "further", "any", "each",
+    )
+
+    /**
+     * 這個字值不值得挖空。
+     *
+     * 目前的策略：長度 >= [BLANK_MIN_WORD_LENGTH] 且不是常見虛詞。
+     *
+     * **之後會改成依 CEFR 分級篩選**——這是唯一需要改動的地方。
+     * 屆時把這裡換成查 ECDICT 的詞頻／CEFR 標籤即可。
+     */
+    fun isWorthDrilling(word: String): Boolean {
+        if (word.length < BLANK_MIN_WORD_LENGTH) return false
+        return word.lowercase() !in STOP_WORDS
+    }
 
     /**
      * 當同一首歌湊不出 3 個相異干擾項時的備援字庫。
@@ -56,69 +90,59 @@ object FillChoiceBuilder {
     /**
      * 找出可挖空的候選單字。
      *
-     * @param minWordLength 最短可挖空的字長。預設 4（依參考圖），可調高以限制候選。
+     * 條件：長度 >= [minWordLength] **且**值得挖（見 [isWorthDrilling]，
+     * 會排除 the / and / you 這類虛詞）。
      */
     fun findBlankCandidates(
         text: String,
         minWordLength: Int = BLANK_MIN_WORD_LENGTH,
     ): List<BlankCandidate> {
         val pattern = Regex("""\b[A-Za-z]{$minWordLength,}\b""")
-        return pattern.findAll(text).map { match ->
-            BlankCandidate(
-                word = match.value,
-                start = match.range.first,
-                end = match.range.last + 1,
-            )
-        }.toList()
-    }
-
-    /**
-     * 從清單中**均勻取樣** [count] 個項目，讓挖空涵蓋整首歌而不是只集中在前半段。
-     *
-     * 這是上限的選擇策略；接上 ECDICT 後會改由詞頻決定要挑哪些字。
-     */
-    fun <T> pickEvenlySpaced(items: List<T>, count: Int): List<T> {
-        if (count <= 0 || items.isEmpty()) return emptyList()
-        if (count >= items.size) return items.toList()
-        if (count == 1) return listOf(items.first())
-
-        return (0 until count).map { i ->
-            // 整數運算避免浮點誤差造成索引越界
-            items[(i.toLong() * (items.size - 1) / (count - 1)).toInt()]
-        }
+        return pattern.findAll(text)
+            .filter { isWorthDrilling(it.value) }
+            .map { match ->
+                BlankCandidate(
+                    word = match.value,
+                    start = match.range.first,
+                    end = match.range.last + 1,
+                )
+            }
+            .toList()
     }
 
     /**
      * 把整首歌詞轉成題目集。
      *
-     * 每一行**最多挖一個空**，但整首最多 [maxBlanks] 題（預設 10，依參考圖）。
+     * **規則（擁有者指定）**：每一句都挖一個空，除非該句**所有**單字都 ≤ 2 字母
+     * （例如 "Oh oh oh"、"I am"）。**不設題數上限**。
+     *
+     * 之前的做法是「每首上限 10 題並均勻取樣」，導致歌詞**跳著挖**、進度太快。
+     * 已移除——現在題數等於可挖空的行數。
+     *
      * 沒有合格單字的行不會產生題目，但仍保留在 `lines` 中供歌詞流顯示。
      */
     fun buildDataset(
         lines: List<LyricLine>,
         random: Random = Random.Default,
         minWordLength: Int = BLANK_MIN_WORD_LENGTH,
-        maxBlanks: Int = DEFAULT_MAX_BLANKS,
     ): FillChoiceDataset {
-        // 先收集所有可挖空的行
-        val blankable = lines.mapNotNull { line ->
-            val candidates = findBlankCandidates(line.text, minWordLength)
-            if (candidates.isEmpty()) null else line to candidates
-        }
+        val questions = mutableListOf<FillChoiceQuestion>()
 
-        val questions = pickEvenlySpaced(blankable, maxBlanks)
-            .mapIndexed { blankIndex, (line, candidates) ->
-                val picked = candidates[random.nextInt(candidates.size)]
-                FillChoiceQuestion(
-                    blankIndex = blankIndex,
-                    lineIndex = line.index,
-                    prefix = line.text.substring(0, picked.start),
-                    answer = picked.word,
-                    suffix = line.text.substring(picked.end),
-                    startMs = line.startMs,
-                    endMs = line.endMs,
-                )
-            }
+        for (line in lines) {
+            val candidates = findBlankCandidates(line.text, minWordLength)
+            if (candidates.isEmpty()) continue
+
+            val picked = candidates[random.nextInt(candidates.size)]
+            questions += FillChoiceQuestion(
+                blankIndex = questions.size,
+                lineIndex = line.index,
+                prefix = line.text.substring(0, picked.start),
+                answer = picked.word,
+                suffix = line.text.substring(picked.end),
+                startMs = line.startMs,
+                endMs = line.endMs,
+            )
+        }
 
         return FillChoiceDataset(lines = lines, questions = questions)
     }
@@ -126,21 +150,13 @@ object FillChoiceBuilder {
     /**
      * 只計算「可挖空的行數」，不產生題目。
      *
-     * 搜尋結果清單要顯示「N 個填空」時使用，避免為 20 筆結果各建立一份完整題目集。
-     * 上限與 [buildDataset] 一致。
+     * 搜尋結果清單要顯示「N 個填空」時使用。與 [buildDataset] 的規則一致
+     * （不設上限）。
      */
     fun countBlankableLines(
         lines: List<LyricLine>,
         minWordLength: Int = BLANK_MIN_WORD_LENGTH,
-        maxBlanks: Int = DEFAULT_MAX_BLANKS,
-    ): Int {
-        var count = 0
-        for (line in lines) {
-            if (count >= maxBlanks) break
-            if (findBlankCandidates(line.text, minWordLength).isNotEmpty()) count++
-        }
-        return count
-    }
+    ): Int = lines.count { findBlankCandidates(it.text, minWordLength).isNotEmpty() }
 
     /**
      * 產生一題的 4 個選項：正解 + 3 個干擾項。
