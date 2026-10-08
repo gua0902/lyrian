@@ -111,6 +111,9 @@ dependencies {
     implementation(libs.androidx.datastore.preferences)
     implementation(libs.androidx.security.crypto)
 
+    // YouTube Music 音源（GPL-3.0，見 innertube/README.md）
+    implementation(project(":innertube"))
+
     // Test
     testImplementation(libs.junit)
     testImplementation(libs.kotlinx.coroutines.test)

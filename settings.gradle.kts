@@ -22,3 +22,7 @@ dependencyResolutionManagement {
 
 rootProject.name = "Lyrian"
 include(":app")
+
+// YouTube Music InnerTube 客戶端（GPL-3.0，來自 z-huang/InnerTune）
+// 見 innertube/README.md 的授權與風險聲明
+include(":innertube")
