@@ -1,0 +1,9 @@
+﻿<?xml version="1.0" encoding="utf-8"?>
+<!--
+  Android 8.0 以下沒有自適應圖示，需要傳統 mipmap。
+  這裡用 drawable 別名指向向量圖，避免維護多套 PNG。
+-->
+<resources>
+    <item name="ic_launcher" type="mipmap">@drawable/ic_launcher_foreground</item>
+    <item name="ic_launcher_round" type="mipmap">@drawable/ic_launcher_foreground</item>
+</resources>

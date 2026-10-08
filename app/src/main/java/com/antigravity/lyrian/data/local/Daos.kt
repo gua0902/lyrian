@@ -1,0 +1,229 @@
+package com.antigravity.lyrian.data.local
+
+import androidx.room.Dao
+import androidx.room.Insert
+import androidx.room.OnConflictStrategy
+import androidx.room.Query
+import androidx.room.Transaction
+import androidx.room.Update
+import kotlinx.coroutines.flow.Flow
+
+@Dao
+interface SongDao {
+
+    @Query("SELECT * FROM song WHERE lrclibId = :lrclibId LIMIT 1")
+    suspend fun findByLrclibId(lrclibId: Long): SongEntity?
+
+    @Query("SELECT * FROM song ORDER BY createdAt DESC LIMIT :limit")
+    fun observeRecent(limit: Int = 20): Flow<List<SongEntity>>
+
+    @Insert(onConflict = OnConflictStrategy.REPLACE)
+    suspend fun upsert(song: SongEntity): Long
+
+    /**
+     * 以 [SongEntity.lrclibId] 為鍵 upsert，回傳本地 id。
+     *
+     * 先查再寫（而非 `INSERT OR REPLACE`），因為後者會先刪除舊列，
+     * 觸發 CASCADE 而**連帶刪掉歌詞行**——那不是我們要的語意。
+     */
+    @Transaction
+    suspend fun upsertByLrclibId(song: SongEntity): Long {
+        val lrclibId = song.lrclibId
+        if (lrclibId != null) {
+            val existing = findByLrclibId(lrclibId)
+            if (existing != null) {
+                upsert(song.copy(id = existing.id, createdAt = existing.createdAt))
+                return existing.id
+            }
+        }
+        return upsert(song)
+    }
+
+    @Query("DELETE FROM song WHERE id = :songId")
+    suspend fun deleteById(songId: Long)
+}
+
+@Dao
+interface LyricLineDao {
+
+    @Query("SELECT * FROM lyric_line WHERE songId = :songId ORDER BY lineIndex ASC")
+    suspend fun getForSong(songId: Long): List<LyricLineEntity>
+
+    @Query("SELECT * FROM lyric_line WHERE songId = :songId ORDER BY lineIndex ASC")
+    fun observeForSong(songId: Long): Flow<List<LyricLineEntity>>
+
+    @Insert(onConflict = OnConflictStrategy.REPLACE)
+    suspend fun insertAll(lines: List<LyricLineEntity>)
+
+    @Query("DELETE FROM lyric_line WHERE songId = :songId")
+    suspend fun deleteForSong(songId: Long)
+
+    /**
+     * 覆寫一首歌的歌詞行。
+     *
+     * 先刪再寫（而非逐行 upsert），因為重新抓取時行數可能改變，
+     * 留下舊行會產生過時的歌詞。整段在同一個交易中。
+     */
+    @Transaction
+    suspend fun replaceForSong(songId: Long, lines: List<LyricLineEntity>) {
+        deleteForSong(songId)
+        if (lines.isNotEmpty()) insertAll(lines)
+    }
+}
+
+@Dao
+interface VocabDao {
+
+    @Query("SELECT * FROM vocab WHERE lemma = :lemma LIMIT 1")
+    suspend fun findByLemma(lemma: String): VocabEntity?
+
+    @Query("SELECT * FROM vocab ORDER BY updatedAt DESC LIMIT :limit")
+    fun observeAll(limit: Int = 200): Flow<List<VocabEntity>>
+
+    @Query("SELECT * FROM vocab WHERE status = :status ORDER BY updatedAt DESC LIMIT :limit")
+    fun observeByStatus(status: String, limit: Int = 200): Flow<List<VocabEntity>>
+
+    @Query("SELECT COUNT(*) FROM vocab")
+    fun observeTotal(): Flow<Int>
+
+    @Query("SELECT COUNT(*) FROM vocab WHERE status = :status")
+    fun observeCountByStatus(status: String): Flow<Int>
+
+    @Insert(onConflict = OnConflictStrategy.IGNORE)
+    suspend fun insert(vocab: VocabEntity): Long
+
+    @Update
+    suspend fun update(vocab: VocabEntity)
+
+    /**
+     * 把一個答錯的單字收進字庫。
+     *
+     * 已存在時：`errorCount` +1、更新語境、狀態由 `mastered` 退回 `learning`
+     * （答錯代表還沒真的學會），但**保留最初的 `firstSongId` 與 `createdAt`**。
+     *
+     * @return `Pair<vocabId, isNew>`；`isNew` 供每日「新單字」統計使用
+     */
+    @Transaction
+    suspend fun addFromError(
+        lemma: String,
+        surfaceForm: String?,
+        contextLine: String?,
+        songId: Long?,
+        now: Long,
+    ): Pair<Long, Boolean> {
+        val existing = findByLemma(lemma)
+        if (existing == null) {
+            val id = insert(
+                VocabEntity(
+                    lemma = lemma,
+                    surfaceForm = surfaceForm,
+                    firstSongId = songId,
+                    contextLine = contextLine,
+                    errorCount = 1,
+                    createdAt = now,
+                    updatedAt = now,
+                ),
+            )
+            return id to true
+        }
+
+        update(
+            existing.copy(
+                errorCount = existing.errorCount + 1,
+                surfaceForm = surfaceForm ?: existing.surfaceForm,
+                contextLine = contextLine ?: existing.contextLine,
+                firstSongId = existing.firstSongId ?: songId,
+                status = if (existing.status == VocabEntity.STATUS_MASTERED) {
+                    VocabEntity.STATUS_LEARNING
+                } else {
+                    existing.status
+                },
+                updatedAt = now,
+            ),
+        )
+        return existing.id to false
+    }
+}
+
+@Dao
+interface VocabScheduleDao {
+
+    @Insert(onConflict = OnConflictStrategy.IGNORE)
+    suspend fun insertIfAbsent(schedule: VocabScheduleEntity): Long
+
+    @Query("SELECT * FROM vocab_schedule WHERE vocabId = :vocabId LIMIT 1")
+    suspend fun findByVocabId(vocabId: Long): VocabScheduleEntity?
+}
+
+@Dao
+interface AttemptDao {
+
+    @Insert
+    suspend fun insert(attempt: AttemptEntity): Long
+
+    @Query("SELECT * FROM attempt ORDER BY createdAt DESC LIMIT :limit")
+    fun observeRecent(limit: Int = 50): Flow<List<AttemptEntity>>
+
+    @Query("SELECT COUNT(*) FROM attempt")
+    fun observeTotal(): Flow<Int>
+
+    @Query("SELECT COUNT(*) FROM attempt WHERE isCorrect = 1")
+    fun observeCorrectCount(): Flow<Int>
+}
+
+@Dao
+interface DailyStatDao {
+
+    @Query("SELECT * FROM daily_stat WHERE day = :day LIMIT 1")
+    suspend fun findByDay(day: String): DailyStatEntity?
+
+    @Query("SELECT * FROM daily_stat ORDER BY day DESC")
+    fun observeAll(): Flow<List<DailyStatEntity>>
+
+    @Query("SELECT COALESCE(SUM(score), 0) FROM daily_stat")
+    fun observeTotalScore(): Flow<Int>
+
+    @Insert(onConflict = OnConflictStrategy.IGNORE)
+    suspend fun insertIfAbsent(stat: DailyStatEntity): Long
+
+    @Query(
+        """
+        UPDATE daily_stat SET
+            score = score + :score,
+            attempts = attempts + :attempts,
+            correct = correct + :correct,
+            newWords = newWords + :newWords
+        WHERE day = :day
+        """,
+    )
+    suspend fun bump(day: String, score: Int, attempts: Int, correct: Int, newWords: Int)
+
+    /** 累加當日統計；該日尚無紀錄時先建立再累加。 */
+    @Transaction
+    suspend fun bumpOrCreate(
+        day: String,
+        score: Int = 0,
+        attempts: Int = 0,
+        correct: Int = 0,
+        newWords: Int = 0,
+    ) {
+        insertIfAbsent(DailyStatEntity(day = day))
+        bump(day, score, attempts, correct, newWords)
+    }
+}
+
+@Dao
+interface ProviderConfigDao {
+
+    @Query("SELECT * FROM provider_config WHERE enabled = 1 ORDER BY priority ASC")
+    fun observeEnabled(): Flow<List<ProviderConfigEntity>>
+
+    @Query("SELECT * FROM provider_config ORDER BY priority ASC")
+    fun observeAll(): Flow<List<ProviderConfigEntity>>
+
+    @Insert(onConflict = OnConflictStrategy.REPLACE)
+    suspend fun upsert(config: ProviderConfigEntity): Long
+
+    @Query("DELETE FROM provider_config WHERE id = :id")
+    suspend fun deleteById(id: Long)
+}

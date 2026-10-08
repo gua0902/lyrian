@@ -1,0 +1,10 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  Lyrian 的啟動底色（深色模式）。
+
+  深色模式下若仍用淺色啟動視窗，冷啟動會白閃一下。
+  值對應單色系色票 dark 的 surfaceContainerLowest。
+-->
+<resources>
+    <color name="lyrian_launch_background">#0E0E10</color>
+</resources>

@@ -1,47 +1,34 @@
-# Learn more https://docs.github.com/en/get-started/getting-started-with-git/ignoring-files
+﻿# Gradle
+.gradle/
+build/
+local.properties
 
-# dependencies
-node_modules/
+# IDE
+.idea/
+*.iml
+.vscode/
+captures/
 
-# Expo
-.expo/
-dist/
-web-build/
-expo-env.d.ts
+# 編譯產物
+*.apk
+*.aab
+*.ap_
+*.dex
+*.class
+bin/
+gen/
+out/
+release/
 
-# Native
-.kotlin/
-*.orig.*
-*.jks
-*.p8
-*.p12
-*.key
-*.mobileprovision
-
-# Metro
-.metro-health-check*
-
-# debug
-npm-debug.*
-yarn-debug.*
-yarn-error.*
-
-# macOS
-.DS_Store
-*.pem
-
-# local env files
-.env*.local
-
-# typescript
-*.tsbuildinfo
-
-# generated native folders
-/ios
-/android
-
-# test coverage
+# 測試與覆蓋率
 coverage/
+*.exec
+app/schemas/   # Room schema 由 KSP 產生，可考慮納入版控
 
-# agent tooling（由 `npx skills add` 安裝，非 App 原始碼）
+# Agent 工具
 .agents/
+skills-lock.json
+
+# OS
+.DS_Store
+Thumbs.db

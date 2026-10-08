@@ -1,0 +1,12 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!--
+      啟動主題。用 Material3 的 DayNight 讓系統決定深/淺色，
+      避免深色模式下啟動瞬間白閃。
+    -->
+    <style name="Theme.Lyrian" parent="android:Theme.Material.Light.NoActionBar">
+        <item name="android:windowBackground">@color/lyrian_launch_background</item>
+        <item name="android:statusBarColor">@android:color/transparent</item>
+        <item name="android:navigationBarColor">@android:color/transparent</item>
+    </style>
+</resources>

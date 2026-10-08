@@ -1,0 +1,55 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">Lyrian</string>
+
+    <!-- 導覽（3 Tabs，PRD v2） -->
+    <string name="tab_home">首頁</string>
+    <string name="tab_wordbank">字庫</string>
+    <string name="tab_my">我的</string>
+
+    <!-- 通用 -->
+    <string name="action_search">搜尋</string>
+    <string name="action_cancel">取消</string>
+    <string name="action_close">關閉</string>
+    <string name="action_back">返回</string>
+    <string name="action_retry">重試</string>
+    <string name="action_confirm">確定</string>
+    <string name="action_next">下一步</string>
+    <string name="action_skip">略過</string>
+    <string name="action_done">完成</string>
+    <string name="loading">載入中…</string>
+    <string name="coming_soon">這個畫面即將推出</string>
+    <string name="settings_title">設定</string>
+
+    <!-- 佔位畫面 -->
+    <string name="placeholder_search">這裡會是歌詞搜尋：輸入歌手與歌名，從 LRCLIB 取得歌詞，並在點歌後選擇練習方式。</string>
+    <string name="placeholder_wordbank">這裡會是你的字庫：每個答錯的單字連同歌詞原句一起收進來，並依排程複習。</string>
+    <string name="placeholder_my">這裡會是你的學習總覽：連續學習天數、已學會的單字、今日待複習，以及設定入口。</string>
+
+    <!-- 搜尋 -->
+    <string name="search_artist_label">歌手名稱</string>
+    <string name="search_track_label">歌曲名稱</string>
+    <string name="search_result_title">找到你的下一首</string>
+    <string name="search_error_no_input">請輸入歌手與歌名</string>
+
+    <!-- 練習 -->
+    <string name="practice_choose_mode">你想怎麼練這首歌？</string>
+    <string name="practice_mode_fill_choice">單字填空</string>
+    <string name="practice_mode_zh_translate">翻譯 AI 打分</string>
+
+    <!-- 設定分類（PRD v2 六類） -->
+    <string name="settings_appearance">外觀與語言</string>
+    <string name="settings_playback">播放與音源</string>
+    <string name="settings_learning">學習與複習</string>
+    <string name="settings_ai">AI 與內容</string>
+    <string name="settings_data">資料與儲存</string>
+    <string name="settings_about">關於</string>
+
+    <!-- Onboarding -->
+    <string name="onboarding_welcome_title">用英文歌學單字</string>
+    <string name="onboarding_welcome_body">搜尋你喜歡的歌，把歌詞挖空，邊聽邊把單字記下來。</string>
+    <string name="onboarding_privacy_title">無帳號，資料只在本地</string>
+    <string name="onboarding_privacy_body">你的字庫與學習紀錄只存在這台裝置上，我們不會上傳任何資料。</string>
+    <string name="onboarding_byok_title">自備 AI 金鑰（選用）</string>
+    <string name="onboarding_byok_body">翻譯練習需要你自己的 LLM API 金鑰。沒有金鑰也能使用單字填空。</string>
+</resources>

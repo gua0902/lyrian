@@ -1,0 +1,11 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  Lyrian 的啟動底色。
+
+  這裡刻意只放「啟動視窗」用的靜態色，避免冷啟動時白閃。
+  實際 UI 顏色全部由 Compose 的 MaterialTheme 提供（含動態配色）。
+  值對應單色系色票的 surface（見 docs/mockups/mono-scheme.kt）。
+-->
+<resources>
+    <color name="lyrian_launch_background">#FAFAFA</color>
+</resources>
