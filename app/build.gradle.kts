@@ -48,6 +48,8 @@ android {
 
     buildFeatures {
         compose = true
+        // AGP 8 起 BuildConfig 預設關閉；網路層需要 BuildConfig.DEBUG 來決定是否印日誌
+        buildConfig = true
     }
 
     packaging {

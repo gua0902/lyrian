@@ -32,3 +32,6 @@ skills-lock.json
 # OS
 .DS_Store
 Thumbs.db
+
+# Kotlin 編譯器暫存
+.kotlin/

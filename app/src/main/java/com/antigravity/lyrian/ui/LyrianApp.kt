@@ -22,8 +22,8 @@ import com.antigravity.lyrian.ui.navigation.LyrianNavigationBar
 import com.antigravity.lyrian.ui.navigation.LyrianNavigationRail
 import com.antigravity.lyrian.ui.navigation.TopLevelDestination
 import com.antigravity.lyrian.ui.screens.MyScreenPlaceholder
-import com.antigravity.lyrian.ui.screens.SearchScreenPlaceholder
 import com.antigravity.lyrian.ui.screens.WordbankScreenPlaceholder
+import com.antigravity.lyrian.ui.screens.search.SearchScreen
 
 /**
  * App 的根 Composable。
@@ -77,7 +77,7 @@ fun LyrianApp(windowSizeClass: WindowSizeClass?) {
                 startDestination = TopLevelDestination.START.route,
                 modifier = Modifier.padding(innerPadding),
             ) {
-                composable(TopLevelDestination.HOME.route) { SearchScreenPlaceholder() }
+                composable(TopLevelDestination.HOME.route) { SearchScreen() }
                 composable(TopLevelDestination.WORDBANK.route) { WordbankScreenPlaceholder() }
                 composable(TopLevelDestination.MY.route) { MyScreenPlaceholder() }
             }
