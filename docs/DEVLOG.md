@@ -650,5 +650,125 @@ LaunchedEffect(currentLineIndex) {
   來自**不同版本**（錄音室 vs 現場 vs remaster），長度不同就會整首錯位。
   接 Media3 時必須用 `durationMs` 做驗證，而不是假設兩者一致。
 
+---
+
+## TASK-11：接上播放器與音源（YouTube Music + Media3）
+
+### 目標
+
+擁有者指定：**「播放按鈕要同時控制歌詞滾動和播放器」**，
+並且要把音源一起接上（YTM 全曲、開源 API、抓錄音室版本）。
+
+### 1. 先查證版本，不憑記憶
+
+Media3 的 API 每個版本都可能動，所以先查 Google Maven 的實際版本：
+
+```
+latest / release = 1.11.1   （lastUpdated 20260911）
+```
+
+> 訓練資料裡的 Media3 只到 1.4 左右，**1.11.1 遠超出**。
+> 這正是為什麼不能憑記憶寫版本號——已寫進 `libs.versions.toml` 的註解。
+
+### 2. ★ 最大的風險：版本配對，不是播放
+
+歌詞時間戳來自 **LRCLIB**，音訊來自 **YouTube**——**兩個不同來源**。
+同一首歌在 YouTube 上有錄音室版、現場版、MV 版、remaster 版，長度各異。
+挑錯版本 → **整首歌詞錯位**，而使用者只會覺得「App 壞了」。
+
+因此新增 `AudioTrackMatcher`（**純函式，可在 JVM 測試**）：
+
+| 判準 | 順序 |
+|---|---|
+| 是否在時長容忍度內（3 秒） | 1 |
+| 標題是否含 `live` / `cover` / `acoustic` / `remix` / `karaoke` | **2** |
+| 時長差距 | 3 |
+
+**判準順序是個真實的坑，而且測試抓到了。** 我原本把「時長差距」排在「標題關鍵字」之前，
+結果這個案例會選錯：
+
+```
+Adele《Hello》  期望 295.502s
+  錄音室版 295s → 差 0.502s
+  翻唱版   296s → 差 0.498s   ← 純看時長，翻唱贏 4 毫秒
+```
+
+時長適合區分「不同錄音」，但同一首歌的翻唱與原版長度本來就幾乎一樣，
+此時**標題才是有效訊號**。已把這個案例寫成迴歸測試。
+
+**時長不符時的行為**：`isConfident = false` → UI 顯示提示，**不硬播**。
+硬播只會讓使用者以為 App 壞了。
+
+### 3. 播放器的生命週期（旋轉不中斷音樂）
+
+| 決策 | 內容 |
+|---|---|
+| `@Singleton` | 綁在 ViewModel 上會在每次旋轉時重建 → 音樂中斷 |
+| **不用** `MediaSessionService` | 練習是強互動的；切到別的 App 就暫停是合理的，也省下常駐通知 |
+| 釋放時機 | `PracticeViewModel.onCleared()`——ViewModel 在**設定變更**時不會被清除，所以只有真的離開頁面才釋放 |
+| 位置取樣 | Media3 **刻意沒有**位置變化的 callback（位置是連續值），以 50ms 輪詢 |
+
+### 4. 播放鍵同時控制兩者
+
+這是擁有者指定的核心行為，實作在兩個地方：
+
+1. `LyricFollowController.onPlaybackChanged(isPlaying)` → **暫停時完全不跟隨**
+2. 滾動的 `LaunchedEffect` 把 `isPlaying` 列為 key → 按播放會立刻跟到當前句
+
+與 TASK-10 的 3 秒規則疊起來，完整行為是：
+
+```
+播放中 + 使用者沒動手        → 跟隨
+播放中 + 使用者動手          → 讓位，3 秒後且已作答才收回
+暫停                        → 完全不跟隨（歌詞靜止在使用者看的地方）
+```
+
+### 5. 兩條進度軸
+
+畫面上現在有**兩條獨立的軸**，刻意不分開儲存但視覺上分明：
+
+| 軸 | 位置 | 拖曳的意義 |
+|---|---|---|
+| 播放位置（時間） | header 上緣 | 跳到第 N 秒 |
+| 作答進度（題目） | header 下緣 | 跳到第 N 題 |
+
+`singingLineIndex`（音訊唱到哪）與 `activeBlankIndex`（答到哪）也是兩條獨立的軸。
+
+### 6. 完成事項
+
+| 日期 | 項目 | 狀態 |
+|------|------|------|
+| 2026-10-09 | 查證 Media3 實際最新穩定版（1.11.1，非訓練資料裡的 1.4） | ✅ |
+| 2026-10-09 | 新增 `AudioTrackMatcher`（純函式，時長 + 標題關鍵字） | ✅ |
+| 2026-10-09 | 新增 `AudioSourceResolver`（搜尋 → 配對 → 取串流） | ✅ |
+| 2026-10-09 | 新增 `AudioPlayerController`（Media3 / ExoPlayer） | ✅ |
+| 2026-10-09 | `YouTubeMusicSource.getStreamUrl` 改回傳 `StreamResult`（區分失敗原因） | ✅ |
+| 2026-10-09 | 播放鍵同時控制播放器與滾動 | ✅ |
+| 2026-10-09 | 兩條進度軸（時間 / 題目） | ✅ |
+| 2026-10-09 | manifest 移除 `FOREGROUND_SERVICE*`（不做背景播放） | ✅ |
+| 2026-10-09 | **單元測試 181 個**（+26）全通過 | ✅ |
+
+### 7. 建置時抓到的問題
+
+**R8 擋下 `org.slf4j.impl.StaticLoggerBinder`**：Media3 的傳遞依賴參考了 slf4j 的
+綁定類別，Android 上不需要。這是每個用 slf4j 的 Android 專案都會遇到的標準情況
+（沒有綁定時 slf4j 會退回 NOP logger），加 `-dontwarn org.slf4j.**` 即可。
+
+### 8. ⚠️ 未驗證的部分（誠實記錄）
+
+1. **網路鏈路完全沒有測試覆蓋**。單元測試只涵蓋 `AudioTrackMatcher` 這個純函式。
+   `YouTube.search` / `YouTube.player` 從未在真實網路環境跑過——
+   本機沒有裝置也沒有模擬器，無法 `adb install` 實測。
+2. **Piped 是第三方服務**。innertube 在 `IOS` / `TVHTML5` client 都拿不到 URL 時，
+   會向 Piped 要串流。該服務可能失效或回傳被限流的 URL。
+   這就是為什麼 `getStreamUrl` 改回傳 `StreamResult` 而不是 null。
+3. **YouTube 可能要求 PoToken**。近年 YouTube 對部分 client 加上簽章與 token 驗證，
+   innertube 這份 2023 年的程式碼**可能已經跟不上**。若實際播放失敗，
+   第一個要懷疑的就是這裡。
+4. 仍**違反 YouTube 服務條款**，且 innertube 模組是 **GPL-3.0**。
+
+**下一步**：裝 APK 實測播放。若失敗，需要的是 logcat 的 `playabilityStatus.reason`。
+
+
 
 

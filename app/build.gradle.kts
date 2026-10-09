@@ -120,6 +120,12 @@ dependencies {
     implementation(libs.opencc4j)
     implementation(libs.android.opencc)
 
+    // Media3 / ExoPlayer：播放 YouTube Music 的音訊串流
+    implementation(libs.androidx.media3.exoplayer)
+    implementation(libs.androidx.media3.common)
+    implementation(libs.androidx.media3.session)
+    implementation(libs.androidx.media3.datasource.okhttp)
+
     // Test
     testImplementation(libs.junit)
     testImplementation(libs.kotlinx.coroutines.test)

@@ -47,15 +47,25 @@ class YouTubeMusicSource @Inject constructor() {
     /**
      * 取得指定影片的音訊串流 URL。
      *
-     * innertube 內部已有 fallback：`ANDROID_MUSIC` client 失敗時會自動改用 `TVHTML5`，
-     * 因此不需要我們自己重試。
+     * innertube 內部已有 fallback：`IOS` client 失敗時會依序改用 `TVHTML5`，
+     * 若 TVHTML5 也拿不到 URL，再向 **Piped** 這個第三方服務要串流
+     * （見 `YouTube.player`）。因此不需要我們自己重試。
      *
-     * @return 找不到可播放串流時回傳 null
+     * ⚠️ **Piped 是第三方服務**，可能失效或回傳被限流的 URL。
+     * 這也是為什麼回傳 [StreamResult] 而不是單純的 null——
+     * 要能區分「這首歌本來就沒有」與「音源服務掛了」，UI 才能講對話。
      */
-    suspend fun getStreamUrl(videoId: String): AudioStream? {
-        val response = YouTube.player(videoId).getOrNull() ?: return null
+    suspend fun getStreamUrl(videoId: String): StreamResult {
+        val response = YouTube.player(videoId).getOrElse {
+            return StreamResult.Failed(it.message ?: "無法連線到音源服務")
+        }
 
-        if (response.playabilityStatus.status != "OK") return null
+        if (response.playabilityStatus.status != "OK") {
+            return StreamResult.Unavailable(
+                reason = response.playabilityStatus.reason
+                    ?: response.playabilityStatus.status,
+            )
+        }
 
         val formats = response.streamingData?.adaptiveFormats.orEmpty()
 
@@ -63,14 +73,16 @@ class YouTubeMusicSource @Inject constructor() {
         val audio = formats
             .filter { it.isAudio && it.url != null }
             .maxByOrNull { it.bitrate }
-            ?: return null
+            ?: return StreamResult.Unavailable("找不到可用的音訊格式")
 
-        return AudioStream(
-            url = audio.url!!,
-            mimeType = audio.mimeType,
-            bitrate = audio.bitrate,
-            // 上游是字串，轉為 Long；無法解析時為 null
-            approxDurationMs = audio.approxDurationMs?.toLongOrNull(),
+        return StreamResult.Success(
+            AudioStream(
+                url = audio.url!!,
+                mimeType = audio.mimeType,
+                bitrate = audio.bitrate,
+                // 上游是字串，轉為 Long；無法解析時為 null
+                approxDurationMs = audio.approxDurationMs?.toLongOrNull(),
+            ),
         )
     }
 
@@ -108,3 +120,19 @@ data class AudioStream(
     val bitrate: Int,
     val approxDurationMs: Long?,
 )
+
+/**
+ * 取得串流的結果。
+ *
+ * 刻意不用 `AudioStream?`——「這首歌不能播」與「音源服務掛了」
+ * 對使用者是**不同的訊息**，一個是換首歌，一個是稍後再試。
+ */
+sealed interface StreamResult {
+    data class Success(val stream: AudioStream) : StreamResult
+
+    /** 這首歌本身不可播放（地區限制、年齡限制、已下架…）。 */
+    data class Unavailable(val reason: String) : StreamResult
+
+    /** 連線或解析失敗。 */
+    data class Failed(val message: String) : StreamResult
+}

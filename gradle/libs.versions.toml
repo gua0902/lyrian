@@ -24,6 +24,7 @@ mockk = "1.13.13"
 materialIconsExtended = "1.7.6"
 opencc4j = "1.6.2"
 androidOpencc = "1.2.0"
+media3 = "1.11.1"
 
 [libraries]
 androidx-core-ktx = { group = "androidx.core", name = "core-ktx", version.ref = "coreKtx" }
@@ -78,6 +79,14 @@ opencc4j = { group = "com.github.houbb", name = "opencc4j", version.ref = "openc
 # 來源是 JitPack：com.github.qichuan:android-opencc，需在 settings.gradle.kts 加 jitpack.io。
 # 內含 libChineseConverter.so（4 個 ABI，約 4.2 MB）與 openccdata 字典（約 1.1 MB）。
 android-opencc = { group = "com.github.qichuan", name = "android-opencc", version.ref = "androidOpencc" }
+
+# Media3 / ExoPlayer（Apache-2.0）。播放 YouTube Music 的 128kbps 音訊串流。
+# 版本以 Google Maven 的實際最新穩定版為準（2026-09 為 1.11.1），
+# **不要憑記憶寫版本**——Media3 的 API 每個版本都可能動。
+androidx-media3-exoplayer = { group = "androidx.media3", name = "media3-exoplayer", version.ref = "media3" }
+androidx-media3-common = { group = "androidx.media3", name = "media3-common", version.ref = "media3" }
+androidx-media3-session = { group = "androidx.media3", name = "media3-session", version.ref = "media3" }
+androidx-media3-datasource-okhttp = { group = "androidx.media3", name = "media3-datasource-okhttp", version.ref = "media3" }
 
 # Test
 junit = { group = "junit", name = "junit", version.ref = "junit" }

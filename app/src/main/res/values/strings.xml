@@ -45,6 +45,8 @@
     <string name="practice_replay">重新挑戰</string>
     <string name="practice_back_to_search">重選歌曲</string>
     <string name="practice_audio_coming_soon">音源開發中</string>
+    <string name="practice_play">播放</string>
+    <string name="practice_pause">暫停</string>
 
     <!-- 字庫 -->
     <string name="wordbank_banner_title">每個錯字，都是進步</string>

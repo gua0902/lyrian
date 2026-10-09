@@ -251,6 +251,68 @@ ECDICT 的 `translation` 是**簡體中文**，而本 App 的 UI 與使用者都
 > ⚠️ **注意**：`android-opencc` 只發佈在 **JitPack**（`com.github.qichuan:android-opencc`），因此 `settings.gradle.kts` 必須加 `https://jitpack.io`，並用 `content { includeGroup("com.github.qichuan") }` 限制範圍，避免這個第三方 repo 被拿去解其他依賴。該專案 2021-05 後未再更新（4 年無維護），但 `s2twp` 詞庫來自 OpenCC 上游，是穩定的資料而非會腐爛的 API。
 
 
+### 4.3.2 音源：YouTube Music InnerTube + Media3
+
+> **實作**：`data/audio/` 的四個檔案。依賴 `androidx.media3:1.11.1`（Apache-2.0）。
+
+#### 流程與**版本配對風險**
+
+```
+LRCLIB 的 (title, artist, durationMs)
+        ↓  YouTube.search(FILTER_SONG)
+   候選清單
+        ↓  AudioTrackMatcher.pick  ← ★ 風險都在這裡
+   最佳匹配 + isConfident
+        ↓  YouTube.player(videoId)
+   串流 URL
+        ↓  ExoPlayer
+```
+
+**★ 為什麼一定要配對，不能取第一筆**
+
+歌詞時間戳來自 **LRCLIB**，音訊來自 **YouTube**——**兩個不同的來源**。
+同一首歌在 YouTube 上有錄音室版、現場版、MV 版、remaster 版，長度各異。
+挑錯版本 → **整首歌詞錯位**，而使用者只會覺得「App 壞了」，不會想到是版本問題。
+
+配對規則（`AudioTrackMatcher`，純函式、可在 JVM 測試）：
+
+| 判準 | 順序 | 理由 |
+|---|---|---|
+| 是否在時長容忍度內（預設 **3 秒**） | 1 | 3 秒足以吸收「開頭靜音不同」與編碼誤差，但擋得掉現場版（通常差 30 秒以上） |
+| 標題是否含 `live` / `cover` / `acoustic` / `remix` / `karaoke`… | 2 | **必須排在時長之前**，見下方 |
+| 時長差距 | 3 | 最後的細部排序 |
+
+> ⚠️ **判準順序是個真實的坑**：Adele《Hello》的錄音室版是 295s，翻唱版常是 296s。
+> 期望值 295.502s 時，翻唱版的差距（0.498s）竟然**小於**錄音室版（0.502s）。
+> 純看時長，翻唱會贏 4 毫秒。時長適合區分「不同錄音」，但同一首歌的翻唱與原版
+> 長度本來就幾乎一樣——此時**標題才是有效訊號**。這個案例已寫成迴歸測試。
+
+**時長不符時的行為**：`isConfident = false` → UI 顯示提示而不是硬播。
+硬播只會讓使用者以為 App 壞了，明講「找到的版本長度與歌詞不符」才有用。
+
+#### 播放器
+
+| 決策 | 內容 |
+|---|---|
+| 為什麼是 `@Singleton` | 綁在 ViewModel 上會在每次旋轉螢幕時重建 → **音樂中斷** |
+| 為什麼**不用** `MediaSessionService` | 練習是強互動的；切到別的 App 就暫停是合理的，也省下一個常駐通知。`media3-session` 依賴已加，日後要做背景播放再補 service |
+| 釋放時機 | `PracticeViewModel.onCleared()`——ViewModel 在**設定變更**時不會被清除，所以旋轉不中斷；只有真的離開頁面才釋放 |
+| 位置取樣 | Media3 **刻意沒有**位置變化的 callback（位置是連續值），以 50ms 輪詢 |
+| 資料來源 | `OkHttpDataSource`，共用 App 既有的 `OkHttpClient` |
+
+#### ⚠️ 已知風險（誠實記錄）
+
+1. **Piped 是第三方服務**。`YouTube.player` 在 `IOS` / `TVHTML5` client 都拿不到 URL 時，
+   會向 **Piped** 要串流。該服務可能失效或回傳被限流的 URL。因此 `getStreamUrl`
+   回傳 `StreamResult`（`Success` / `Unavailable` / `Failed`）而不是 null，
+   讓 UI 能區分「這首歌不能播」與「音源服務掛了」。
+2. **這段程式碼從未在真實網路環境驗證過**。單元測試只涵蓋 `AudioTrackMatcher`
+   這個純函式（22 個案例），網路鏈路完全沒有測試覆蓋。
+3. **違反 YouTube 服務條款**，且 innertube 模組是 **GPL-3.0**（見 `innertube/README.md`）。
+4. 已從 manifest **移除** `FOREGROUND_SERVICE` 與 `FOREGROUND_SERVICE_MEDIA_PLAYBACK`
+   （`tools:node="remove"`）——不做背景播放，就不需要這兩個權限。
+
+
 ### 4.4 Spotify（Phase 6，本階段不做）
 
 **已驗證事實**（[2018 官方公告](https://developer.spotify.com/blog/2018-09-14-updates-mobile-platform)）：

@@ -12,6 +12,8 @@ import com.antigravity.lyrian.data.local.SongDao
 import com.antigravity.lyrian.data.local.SongEntity
 import com.antigravity.lyrian.data.local.VocabDao
 import com.antigravity.lyrian.data.active.PracticeSessionStore
+import com.antigravity.lyrian.data.audio.AudioPlayerController
+import com.antigravity.lyrian.data.audio.AudioSourceResolver
 import com.antigravity.lyrian.data.lyrics.LyricsParser
 import com.antigravity.lyrian.domain.model.ChoiceRecord
 import com.antigravity.lyrian.domain.model.FillChoiceQuestion
@@ -22,6 +24,7 @@ import com.antigravity.lyrian.ui.navigation.Routes
 import com.antigravity.lyrian.util.toDayKey
 import dagger.hilt.android.lifecycle.HiltViewModel
 import javax.inject.Inject
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -47,6 +50,38 @@ data class PracticeUiState(
     val options: List<String> = emptyList(),
     val isLoading: Boolean = true,
     val errorMessage: String? = null,
+
+    // ---------- 音訊 ----------
+
+    /** 正在解析音源（搜尋 YouTube Music → 取串流 URL）。 */
+    val isAudioLoading: Boolean = false,
+    /** 音源已就緒，可以播放。 */
+    val isAudioReady: Boolean = false,
+    /** 播放器是否正在播放。 */
+    val isPlaying: Boolean = false,
+    /** 正在緩衝。 */
+    val isBuffering: Boolean = false,
+    /** 播放位置（毫秒）。 */
+    val playbackPositionMs: Long = 0L,
+    /** 曲目總長（毫秒）；未知時為 null。 */
+    val playbackDurationMs: Long? = null,
+    /**
+     * 目前**唱到**的歌詞行索引；沒有時間戳時為 null。
+     *
+     * 這與 [activeBlankIndex]（作答進度）是**兩條獨立的軸**：
+     * 前者來自音訊時間，後者來自使用者答到哪。
+     */
+    val singingLineIndex: Int? = null,
+    /** 音源相關的提示（例如「找不到對應的錄音版本」）。 */
+    val audioNotice: String? = null,
+    /**
+     * 播放器本身回報的錯誤。
+     *
+     * 與 [audioNotice] **分開存放**：播放器是單例，它的錯誤會一直留在狀態裡，
+     * 若混進 [audioNotice] 就會讓「上一首歌的播放錯誤」黏到下一首歌上。
+     * 這個欄位每次載入新歌時都會清空。
+     */
+    val playbackError: String? = null,
 ) {
     val currentQuestion: FillChoiceQuestion?
         get() = questions.getOrNull(activeBlankIndex)
@@ -83,6 +118,21 @@ private const val ERROR_NO_SESSION = "找不到這首歌的練習資料，請重
 /** 有歌詞，但沒有任何一行可以挖空（純演奏曲、或全是很短的虛詞）。 */
 private const val ERROR_NO_BLANKS = "這首歌沒有可挖空的歌詞。"
 
+/** 在 YouTube Music 上找不到可播放的對應版本。 */
+private const val NO_AUDIO_FOUND = "找不到這首歌的可播放版本，只能純歌詞練習。"
+
+/** 找到了，但時長與歌詞時間戳差距過大，可能不是同一個錄音。 */
+private const val AUDIO_MAY_NOT_ALIGN =
+    "找到的版本長度與歌詞不符，歌詞可能會有些對不上。"
+
+/**
+ * 播放位置的取樣間隔。
+ *
+ * Media3 沒有「位置變化」的 callback（位置是連續值，每帧回報太吵），
+ * 因此以固定間隔取樣。50ms 足以讓歌詞高亮跟得上歌聲，又不會浪費 CPU。
+ */
+private const val POSITION_POLL_MS = 50L
+
 private const val TAG = "LyrianPractice"
 
 /** 歌曲的基本資訊。與歌詞來源分開，因為兩層退路取到的方式不同。 */
@@ -91,6 +141,13 @@ private data class SongHead(
     val title: String,
     val artist: String,
     val coverUrl: String?,
+    /**
+     * LRCLIB 的時長（毫秒）。
+     *
+     * **音源配對的關鍵**：用來在 YouTube Music 的眾多版本
+     * （錄音室／現場／MV／remaster）中挑出同一個錄音。見 `AudioTrackMatcher`。
+     */
+    val durationMs: Long? = null,
 )
 
 /** 一份完整的練習資料來源：歌曲資訊 + 歌詞行。 */
@@ -115,6 +172,8 @@ class PracticeViewModel @Inject constructor(
     private val attemptDao: AttemptDao,
     private val vocabDao: VocabDao,
     private val dailyStatDao: DailyStatDao,
+    private val audioResolver: AudioSourceResolver,
+    val player: AudioPlayerController,
     savedStateHandle: SavedStateHandle,
 ) : ViewModel() {
 
@@ -139,6 +198,157 @@ class PracticeViewModel @Inject constructor(
     init {
         val songId = savedStateHandle.get<String>(Routes.ARG_SONG_ID)?.toLongOrNull()
         load(songId)
+        observePlayback()
+    }
+
+    // ---------- 音訊 ----------
+
+    /** 是否已經解析過音源（避免每次按播放都重打 YouTube）。 */
+    private var audioResolved = false
+
+    /**
+     * 把播放器的狀態同步進 UI 狀態。
+     *
+     * 播放器是**單例**（旋轉螢幕不中斷音樂），所以它的狀態可能比這個
+     * ViewModel 還早存在。因此除了收集 flow，也要立刻讀一次目前值。
+     */
+    private fun observePlayback() {
+        viewModelScope.launch {
+            player.state.collect { playback ->
+                _uiState.update {
+                    it.copy(
+                        isPlaying = playback.isPlaying,
+                        isBuffering = playback.isBuffering,
+                        playbackPositionMs = playback.positionMs,
+                        playbackDurationMs = playback.durationMs,
+                        playbackError = playback.error,
+                    )
+                }
+            }
+        }
+
+        // 播放中才輪詢位置。Media3 沒有「位置變化」的 callback
+        // （位置是連續值，全部回報會太吵），因此以固定間隔取樣。
+        viewModelScope.launch {
+            while (true) {
+                if (_uiState.value.isPlaying) {
+                    val position = player.currentPositionMs()
+                    _uiState.update {
+                        it.copy(
+                            playbackPositionMs = position,
+                            singingLineIndex = lineIndexAt(position),
+                        )
+                    }
+                }
+                delay(POSITION_POLL_MS)
+            }
+        }
+    }
+
+    /**
+     * 準備音源。第一次呼叫才會真的打 YouTube。
+     *
+     * ⚠️ **時長不符時不硬播**：見 `AudioTrackMatcher`。若挑到的版本
+     * 與 LRCLIB 的時間戳明顯不是同一個錄音，硬播只會讓歌詞整首錯位。
+     */
+    fun prepareAudio() {
+        if (audioResolved || _uiState.value.isAudioLoading) return
+        val head = songHead ?: return
+
+        audioResolved = true
+        _uiState.update {
+            it.copy(isAudioLoading = true, audioNotice = null, playbackError = null)
+        }
+
+        viewModelScope.launch {
+            val resolved = audioResolver.resolve(
+                title = head.title,
+                artist = head.artist,
+                expectedDurationMs = head.durationMs,
+            )
+
+            when (resolved) {
+                is AudioSourceResolver.Result.Failed -> {
+                    _uiState.update {
+                        it.copy(
+                            isAudioLoading = false,
+                            audioNotice = describeAudioFailure(resolved.failure),
+                        )
+                    }
+                }
+
+                is AudioSourceResolver.Result.Ok -> {
+                    val ok = resolved.resolved
+                    player.prepare(ok.stream.url)
+
+                    _uiState.update {
+                        it.copy(
+                            isAudioLoading = false,
+                            isAudioReady = true,
+                            audioNotice = if (ok.isConfident) null else AUDIO_MAY_NOT_ALIGN,
+                        )
+                    }
+                }
+            }
+        }
+    }
+
+    /**
+     * 把音源失敗翻成**可行動**的訊息。
+     *
+     * 「找不到」要使用者換一首，「服務掛了」要使用者稍後再試——
+     * 講成同一句會讓人以為是 App 壞了。
+     */
+    private fun describeAudioFailure(failure: AudioSourceResolver.Failure): String = when (failure) {
+        is AudioSourceResolver.Failure.NoCandidate -> NO_AUDIO_FOUND
+        is AudioSourceResolver.Failure.Unavailable ->
+            "這首歌的版本無法播放（${failure.reason}），只能純歌詞練習。"
+        is AudioSourceResolver.Failure.Error ->
+            "音源服務暫時無法使用，只能純歌詞練習。"
+    }
+
+    /**
+     * 播放鍵：**同時控制播放器與歌詞滾動**。
+     *
+     * 這是擁有者指定的核心行為——只有一個開關，不是兩個。
+     */
+    fun onTogglePlayPause() {
+        if (!_uiState.value.isAudioReady) {
+            prepareAudio()
+            return
+        }
+        player.togglePlayPause()
+    }
+
+    /** 拖曳播放進度條。 */
+    fun onSeekPlayback(positionMs: Long) {
+        player.seekTo(positionMs)
+        _uiState.update { it.copy(playbackPositionMs = positionMs) }
+    }
+
+    /**
+     * 某個時間點**正在唱**哪一行。
+     *
+     * 取「開始時間 <= 位置」的最後一行；位置在所有行之前時回傳 null。
+     * 沒有時間戳（純文字歌詞）時全部為 0，此時回傳 null 讓 UI 不要跟隨。
+     */
+    fun lineIndexAt(positionMs: Long): Int? {
+        val lines = _uiState.value.lines
+        if (lines.isEmpty()) return null
+        // 純文字歌詞每行都有間隔（LyricsParser 會補），但仍要防禦全為 0 的情況
+        if (lines.all { it.startMs <= 0L }) return null
+
+        return lines.lastOrNull { it.startMs <= positionMs }?.index
+    }
+
+    override fun onCleared() {
+        super.onCleared()
+        // 使用者真的離開練習頁（不是旋轉）→ 停掉音樂並釋放原生解碼器。
+        //
+        // ⚠️ 這裡是唯一正確的釋放點：ViewModel 在**設定變更**時不會被清除，
+        // 所以旋轉螢幕時音樂不中斷；只有離開這個頁面才會走到這裡。
+        player.stop()
+        player.release()
     }
 
     private fun load(songId: Long?) {
@@ -157,6 +367,7 @@ class PracticeViewModel @Inject constructor(
                         title = session.title,
                         artist = session.artist,
                         coverUrl = session.coverUrl,
+                        durationMs = session.durationMs,
                     ),
                     lines = LyricsParser.parse(
                         lyricsFile = session.lyricsFile,
@@ -200,6 +411,7 @@ class PracticeViewModel @Inject constructor(
                 title = song.title,
                 artist = song.artist,
                 coverUrl = song.coverUrl,
+                durationMs = song.durationMs,
             ),
             lines = storedLines.map { entity ->
                 LyricLine(
@@ -217,6 +429,10 @@ class PracticeViewModel @Inject constructor(
     /** 把一份歌詞來源轉成 UI 狀態。兩條來源路徑共用，確保行為一致。 */
     private fun applySource(source: SongSource) {
         songHead = source.head
+
+        // 播放器是單例，可能還留著上一首歌的狀態 → 每次都清乾淨
+        player.stop()
+        audioResolved = false
 
         val dataset = FillChoiceBuilder.buildDataset(
             source.lines,

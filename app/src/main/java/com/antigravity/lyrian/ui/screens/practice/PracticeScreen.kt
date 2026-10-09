@@ -33,6 +33,7 @@ import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.MusicNote
 import androidx.compose.material.icons.filled.Pause
+import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material3.Button
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.Icon
@@ -130,6 +131,8 @@ fun PracticeScreen(
                 onSelectOption = viewModel::onSelectOption,
                 onNext = viewModel::onNext,
                 onSeek = viewModel::onSeekTo,
+                onTogglePlayPause = viewModel::onTogglePlayPause,
+                onSeekPlayback = viewModel::onSeekPlayback,
                 modifier = Modifier.padding(innerPadding),
             )
         }
@@ -143,6 +146,8 @@ private fun PracticeContent(
     onSelectOption: (String) -> Unit,
     onNext: () -> Unit,
     onSeek: (Int) -> Unit,
+    onTogglePlayPause: () -> Unit,
+    onSeekPlayback: (Long) -> Unit,
     modifier: Modifier = Modifier,
 ) {
     val haptics = LocalHapticFeedback.current
@@ -166,7 +171,7 @@ private fun PracticeContent(
             title = state.songTitle,
             artist = state.artist,
             coverUrl = state.coverUrl,
-            progress = if (state.total > 0) {
+            questionProgress = if (state.total > 0) {
                 state.activeBlankIndex.toFloat() / state.total
             } else {
                 0f
@@ -174,6 +179,17 @@ private fun PracticeContent(
             total = state.total,
             onSeek = onSeek,
             onBack = onBack,
+            audio = AudioControls(
+                isReady = state.isAudioReady,
+                isLoading = state.isAudioLoading,
+                isPlaying = state.isPlaying,
+                isBuffering = state.isBuffering,
+                positionMs = state.playbackPositionMs,
+                durationMs = state.playbackDurationMs,
+                notice = state.playbackError ?: state.audioNotice,
+                onTogglePlayPause = onTogglePlayPause,
+                onSeekPlayback = onSeekPlayback,
+            ),
         )
 
         Box(modifier = Modifier.weight(1f).fillMaxWidth()) {
@@ -183,6 +199,7 @@ private fun PracticeContent(
                 currentLineIndex = currentLineIndex,
                 answeredLineIndex = state.lastAnsweredLineIndex,
                 answerTick = state.selections.size,
+                isPlaying = state.isPlaying,
                 selections = state.selections,
                 listState = listState,
             )
@@ -203,21 +220,39 @@ private fun PracticeContent(
     }
 }
 
+/** 播放控制項需要的狀態。單純為了不讓 `PlayerHeader` 的參數爆炸。 */
+private data class AudioControls(
+    val isReady: Boolean,
+    val isLoading: Boolean,
+    val isPlaying: Boolean,
+    val isBuffering: Boolean,
+    val positionMs: Long,
+    val durationMs: Long?,
+    val notice: String?,
+    val onTogglePlayPause: () -> Unit,
+    val onSeekPlayback: (Long) -> Unit,
+)
+
 /**
  * Player Header。
  *
  * **這是整個練習頁唯一處理狀態列 inset 的地方**——之前重複疊加了三次，
  * 導致頂部出現大片空白。
+ *
+ * 兩條進度軸刻意放在一起但視覺上分明確：
+ *  - 上：**播放位置**（時間軸），可以拖曳跳時間
+ *  - 下：**作答進度**（題目軸），可以拖曳跳題
  */
 @Composable
 private fun PlayerHeader(
     title: String,
     artist: String,
     coverUrl: String?,
-    progress: Float,
+    questionProgress: Float,
     total: Int,
     onSeek: (Int) -> Unit,
     onBack: () -> Unit,
+    audio: AudioControls,
 ) {
     Surface(
         color = MaterialTheme.colorScheme.surfaceContainer,
@@ -272,32 +307,32 @@ private fun PlayerHeader(
                         maxLines = 1,
                     )
                     Text(
-                        text = artist,
+                        text = buildArtistLine(artist, audio),
                         style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                         maxLines = 1,
                     )
                 }
 
-                Box(
-                    modifier = Modifier
-                        .size(44.dp)
-                        .clip(RoundedCornerShape(22.dp))
-                        .background(MaterialTheme.colorScheme.primary)
-                        .clickable { /* 播放器待接 Media3 */ },
-                    contentAlignment = Alignment.Center,
-                ) {
-                    Icon(
-                        imageVector = Icons.Filled.Pause,
-                        contentDescription = stringResource(R.string.practice_audio_coming_soon),
-                        tint = MaterialTheme.colorScheme.onPrimary,
-                    )
-                }
+                PlayPauseButton(audio = audio)
+            }
+
+            if (audio.isReady && audio.durationMs != null) {
+                PlaybackScrubber(audio = audio)
+            }
+
+            if (audio.notice != null) {
+                Text(
+                    text = audio.notice,
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    modifier = Modifier.padding(horizontal = 16.dp, vertical = 4.dp),
+                )
             }
 
             if (total > 0) {
                 Slider(
-                    value = progress.coerceIn(0f, 1f),
+                    value = questionProgress.coerceIn(0f, 1f),
                     onValueChange = { fraction ->
                         onSeek(Math.round(fraction * (total - 1)))
                     },
@@ -313,6 +348,88 @@ private fun PlayerHeader(
             }
         }
     }
+}
+
+/** 歌手 · 已播 / 總長。音源未就緒時只顯示歌手。 */
+private fun buildArtistLine(artist: String, audio: AudioControls): String {
+    if (!audio.isReady || audio.durationMs == null) return artist
+    return "$artist · ${formatTime(audio.positionMs)} / ${formatTime(audio.durationMs)}"
+}
+
+/** 毫秒 → `mm:ss`。 */
+private fun formatTime(ms: Long): String {
+    val totalSeconds = (ms.coerceAtLeast(0L)) / 1000
+    return "%02d:%02d".format(totalSeconds / 60, totalSeconds % 60)
+}
+
+/**
+ * 播放鍵：**同時控制播放器與歌詞滾動**。
+ *
+ * 尚未解析音源時，按下去會先解析（顯示轉圈），而不是沒反應——
+ * 空有外觀的按鈕是最糟的體驗。
+ */
+@Composable
+private fun PlayPauseButton(audio: AudioControls) {
+    val enabled = !audio.isLoading
+
+    Box(
+        modifier = Modifier
+            .size(44.dp)
+            .clip(RoundedCornerShape(22.dp))
+            .background(
+                if (audio.isReady) {
+                    MaterialTheme.colorScheme.primary
+                } else {
+                    MaterialTheme.colorScheme.surfaceContainerHighest
+                },
+            )
+            .clickable(enabled = enabled, onClick = audio.onTogglePlayPause),
+        contentAlignment = Alignment.Center,
+    ) {
+        when {
+            audio.isLoading -> CircularProgressIndicator(
+                modifier = Modifier.size(20.dp),
+                strokeWidth = 2.dp,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+
+            audio.isPlaying || audio.isBuffering -> Icon(
+                imageVector = Icons.Filled.Pause,
+                contentDescription = stringResource(R.string.practice_pause),
+                tint = MaterialTheme.colorScheme.onPrimary,
+            )
+
+            else -> Icon(
+                imageVector = Icons.Filled.PlayArrow,
+                contentDescription = stringResource(R.string.practice_play),
+                tint = if (audio.isReady) {
+                    MaterialTheme.colorScheme.onPrimary
+                } else {
+                    MaterialTheme.colorScheme.onSurfaceVariant
+                },
+            )
+        }
+    }
+}
+
+/** 播放位置拖曳條。與作答進度條是**不同的軸**，不要合併。 */
+@Composable
+private fun PlaybackScrubber(audio: AudioControls) {
+    val duration = audio.durationMs ?: return
+    if (duration <= 0) return
+
+    Slider(
+        value = (audio.positionMs.toFloat() / duration).coerceIn(0f, 1f),
+        onValueChange = { fraction -> audio.onSeekPlayback((fraction * duration).toLong()) },
+        modifier = Modifier
+            .fillMaxWidth()
+            .height(20.dp),
+        colors = SliderDefaults.colors(
+            thumbColor = MaterialTheme.colorScheme.secondary,
+            activeTrackColor = MaterialTheme.colorScheme.secondary,
+            inactiveTrackColor = MaterialTheme.colorScheme.surfaceContainerHighest,
+        ),
+    )
 }
 
 /**
@@ -336,6 +453,8 @@ private fun LyricsViewport(
     answeredLineIndex: Int,
     /** 作答次數；每次作答都會重設閒置計時 */
     answerTick: Int,
+    /** 播放器是否正在播放——播放鍵同時控制滾動的實作點 */
+    isPlaying: Boolean,
     selections: Map<Int, ChoiceRecord>,
     listState: LazyListState,
 ) {
@@ -345,6 +464,11 @@ private fun LyricsViewport(
     }
 
     val controller = androidx.compose.runtime.remember { LyricFollowController() }
+
+    // 播放鍵同時控制滾動：暫停時歌詞靜止，播放時才跟隨
+    LaunchedEffect(isPlaying) {
+        controller.onPlaybackChanged(isPlaying = isPlaying)
+    }
 
     // 程式自己發起的捲動，不該被誤判成使用者手動捲動
     var programmaticScroll by androidx.compose.runtime.remember {
@@ -369,8 +493,9 @@ private fun LyricsViewport(
     BoxWithConstraints(modifier = Modifier.fillMaxSize()) {
         val halfViewport = maxHeight / 2
 
-        // 依主控權決定要不要跟隨。answerTick 是 key，讓「答完」能喚醒它重試。
-        LaunchedEffect(currentLineIndex, answerTick) {
+        // 依主控權決定要不要跟隨。answerTick 讓「答完」能喚醒它重試，
+        // isPlaying 讓「按下播放」立刻跟到當前句。
+        LaunchedEffect(currentLineIndex, answerTick, isPlaying) {
             if (controller.shouldAutoScroll(
                     nowMs = System.currentTimeMillis(),
                     lineIndex = currentLineIndex,

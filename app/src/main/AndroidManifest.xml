@@ -1,17 +1,31 @@
 <?xml version="1.0" encoding="utf-8"?>
-<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+<manifest xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:tools="http://schemas.android.com/tools">
 
     <!--
       權限策略：Lyrian 是「無帳號、資料只在本地」的 App。
       只要求真正需要的權限，其餘一律不加。
 
-      INTERNET       — LRCLIB 歌詞、iTunes 封面、BYOK AI
+      INTERNET       — LRCLIB 歌詞、iTunes 封面、BYOK AI、YouTube Music 音源
       VIBRATE        — 答錯時的震動回饋（PRD 指定）
       網路狀態        — 用來顯示離線提示（ACCESS_NETWORK_STATE，非敏感）
     -->
     <uses-permission android:name="android.permission.INTERNET" />
     <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
     <uses-permission android:name="android.permission.VIBRATE" />
+
+    <!--
+      音訊播放需要 Media3，而 Media3 會拉進 media3-session
+      （即使我們沒有用 MediaSessionService）。
+      這裡明確移除前景服務權限：Lyrian **不做背景播放**，
+      切到別的 App 就暫停。少一個權限，就少一份被質疑的理由。
+    -->
+    <uses-permission
+        android:name="android.permission.FOREGROUND_SERVICE"
+        tools:node="remove" />
+    <uses-permission
+        android:name="android.permission.FOREGROUND_SERVICE_MEDIA_PLAYBACK"
+        tools:node="remove" />
 
     <application
         android:name=".LyrianApplication"

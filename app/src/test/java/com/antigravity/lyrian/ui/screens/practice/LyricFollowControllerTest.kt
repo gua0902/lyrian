@@ -148,4 +148,56 @@ class LyricFollowControllerTest {
         assertEquals(3_000L, LyricFollowController.DEFAULT_IDLE_DELAY_MS)
         assertEquals(3_000L, controller.idleDelayMs)
     }
+
+    // ---------- 播放鍵同時控制滾動 ----------
+
+    @Test
+    fun `暫停時完全不跟隨`() {
+        controller.onPlaybackChanged(isPlaying = false)
+
+        // 即使一切條件都滿足（跟隨模式、已作答、時間充足），暫停就是不跟隨
+        assertFalse(controller.shouldAutoScroll(nowMs = 99_999, lineIndex = 1, answeredLine = 5))
+    }
+
+    @Test
+    fun `播放時恢復跟隨`() {
+        controller.onPlaybackChanged(isPlaying = false)
+        assertFalse(controller.shouldAutoScroll(nowMs = 0, lineIndex = 1, answeredLine = 5))
+
+        controller.onPlaybackChanged(isPlaying = true)
+        assertTrue(controller.shouldAutoScroll(nowMs = 0, lineIndex = 1, answeredLine = 5))
+    }
+
+    @Test
+    fun `暫停會反映在狀態上`() {
+        controller.onPlaybackChanged(isPlaying = true)
+        assertFalse(controller.isPlaybackPaused)
+
+        controller.onPlaybackChanged(isPlaying = false)
+        assertTrue(controller.isPlaybackPaused)
+    }
+
+    @Test
+    fun `預設不是暫停狀態`() {
+        assertFalse(controller.isPlaybackPaused)
+    }
+
+    @Test
+    fun `暫停時不會偷偷把手動模式改回跟隨`() {
+        controller.onManualScroll(nowMs = 0)
+        controller.onPlaybackChanged(isPlaying = false)
+
+        // 暫停期間經過很久，但因為一開始就被暫停擋掉，模式不該被改寫
+        assertFalse(controller.shouldAutoScroll(nowMs = 99_999, lineIndex = 0, answeredLine = 0))
+        assertEquals(LyricFollowController.Mode.MANUAL, controller.mode)
+    }
+
+    @Test
+    fun `未作答時不會偷偷把手動模式改回跟隨`() {
+        controller.onManualScroll(nowMs = 0)
+
+        // 沒暫停，但想捲到還沒答到的行 → 不動作，且模式必須留在 MANUAL
+        assertFalse(controller.shouldAutoScroll(nowMs = 99_999, lineIndex = 5, answeredLine = 1))
+        assertEquals(LyricFollowController.Mode.MANUAL, controller.mode)
+    }
 }

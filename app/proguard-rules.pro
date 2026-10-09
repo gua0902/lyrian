@@ -50,6 +50,17 @@
     native <methods>;
 }
 
+# --- Media3 / ExoPlayer ---
+# 播放器靠反射建立解碼器與 extractor，R8 縮掉就會在執行期才炸。
+-keep class androidx.media3.** { *; }
+-dontwarn androidx.media3.**
+
+# --- SLF4J ---
+# Media3 的傳遞依賴（透過 ktor / okhttp 生態）參考了 slf4j 的綁定類別，
+# 但 Android 上不需要日誌綁定。這是每個用 slf4j 的 Android 專案都會遇到的標準情況，
+# 真正的缺失不會發生（沒有綁定時 slf4j 會退回 NOP logger）。
+-dontwarn org.slf4j.**
+
 # --- 保留行號，讓 crash report 可讀 ---
 -keepattributes SourceFile,LineNumberTable
 -renamesourcefileattribute SourceFile

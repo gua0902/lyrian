@@ -39,8 +39,25 @@ class LyricFollowController(
     var mode: Mode = Mode.AUTO
         private set
 
+    /**
+     * 播放器是否暫停。
+     *
+     * **這是「播放鍵同時控制播放器與歌詞滾動」的實作點**：
+     * 暫停時歌詞也停止跟隨——否則畫面會自己跑，跟沒有播放鍵一樣。
+     *
+     * 預設為 `false`（未暫停），讓這個類別單獨使用時的行為單純。
+     * 實際的暫停狀態由 UI 依播放器同步進來。
+     */
+    var isPlaybackPaused: Boolean = false
+        private set
+
     /** 使用者最後一次手動捲動的時間；null 表示他還沒動過手。 */
     private var lastManualScrollAtMs: Long? = null
+
+    /** 播放／暫停。由播放鍵呼叫。 */
+    fun onPlaybackChanged(isPlaying: Boolean) {
+        isPlaybackPaused = !isPlaying
+    }
 
     /** 使用者手動捲動。 */
     fun onManualScroll(nowMs: Long) {
@@ -56,12 +73,19 @@ class LyricFollowController(
      * @param answeredLine 已作答的行索引；尚未作答的行不搶畫面
      */
     fun shouldAutoScroll(nowMs: Long, lineIndex: Int, answeredLine: Int): Boolean {
+        // 暫停時不跟隨——歌詞靜止在使用者看的地方
+        if (isPlaybackPaused) return false
+
+        // 跟隨模式：一律可以捲
         if (mode == Mode.AUTO) return true
 
-        val lastAt = lastManualScrollAtMs ?: return true
-
-        // 還沒答完當前這題 → 絕不搶畫面，等使用者答完再說
+        // 尚未作答 → 絕不搶畫面，等使用者答完再說。
+        // **這個判斷要在計時之前**，否則閒置期間會被誤判為「可以收回主控權」。
         if (lineIndex > answeredLine) return false
+
+        // 手動模式必然有計時起點（onManualScroll 一定會設）。null 代表狀態被外力弄壞，
+        // 保守地當成「剛動手」——下一個 tick 就會拿到真的時間。
+        val lastAt = lastManualScrollAtMs ?: nowMs
 
         // 停手還不到 3 秒 → 讓使用者看完
         if (nowMs - lastAt < idleDelayMs) return false
@@ -87,6 +111,7 @@ class LyricFollowController(
     fun reset() {
         mode = Mode.AUTO
         lastManualScrollAtMs = null
+        isPlaybackPaused = false
     }
 
     companion object {
