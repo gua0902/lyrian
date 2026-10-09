@@ -8,4 +8,10 @@
 -->
 <resources>
     <color name="lyrian_launch_background">#FAFAFA</color>
+
+    <!--
+      自適應圖示的底色層（Android 8.0+）。
+      與 mipmap/ic_launcher.xml 的 #4B4BD5 是同一個單色系 primary。
+    -->
+    <color name="ic_launcher_background">#4B4BD5</color>
 </resources>

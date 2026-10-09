@@ -393,3 +393,116 @@ App 端則傳入 expo-sqlite。**同一份 SQL 兩邊共用**。
 - **難度欄位未填**——需要 ECDICT 詞頻。
 - 字庫右側參考圖顯示的是「錯誤 Love」（當時選錯的字），目前顯示「錯誤 N 次」。
 
+---
+
+## TASK-09：Kotlin 化 OpenCC（台灣用語）+ 修好 release build
+
+> ⚠️ **本節之後的程式碼都在 `kotlin-migration` 分支**（`master` 保留完整的 RN 版）。
+> TASK-03～TASK-08 的內容是 RN 版；Kotlin 版的遷移沒有逐項寫進本日誌。
+
+### 目標
+
+字典釋義（未來的 ECDICT）與社群歌詞常是**簡體中文**，進資料庫前要轉成繁體。
+原本只接了 [opencc4j](https://github.com/houbb/opencc4j)，它能給出正確字形，
+但**給不出台灣用語**：
+
+```
+软件 → 軟件     ← opencc4j（字形對，台灣人卻不說「軟件」）
+软件 → 軟體     ← 需要 OpenCC 的 s2twp
+```
+
+### 完成事項
+
+| 日期 | 項目 | 狀態 |
+|------|------|------|
+| 2026-10-09 | 查證 [`qichuan/android-opencc`](https://github.com/qichuan/android-opencc)：MIT、JNI、含 `s2twp` 字典 | ✅ |
+| 2026-10-09 | `settings.gradle.kts` 加 JitPack（**限定 `com.github.qichuan` 這一組**） | ✅ |
+| 2026-10-09 | `ChineseConverter` 改為**雙後端**：原生 `s2twp` ＋ opencc4j 退路 | ✅ |
+| 2026-10-09 | JVM 測試改為明確走退路；新增裝置端 instrumented 測試（native 專屬） | ✅ |
+| 2026-10-09 | **修好 `assembleRelease`**（見下，與 OpenCC 無關的既有問題） | ✅ |
+| 2026-10-09 | 單元測試 **127 個**全通過；debug／release APK 皆建置成功 | ✅ |
+
+### 1. 為什麼不能只用原生版
+
+`libChineseConverter.so` 是 Android 原生程式庫，**JVM 單元測試載不進來**。
+若把 opencc4j 拿掉，`ChineseConverterTest` 就得整批改成 instrumented 測試，
+而本機**沒有裝置也沒有模擬器**（`adb devices` 是空的，emulator 未安裝），等於失去測試。
+
+因此兩個後端**並存**：
+
+| 後端 | 角色 |
+|---|---|
+| android-opencc（MIT） | 裝置上的正式路徑，`s2twp` |
+| opencc4j（Apache-2.0） | JVM 測試；以及原生載入失敗時的退路 |
+
+> **退路不會拋例外。** `System.loadLibrary` 失敗丟的是 `UnsatisfiedLinkError`（是 `Error`，不是
+> `Exception`），載入結果用 `by lazy` 快取，只嘗試一次；失敗就靜靜退回 opencc4j。
+> 使用者拿到的是「軟件」而不是「軟體」，但**不會**看到崩潰。
+
+### 2. 成本（實測）
+
+| 項目 | 量 |
+|---|---|
+| APK 增加 | **4.57 MB**（23.02 → 27.59 MB） |
+| `.so`（4 個 ABI） | 4.17 MB |
+| `openccdata` 字典 | 1.11 MB |
+| 首次呼叫 | 把 `assets/openccdata` 複製到 `filesDir`（約 1.1 MB I/O） |
+
+release APK（含 R8）仍只有 **8.65 MB**——四個 `.so` 都在，R8 沒把它們弄丟。
+
+### 3. ★ 順手抓到：`assembleRelease` 其實一直是壞的
+
+原本「APK 23.02 MB」是 **debug** APK。第一次跑 `assembleRelease` 就失敗：
+
+```
+mipmap_aliases.xml:7: Error: Unexpected resource reference type;
+                             expected value of type @mipmap/ [ReferenceType]
+FAILURE: Lint found fatal errors while assembling a release target.
+```
+
+**根因**：`ic_launcher` 是 **mipmap** 資源（launcher 用 `@mipmap/` 參照），
+但 `res/values/mipmap_aliases.xml` 用
+`<item name="ic_launcher" type="mipmap">@drawable/ic_launcher_foreground</item>`
+把 mipmap 別名指向 **drawable**。執行期也許能動，但 Lint 判定型別不符，
+而 release 會跑 `lintVitalRelease`（**debug 不會**），所以只有 release 掛掉。
+
+**修法**（不再用別名）：
+
+1. `res/mipmap/ic_launcher.xml`、`res/mipmap/ic_launcher_round.xml`：
+   改成真正的向量圖（底色 + 歌詞線條），給 **API 26 以下**用。
+2. `mipmap-anydpi-v26/ic_launcher.xml`：`background` 改用
+   `@color/ic_launcher_background`，前景只留歌詞線條，刪掉多餘的
+   `ic_launcher_background.xml` 與 `ic_launcher_round.xml`（同一個自適應圖示即可）。
+3. 刪除 `mipmap_aliases.xml`。
+
+**副作用（好的）**：自適應圖示的前景原本**自己也帶一層底色**，疊在 background 層上等於
+兩層同色底；現在前景乾淨了，圖示才真的是兩層結構。
+
+### 4. 另一個既有問題：instrumented 測試的 D8 失敗
+
+跑 `assembleDebugAndroidTest` 時 D8 擋下來：
+
+```
+D8: Space characters in SimpleName
+    'com/antigravity/lyrian/data/local/LyrianDatabaseTest$upsert 不會因為 REPLACE 而清掉歌詞行$1'
+    are not allowed prior to DEX version 040
+```
+
+**根因**：`LyrianDatabaseTest` 的測試函式名含**空白**（`` fun `upsert 不會因為…`() ``），
+而函式裡的 lambda 會被編成內部類別 `…$1`，類別名因此帶空白。
+Kotlin 允許，D8 不接受。
+
+**修法**：把該檔 7 個含空白的測試名改成底線（`` `upsert_不會因為_REPLACE_而清掉歌詞行` ``）。
+`app/src/test/` 的測試不受影響（不進 DEX），所以那裡維持空白。
+
+> ⚠️ **注意**：`assembleDebugAndroidTest` 先前**從未建置成功**過
+> （instrumented 測試一直沒跑，也就沒被編譯到）。這一併修好了，但仍然沒有裝置可執行。
+
+### 5. 待處理
+
+- 裝置端 instrumented 測試（`ChineseConverterInstrumentedTest`、`LyrianDatabaseTest`）
+  **仍未實際執行**——需要一台裝置或模擬器。
+- `android-opencc` 2021-05 後未再更新；`s2twp` 詞庫本身來自 OpenCC 上游，
+  是資料而非 API，腐爛風險低，但值得在升級 OpenCC 上游時一併檢查。
+
+

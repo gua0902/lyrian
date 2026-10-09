@@ -114,8 +114,11 @@ dependencies {
     // YouTube Music 音源（GPL-3.0，見 innertube/README.md）
     implementation(project(":innertube"))
 
-    // 中文簡繁轉換（Apache-2.0）
+    // 中文簡繁轉換：兩套並存，理由見 ChineseConverter 的類別註解
+    //  - opencc4j（Apache-2.0）：純 Java，JVM 單元測試與原生程式庫載入失敗時的退路
+    //  - android-opencc（MIT）：裝置上用原生 S2TWP，做台灣用語替換
     implementation(libs.opencc4j)
+    implementation(libs.android.opencc)
 
     // Test
     testImplementation(libs.junit)

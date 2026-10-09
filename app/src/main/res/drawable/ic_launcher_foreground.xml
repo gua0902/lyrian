@@ -1,20 +1,15 @@
 <?xml version="1.0" encoding="utf-8"?>
 <!--
-  Lyrian 的啟動圖示。
+  自適應圖示的前景層（Android 8.0+）。
 
-  用向量（VectorDrawable）而非 PNG：任何解析度都清晰，且不必維護多套尺寸。
-  這是暫時的圖示，之後會替換為正式設計。
+  **只有歌詞線條，沒有底色**——底色由 background 層提供，
+  兩者疊起來才是完整圖示（見 drawable/ic_launcher_legacy.xml 的註解）。
 -->
 <vector xmlns:android="http://schemas.android.com/apk/res/android"
     android:width="108dp"
     android:height="108dp"
     android:viewportWidth="108"
     android:viewportHeight="108">
-
-    <!-- 背景：單色系 primary -->
-    <path
-        android:fillColor="#4B4BD5"
-        android:pathData="M0,0h108v108h-108z" />
 
     <!-- 歌詞行（三條水平線，象徵歌詞） -->
     <path

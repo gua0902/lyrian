@@ -17,6 +17,12 @@ dependencyResolutionManagement {
     repositories {
         google()
         mavenCentral()
+        // OpenCC 的 S2TWP（台灣用語）轉換：JitPack 才有。
+        // 座標 com.github.qichuan:android-opencc，見 libs.versions.toml 的說明。
+        maven {
+            url = uri("https://jitpack.io")
+            content { includeGroup("com.github.qichuan") }
+        }
     }
 }
 

@@ -23,6 +23,7 @@ turbine = "1.2.0"
 mockk = "1.13.13"
 materialIconsExtended = "1.7.6"
 opencc4j = "1.6.2"
+androidOpencc = "1.2.0"
 
 [libraries]
 androidx-core-ktx = { group = "androidx.core", name = "core-ktx", version.ref = "coreKtx" }
@@ -72,6 +73,11 @@ androidx-security-crypto = { group = "androidx.security", name = "security-crypt
 # 中文簡繁轉換（Apache-2.0）。含字典資料約 2.7 MB
 # jieba-analysis 是 optional，Gradle 不會拉進來（那是分詞用的，純轉換不需要）
 opencc4j = { group = "com.github.houbb", name = "opencc4j", version.ref = "opencc4j" }
+
+# OpenCC 原生版（MIT），提供 opencc4j 沒有的 S2TWP（台灣標準字 + 台灣用語）。
+# 來源是 JitPack：com.github.qichuan:android-opencc，需在 settings.gradle.kts 加 jitpack.io。
+# 內含 libChineseConverter.so（4 個 ABI，約 4.2 MB）與 openccdata 字典（約 1.1 MB）。
+android-opencc = { group = "com.github.qichuan", name = "android-opencc", version.ref = "androidOpencc" }
 
 # Test
 junit = { group = "junit", name = "junit", version.ref = "junit" }

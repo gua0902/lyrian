@@ -41,6 +41,15 @@
 # --- Hilt / Dagger ---
 -dontwarn dagger.hilt.**
 
+# --- android-opencc（MIT）---
+# 原生方法與 JNI 符號靠類別/方法名稱綁定，被混淆就會 UnsatisfiedLinkError。
+# ChineseConverter.convert 會在那之前先被 System.loadLibrary 的失敗擋掉，
+# 但這裡仍然保留名稱，讓 release build 行為與 debug 一致。
+-keep class com.zqc.opencc.android.lib.** { *; }
+-keepclasseswithmembernames class * {
+    native <methods>;
+}
+
 # --- 保留行號，讓 crash report 可讀 ---
 -keepattributes SourceFile,LineNumberTable
 -renamesourcefileattribute SourceFile

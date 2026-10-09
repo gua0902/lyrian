@@ -217,6 +217,40 @@ Deezer API（同樣免 key）為備選。
 
 > ⚠️ **風險待辦**：ECDICT 的**授權條款必須在散布前確認**（README 未明示，需查其 `LICENSE`）。若授權不容許再散布，退路為：(a) 首次啟動時由使用者選擇下載詞庫，(b) 改用其他授權明確的免費詞庫。
 
+### 4.3.1 簡繁轉換：OpenCC（台灣標準）
+
+ECDICT 的 `translation` 是**簡體中文**，而本 App 的 UI 與使用者都是繁體，因此字典釋義、社群歌詞進資料庫前都要轉換。
+
+**兩個後端並存，不是二選一**（實作見 `ChineseConverter.kt`）：
+
+| 後端 | 授權 | 角色 | 設定檔 | 產物 |
+|---|---|---|---|---|
+| [qichuan/android-opencc](https://github.com/qichuan/android-opencc) | MIT | **裝置上的正式路徑** | `s2twp` | 台灣正體 + 台灣用語 |
+| [houbb/opencc4j](https://github.com/houbb/opencc4j) | Apache-2.0 | JVM 單元測試、原生載入失敗的退路 | 字對字 | 只是繁體字 |
+
+**為什麼非用原生版不可**：opencc4j 是純 Java，只有 `toTraditional` / `toSimple`，**沒有 TW/HK 變體**，所以：
+
+```
+软件 → 軟件     ← opencc4j（字形對，但不是台灣話）
+软件 → 軟體     ← android-opencc s2twp（台灣用語）
+```
+
+台灣用語替換靠 `TWPhrases.ocd2` + `STPhrases.ocd2`，opencc4j 未實作這條路徑。
+
+**為什麼留著 opencc4j**：`libChineseConverter.so` 是 Android 原生程式庫，**JVM 單元測試載不進來**。留著純 Java 版，`ChineseConverterTest`（17 個案例）才能繼續跑在 JVM 上；同時它也是 `System.loadLibrary` 失敗（不支援的 ABI、APK 被裁剪）時的安全退路——結果仍是正確繁體，只是少了台灣用語，**且不拋例外**。
+
+**成本**（2026-10 實測）：
+
+| 項目 | 量 |
+|---|---|
+| APK 增加 | **4.57 MB**（23.02 → 27.59 MB） |
+| 其中 `.so`（4 個 ABI） | 4.17 MB |
+| 其中 `openccdata` 字典 | 1.11 MB |
+| 首次呼叫 | 把 `assets/openccdata` 複製到 `filesDir`（約 1.1 MB I/O），之後略過 |
+
+> ⚠️ **注意**：`android-opencc` 只發佈在 **JitPack**（`com.github.qichuan:android-opencc`），因此 `settings.gradle.kts` 必須加 `https://jitpack.io`，並用 `content { includeGroup("com.github.qichuan") }` 限制範圍，避免這個第三方 repo 被拿去解其他依賴。該專案 2021-05 後未再更新（4 年無維護），但 `s2twp` 詞庫來自 OpenCC 上游，是穩定的資料而非會腐爛的 API。
+
+
 ### 4.4 Spotify（Phase 6，本階段不做）
 
 **已驗證事實**（[2018 官方公告](https://developer.spotify.com/blog/2018-09-14-updates-mobile-platform)）：

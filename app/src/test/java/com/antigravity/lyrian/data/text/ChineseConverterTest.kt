@@ -8,7 +8,20 @@ import org.junit.Test
 /**
  * [ChineseConverter] 的單元測試。
  *
- * 這些測試**不需要 Android 框架**（opencc4j 是純 Java），因此可跑在 JVM 上。
+ * ## 這裡測的是哪一條路徑
+ *
+ * [ChineseConverter] 有兩個後端（見類別註解）：
+ *
+ * | 路徑 | 後端 | 能不能在這裡測 |
+ * |---|---|---|
+ * | 裝置（`context != null`） | android-opencc 原生 `s2twp` | ❌ `libChineseConverter.so` 是 Android 原生程式庫 |
+ * | 退路（`context == null`） | opencc4j 純 Java | ✅ **就是這裡測的** |
+ *
+ * 因此本檔**只驗證 opencc4j 退路**，測試用 `ChineseConverter(context = null)`
+ * 直接走退路，不需要 Android 框架。
+ *
+ * **台灣用語替換（`软件 → 軟體`）只能在裝置上驗證**，見
+ * `androidTest/.../ChineseConverterInstrumentedTest.kt`。
  *
  * 重點驗證的性質：
  *  1. 簡體確實被轉成繁體
@@ -19,7 +32,8 @@ import org.junit.Test
  */
 class ChineseConverterTest {
 
-    private val converter = ChineseConverter()
+    /** `context = null` 強制走 opencc4j 退路。 */
+    private val converter = ChineseConverter(context = null)
 
     // ---------- 詞組轉換（OpenCC 的核心價值）----------
 
@@ -30,16 +44,17 @@ class ChineseConverterTest {
     }
 
     /**
-     * ⚠️ **已知限制的迴歸測試**。
+     * ⚠️ **已知限制的迴歸測試（僅退路路徑）**。
      *
      * opencc4j 只做字對字轉換，沒有台灣（TW）變體，
      * 所以「軟件」不會變成台灣用語的「軟體」。
      *
-     * 這個測試**刻意固定這個行為**——若某天升級到支援 TW 變體的版本，
-     * 這個測試會失敗，提醒我們去更新文件與其他相關預期。
+     * **裝置上不會有這個限制**——`s2twp` 會給出「軟體」。
+     * 這個測試刻意固定**退路**的行為：萬一原生程式庫載入失敗，
+     * 使用者拿到的是「軟件」而不是「軟體」，我們要知道這件事。
      */
     @Test
-    fun `只做字對字轉換，不含台灣用語替換`() {
+    fun `退路只做字對字轉換，不含台灣用語替換`() {
         assertEquals("軟件", converter.toTraditional("软件"))
     }
 
@@ -131,7 +146,7 @@ class ChineseConverterTest {
 
     @Test
     fun `字典釋義中的簡體會被轉換`() {
-        // 模擬未來 ECDICT 的中文釋義
+        // 模擬 ECDICT 的中文釋義
         assertEquals("希望；期望", converter.toTraditional("希望；期望"))
         assertEquals("保留；保持", converter.toTraditional("保留；保持"))
     }
@@ -140,5 +155,22 @@ class ChineseConverterTest {
     fun `標點符號不受影響`() {
         val text = "希望，期望；盼望。"
         assertEquals(text, converter.toTraditional(text))
+    }
+
+    // ---------- 退路函式的直接驗證 ----------
+
+    @Test
+    fun `退路函式可獨立呼叫`() {
+        assertEquals("頭髮", converter.toTraditionalJava("头发"))
+        assertEquals("学习", converter.toSimplifiedJava("學習"))
+    }
+
+    @Test
+    fun `沒有 context 時 toTraditional 等於退路結果`() {
+        // context == null ⇒ nativeAvailable 必為 false
+        val samples = listOf("头发", "学习音乐", "软件", "Hello", "", "繁體")
+        samples.forEach { sample ->
+            assertEquals(converter.toTraditionalJava(sample), converter.toTraditional(sample))
+        }
     }
 }

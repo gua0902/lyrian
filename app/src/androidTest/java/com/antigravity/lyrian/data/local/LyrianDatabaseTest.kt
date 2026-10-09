@@ -51,7 +51,7 @@ class LyrianDatabaseTest {
     )
 
     @Test
-    fun `upsertByLrclibId 新增後可用 lrclibId 查回`() = runTest {
+    fun `upsertByLrclibId_新增後可用_lrclibId_查回`() = runTest {
         val id = db.songDao().upsertByLrclibId(song(197097))
         val found = db.songDao().findByLrclibId(197097)
 
@@ -61,7 +61,7 @@ class LyrianDatabaseTest {
     }
 
     @Test
-    fun `upsertByLrclibId 重複呼叫是更新而非新增`() = runTest {
+    fun `upsertByLrclibId_重複呼叫是更新而非新增`() = runTest {
         val first = db.songDao().upsertByLrclibId(song(197097))
         val second = db.songDao().upsertByLrclibId(song(197097, title = "Hello (Remastered)"))
 
@@ -71,7 +71,7 @@ class LyrianDatabaseTest {
     }
 
     @Test
-    fun `upsert 不會因為 REPLACE 而清掉歌詞行`() = runTest {
+    fun `upsert_不會因為_REPLACE_而清掉歌詞行`() = runTest {
         val songId = db.songDao().upsertByLrclibId(song(1))
         db.lyricLineDao().replaceForSong(
             songId,
@@ -85,7 +85,7 @@ class LyrianDatabaseTest {
     }
 
     @Test
-    fun `replaceForSong 覆寫時不留下過時的舊行`() = runTest {
+    fun `replaceForSong_覆寫時不留下過時的舊行`() = runTest {
         val songId = db.songDao().upsertByLrclibId(song(1))
 
         db.lyricLineDao().replaceForSong(
@@ -155,7 +155,7 @@ class LyrianDatabaseTest {
     }
 
     @Test
-    fun `重複答錯同一個字時累加 errorCount 而不新增一列`() = runTest {
+    fun `重複答錯同一個字時累加_errorCount_而不新增一列`() = runTest {
         val now = 1_760_000_000_000L
         val (firstId, isNew1) = db.vocabDao().addFromError("hope", "hope", "ctx 1", null, now)
         val (secondId, isNew2) = db.vocabDao().addFromError("hope", "HOPE", "ctx 2", null, now + 100)
@@ -172,7 +172,7 @@ class LyrianDatabaseTest {
     }
 
     @Test
-    fun `已掌握的單字再答錯時退回 learning`() = runTest {
+    fun `已掌握的單字再答錯時退回_learning`() = runTest {
         val now = 1_760_000_000_000L
         val (id, _) = db.vocabDao().addFromError("hope", null, null, null, now)
         val vocab = db.vocabDao().observeAll().first().first()
@@ -200,7 +200,7 @@ class LyrianDatabaseTest {
     }
 
     @Test
-    fun `沒有紀錄時總分為 0`() = runTest {
+    fun `沒有紀錄時總分為_0`() = runTest {
         assertEquals(0, db.dailyStatDao().observeTotalScore().first())
     }
 
