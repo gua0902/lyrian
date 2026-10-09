@@ -1,6 +1,7 @@
 package com.antigravity.lyrian.data.dictionary
 
 import com.antigravity.lyrian.data.remote.FreeDictionaryApi
+import com.antigravity.lyrian.data.remote.FreeDictionaryEntryDto
 import com.antigravity.lyrian.data.remote.FreeDictionaryResponseDto
 import com.antigravity.lyrian.data.remote.WiktionaryApi
 import com.antigravity.lyrian.data.remote.WiktionaryEntryDto
@@ -19,7 +20,7 @@ data class DictionaryEntry(
     val word: String,
     /** 英文縮寫，例如 `n.` / `v.` / `adj.` */
     val partOfSpeech: String?,
-    /** 字義。目前是英文（來自 Wiktionary） */
+    /** 字義。freedictionaryapi 為英文原文；接上 ECDICT 後會改為中文 */
     val definition: String?,
     /** 國際音標，例如 `/həʊp/` */
     val phonetic: String?,
@@ -33,15 +34,25 @@ data class DictionaryEntry(
 /**
  * 字典查詢。
  *
- * **為什麼用兩個 API 而不是一個**（皆已實測，2026-10）：
+ * ## 兩個來源，但**主從分明**（2026-10 實測修正）
  *
- * | 需求 | 來源 | 原因 |
+ * | 需求 | 主要來源 | 退路 |
  * |---|---|---|
- * | 音標（英式／美式） | [FreeDictionaryApi] | 唯一提供 `Received Pronunciation`（英）與 `General American`（美）區分的免費來源 |
- * | 字義 | [WiktionaryApi] | FreeDictionaryApi **不提供定義**（實測 `definitions` 全為空）|
+ * | 音標（英式／美式擇一） | [FreeDictionaryApi] | — |
+ * | 字義 | [FreeDictionaryApi] 的 `senses[].definition` | [WiktionaryApi] |
  *
- * 兩者都免金鑰、免註冊。查詢結果由 [DictionaryRepository] 快取到 Room，
- * 因此同一個字只會連外一次。
+ * ### ⚠️ 先前的錯誤假設
+ *
+ * 原本的註解寫著「FreeDictionaryApi **不提供定義**（實測 `definitions` 全為空）」，
+ * 因此字義改用 Wiktionary。**這個結論是錯的**——那個 API 根本沒有 `definitions` 欄位，
+ * 字義在 `entries[].senses[].definition`。我們查了一個不存在的欄位，得到 null，
+ * 就推論「它沒有字義」。
+ *
+ * 而且它的字義是**已清乾淨的純文字**，不像 Wiktionary 需要剝 HTML 與 CSS。
+ * 所以現在優先用它，Wiktionary 只在它沒資料時接手。
+ *
+ * 兩者都免金鑰、免註冊。查詢結果由 `WordbankViewModel` 快取到 Room，
+ * 因此同一個字不會重複連外。
  */
 @Singleton
 class DictionaryService @Inject constructor(
@@ -54,41 +65,69 @@ class DictionaryService @Inject constructor(
      * 查一個字。
      *
      * **兩個來源並行查詢**（`async`），因為它們互不相依——
-     * 循序查會讓每次查詢多等一個 RTT。
+     * 循序查會讓每次查詢多等一個 RTT。任一來源失敗都不影響另一個。
      *
-     * 任一來源失敗都不影響另一個；兩者都失敗才回傳 null。
+     * @return 兩個來源都失敗時回傳 null
      */
     suspend fun lookup(word: String): DictionaryEntry? = coroutineScope {
         val normalized = word.trim().lowercase()
         if (normalized.isEmpty()) return@coroutineScope null
 
-        val pronunciationDeferred = async {
-            runCatching { freeDictionaryApi.lookup(normalized).toPronunciation() }.getOrNull()
+        val freeDeferred = async {
+            runCatching { freeDictionaryApi.lookup(normalized) }.getOrNull()
         }
-        val definitionDeferred = async {
-            runCatching { wiktionaryApi.definition(normalized).toDefinition() }.getOrNull()
+        val wiktionaryDeferred = async {
+            runCatching { wiktionaryApi.definition(normalized) }.getOrNull()
         }
-        val pronunciation = pronunciationDeferred.await()
-        val definition = definitionDeferred.await()
+
+        val free = freeDeferred.await()
+        val wiktionary = wiktionaryDeferred.await()
+
+        val pronunciation = free?.toPronunciation()
+        val wiktionaryEntry = wiktionary?.toDefinition()
+
+        // 字義優先取 freedictionaryapi（純文字），沒有才退回 Wiktionary（要清洗）
+        val definitionFromFree = free?.toDefinition()
+        val definition = definitionFromFree
+            ?: wiktionaryEntry?.definitions?.firstOrNull()?.definition
+                ?.cleanWiktionaryMarkup()
+                ?.takeIf { it.isNotBlank() }
 
         if (pronunciation == null && definition == null) return@coroutineScope null
 
-        // 詞性優先取定義來源的（它與字義對應；音標來源的詞性可能有多個重複條目）
-        val partOfSpeech = definition?.partOfSpeech ?: pronunciation?.partOfSpeech
+        // 詞性優先取「字義所屬」的那個來源，這樣詞性與字義才對得起來
+        val partOfSpeech = if (definitionFromFree != null) {
+            free?.firstEntryWithDefinition()?.partOfSpeech
+        } else {
+            wiktionaryEntry?.partOfSpeech
+        } ?: pronunciation?.partOfSpeech
 
         DictionaryEntry(
             word = normalized,
             partOfSpeech = partOfSpeech?.toAbbreviation(),
-            // 取第一條定義即可——字庫是速查，不是完整詞典
-            // 通過簡繁轉換：字典來源可能回傳簡體（未來的 ECDICT 中文釋義尤其如此）
-            definition = definition?.definitions?.firstOrNull()?.definition
-                ?.cleanWiktionaryMarkup()
-                ?.let { chineseConverter.toTraditionalIfNeeded(it) }
-                ?.takeIf { it.isNotBlank() },
+            definition = definition?.let { chineseConverter.toTraditionalIfNeeded(it) },
             phonetic = pronunciation?.phonetic,
             phoneticAccent = pronunciation?.accent,
         )
     }
+
+    /**
+     * 從 freedictionaryapi 取第一條字義。
+     *
+     * 一個詞會有多個 entry（不同詞性），每個 entry 有多個 sense。
+     * 取**第一個有字義的 entry 的第一條 sense**——字庫是速查，不是完整詞典。
+     */
+    private fun FreeDictionaryResponseDto.toDefinition(): String? =
+        firstEntryWithDefinition()
+            ?.senses
+            ?.firstOrNull { !it.definition.isNullOrBlank() }
+            ?.definition
+            ?.trim()
+            ?.takeIf { it.isNotBlank() }
+
+    /** 第一個真的有字義的詞性條目。 */
+    private fun FreeDictionaryResponseDto.firstEntryWithDefinition(): FreeDictionaryEntryDto? =
+        entries.firstOrNull { entry -> entry.senses.any { !it.definition.isNullOrBlank() } }
 
     /** 從音標 API 的回應挑出**一個**音標（英式優先，其次美式）。 */
     private fun FreeDictionaryResponseDto.toPronunciation(): Pronunciation? {

@@ -71,8 +71,7 @@ class WordbankViewModel @Inject constructor(
     /**
      * 為還沒有字典資料的單字補查。
      *
-     * **只查缺的**——`dictionaryFetched` 為 true 的會跳過，
-     * 因此同一個字一輩子只連外一次。
+     * **只查缺的**——`dictionaryFetched` 為 true 的會跳過。
      *
      * 一次最多查 [MAX_LOOKUPS]，避免進入字庫頁時一次打太多 API。
      */
@@ -83,7 +82,16 @@ class WordbankViewModel @Inject constructor(
                 .take(MAX_LOOKUPS)
 
             for (vocab in pending) {
-                val entry = dictionaryService.lookup(vocab.lemma) ?: continue
+                val entry = dictionaryService.lookup(vocab.lemma)
+
+                val hasData = entry != null && entry.hasContent
+                if (!hasData) {
+                    // 查不到就**不要**標記為已查過——否則這個字永遠不會再試，
+                    // 使用者只看得到一句「查不到」。
+                    // 目前仍然計入這一輪的配額，避免一次掃完整個字庫。
+                    continue
+                }
+
                 vocabDao.updateDictionary(
                     id = vocab.id,
                     translation = entry.definition,
@@ -92,6 +100,7 @@ class WordbankViewModel @Inject constructor(
                     partOfSpeech = entry.partOfSpeech,
                     cefr = null,
                     now = System.currentTimeMillis(),
+                    markFetched = true,
                 )
             }
         }
@@ -136,6 +145,8 @@ class VocabDetailViewModel @Inject constructor(
             if (vocab.dictionaryFetched) return@launch
 
             val result = dictionaryService.lookup(vocab.lemma) ?: return@launch
+            if (!result.hasContent) return@launch
+
             vocabDao.updateDictionary(
                 id = vocabId,
                 translation = result.definition,
@@ -144,6 +155,7 @@ class VocabDetailViewModel @Inject constructor(
                 partOfSpeech = result.partOfSpeech,
                 cefr = null,
                 now = System.currentTimeMillis(),
+                markFetched = true,
             )
         }
     }

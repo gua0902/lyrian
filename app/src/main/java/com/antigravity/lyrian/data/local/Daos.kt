@@ -102,9 +102,15 @@ interface VocabDao {
     fun observeById(id: Long): Flow<VocabEntity?>
 
     /**
-     * 把查到的字典資料寫回，並標記為已查過。
+     * 把查到的字典資料寫回。
      *
-     * 寫回後就不必再連外——同一個字只查一次。
+     * ⚠️ **`dictionaryFetched` 只在 [markFetched] 為 true 時才設為 1**。
+     *
+     * 原本這裡寫死 `dictionaryFetched = 1`，於是「查不到」也會被永久標記為已查過——
+     * 使用者就再也看不到任何字典內容，即使那個字其實查得到。
+     * 現在只有**真的寫入資料**時才算查過；查不到的字下次還會再試。
+     *
+     * @param markFetched 這次是否真的拿到資料
      */
     @Query(
         """
@@ -114,7 +120,7 @@ interface VocabDao {
             phoneticAccent = COALESCE(:accent, phoneticAccent),
             partOfSpeech = COALESCE(:partOfSpeech, partOfSpeech),
             cefr = COALESCE(:cefr, cefr),
-            dictionaryFetched = 1,
+            dictionaryFetched = CASE WHEN :markFetched THEN 1 ELSE dictionaryFetched END,
             updatedAt = :now
         WHERE id = :id
         """,
@@ -127,6 +133,7 @@ interface VocabDao {
         partOfSpeech: String?,
         cefr: String?,
         now: Long,
+        markFetched: Boolean,
     )
 
     /**

@@ -769,6 +769,100 @@ Adele《Hello》  期望 295.502s
 
 **下一步**：裝 APK 實測播放。若失敗，需要的是 logcat 的 `playabilityStatus.reason`。
 
+---
+
+## TASK-12：修好「查不到字典內容」，並讓音源失敗講得出原因
+
+### 症狀（擁有者實測回報）
+
+1. 字庫／單字詳情顯示「查不到這個字的字典資料」
+2. 練習頁顯示「找不到播放的內容（音源）」
+
+### 1. ★ 字典：我們查了一個**不存在的欄位**
+
+先前的 `DictionaryService` 註解寫著：
+
+> FreeDictionaryApi **不提供定義**（實測 `definitions` 全為空）
+
+因此字義繞道 Wiktionary 補。**這個結論是錯的。** 實際打 API 看回應：
+
+```json
+{ "word": "hope",
+  "entries": [ { "partOfSpeech": "verb",
+                 "pronunciations": [...],
+                 "senses": [ { "definition": "To want (something) to happen, ..." } ] } ] }
+```
+
+**根本沒有 `definitions` 欄位**——字義在 `entries[].senses[].definition`。
+我們查了不存在的欄位、得到 null，就推論「它沒有字義」，然後把字義來源換掉。
+**從頭到尾那個 API 都有字義。**
+
+更諷刺的是它的字義是**已經清乾淨的純文字**，而我們繞道去用的 Wiktionary
+反而夾帶一堆 HTML 與 CSS：
+
+```
+freedictionaryapi：To want (something) to happen, with a sense of expectation that it might.
+Wiktionary       ：To <a ...>want</a> ... <style>.mw-parser-output .object-usage-tag{...}</style>...
+```
+
+**修法**：`FreeDictionaryEntryDto` 加上 `senses` 與 `forms`；
+字義**優先取 freedictionaryapi**，Wiktionary 降為退路。
+
+> **教訓**：`definitions` 全為空**不等於**「沒有字義」。
+> 要確認一個 API 的形狀，就看它的原始回應，不要從「我宣告的欄位是 null」反推。
+
+### 2. ★ 字典：查不到會被**永久**標記為已查過
+
+`VocabDao.updateDictionary` 的 SQL 寫死 `dictionaryFetched = 1`。
+於是**一次失敗就永遠不再重試**——使用者不管重開幾次都只看到「查不到」。
+
+**修法**：`dictionaryFetched = CASE WHEN :markFetched THEN 1 ELSE dictionaryFetched END`，
+只有**真的寫入資料**時才算查過。
+
+### 3. 音源：讓三種失敗講不同的話
+
+先前所有失敗都顯示同一句，**看不出壞在哪一段**，回報問題時也沒線索。
+現在分成三種（使用者的下一步不一樣）：
+
+| 訊息 | 壞在哪 | 下一步 |
+|---|---|---|
+| 找不到這首歌對應的錄音版本 | `FILTER_SONG` 配對不到 | 換一首歌 |
+| YouTube 上這個版本無法播放（原因） | `player` 回非 `OK`（地區／年齡限制） | 換一首歌 |
+| 音源服務暫時無法使用（原因） | 連線或 Piped 失敗 | 稍後再試 |
+
+### 4. 音源：`FILTER_SONG` 沒有結果時退回 `FILTER_VIDEO`
+
+`FILTER_SONG`（YouTube Music 的「歌曲」分類）對冷門歌、翻唱、獨立音樂
+**常常一筆都回不出來**，但這些歌在 YouTube 上其實有音訊。
+若只查 `FILTER_SONG`，使用者會看到「找不到可播放的版本」——即使它明明存在。
+
+現在 `FILTER_SONG` 空手而回時再查一次 `FILTER_VIDEO`。
+**只查一次退路**，不是無條件雙查，以免每次都付兩倍延遲。
+
+### 5. 完成事項
+
+| 日期 | 項目 | 狀態 |
+|------|------|------|
+| 2026-10-09 | 實測兩個字典 API 的**原始回應**（不是靠記憶） | ✅ |
+| 2026-10-09 | `FreeDictionaryEntryDto` 補上 `senses` / `forms` | ✅ |
+| 2026-10-09 | 字義改為優先取 freedictionaryapi（純文字，免清洗） | ✅ |
+| 2026-10-09 | `updateDictionary` 不再把「查不到」標記為已查過 | ✅ |
+| 2026-10-09 | 音源失敗訊息分成三種，可指出壞在哪一段 | ✅ |
+| 2026-10-09 | `FILTER_SONG` → `FILTER_VIDEO` 退路 | ✅ |
+| 2026-10-09 | 新增 `DictionaryDtoTest`（用**真實 JSON** 驗證欄位形狀） | ✅ |
+| 2026-10-09 | **單元測試 189 個**（+8）全通過 | ✅ |
+
+### 6. 仍然未解的部分
+
+- **音源是否真的能播仍未驗證**。字典那一半已用真實 HTTP 回應查證過，
+  但音源需要裝置才能測：`YouTube.search` / `YouTube.player` 無法在 JVM 跑。
+  這次的改動讓**失敗時講得出原因**，但沒能證明成功路徑可行。
+- ⚠️ **YouTube 可能要求 PoToken** 仍是最大嫌疑。若 TASK-11 的鏈路本身已失效，
+  這次的退路與訊息只會讓它「失敗得更有禮貌」，不會讓它成功。
+- 字義目前仍是**英文**（freedictionaryapi / Wiktionary 都是英文來源）。
+  擁有者要的中文釋義需要 **ECDICT**（MIT 已確認），尚未接上。
+
+
 
 
 

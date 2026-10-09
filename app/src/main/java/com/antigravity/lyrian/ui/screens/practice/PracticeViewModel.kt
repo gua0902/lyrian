@@ -118,8 +118,8 @@ private const val ERROR_NO_SESSION = "找不到這首歌的練習資料，請重
 /** 有歌詞，但沒有任何一行可以挖空（純演奏曲、或全是很短的虛詞）。 */
 private const val ERROR_NO_BLANKS = "這首歌沒有可挖空的歌詞。"
 
-/** 在 YouTube Music 上找不到可播放的對應版本。 */
-private const val NO_AUDIO_FOUND = "找不到這首歌的可播放版本，只能純歌詞練習。"
+/** 在 YouTube Music 上搜尋不到可配對的版本。 */
+private const val NO_AUDIO_MATCH = "找不到這首歌對應的錄音版本，只能純歌詞練習。"
 
 /** 找到了，但時長與歌詞時間戳差距過大，可能不是同一個錄音。 */
 private const val AUDIO_MAY_NOT_ALIGN =
@@ -296,15 +296,21 @@ class PracticeViewModel @Inject constructor(
     /**
      * 把音源失敗翻成**可行動**的訊息。
      *
-     * 「找不到」要使用者換一首，「服務掛了」要使用者稍後再試——
-     * 講成同一句會讓人以為是 App 壞了。
+     * 三種失敗刻意講不同的話，因為**使用者的下一步不一樣**，
+     * 而且回報問題時能直接指出是哪一段壞掉：
+     *
+     * | 訊息 | 壞在哪 | 使用者該做什麼 |
+     * |---|---|---|
+     * | 找不到對應的錄音版本 | YouTube 搜尋配對不到 | 換一首歌 |
+     * | 這個版本無法播放 | `player` 回非 OK（地區／年齡限制） | 換一首歌 |
+     * | 音源服務暫時無法使用 | 連線或 Piped 失敗 | 稍後再試 |
      */
     private fun describeAudioFailure(failure: AudioSourceResolver.Failure): String = when (failure) {
-        is AudioSourceResolver.Failure.NoCandidate -> NO_AUDIO_FOUND
+        is AudioSourceResolver.Failure.NoCandidate -> NO_AUDIO_MATCH
         is AudioSourceResolver.Failure.Unavailable ->
-            "這首歌的版本無法播放（${failure.reason}），只能純歌詞練習。"
+            "YouTube 上這個版本無法播放（${failure.reason}），只能純歌詞練習。"
         is AudioSourceResolver.Failure.Error ->
-            "音源服務暫時無法使用，只能純歌詞練習。"
+            "音源服務暫時無法使用（${failure.message}），只能純歌詞練習。"
     }
 
     /**

@@ -30,18 +30,48 @@ class YouTubeMusicSource @Inject constructor() {
      *
      * 優先取**錄音室版本**（`SongItem` 而非 `VideoItem`）——
      * 學習用途需要穩定的原版歌詞對應，MV/現場版的歌詞與時間軸常不一致。
+     *
+     * ## ⚠️ 為什麼會退回 `FILTER_VIDEO`
+     *
+     * `FILTER_SONG` 對冷門歌、翻唱、獨立音樂常常**一筆都回不出來**，
+     * 但這些歌在 YouTube 上其實有音訊。若只查 `FILTER_SONG`，
+     * 使用者會看到「找不到可播放的版本」——即使它明明存在。
+     *
+     * 因此 `FILTER_SONG` 沒有結果時再查一次 `FILTER_VIDEO`。
+     * **只查一次退路**，不是無條件雙查，以免每次都付兩倍延遲。
      */
     suspend fun searchSongs(query: String, limit: Int = 20): List<YouTubeSong> {
-        val result: SearchResult = YouTube.search(query, YouTube.SearchFilter.FILTER_SONG)
-            .getOrNull()
-            ?: return emptyList()
+        val songs = searchWithFilter(query, YouTube.SearchFilter.FILTER_SONG, limit)
+        if (songs.isNotEmpty()) return songs
 
-        return result.items
+        android.util.Log.i(TAG, "FILTER_SONG 沒有結果，改用 FILTER_VIDEO：$query")
+        return searchWithFilter(query, YouTube.SearchFilter.FILTER_VIDEO, limit)
+    }
+
+    private suspend fun searchWithFilter(
+        query: String,
+        filter: YouTube.SearchFilter,
+        limit: Int,
+    ): List<YouTubeSong> {
+        val result: SearchResult = YouTube.search(query, filter).getOrElse {
+            android.util.Log.w(TAG, "YouTube 搜尋失敗（$filter）：${it.message}")
+            return emptyList()
+        }
+
+        val songs = result.items
             .filterIsInstance<SongItem>()
             // 排除標記為 explicit 的版本，避免歌詞出現不宜內容
             .filterNot { it.explicit }
             .take(limit)
             .map { it.toYouTubeSong() }
+
+        if (songs.isEmpty()) {
+            android.util.Log.i(
+                TAG,
+                "搜尋 $query（$filter）回傳 ${result.items.size} 筆，但沒有 SongItem",
+            )
+        }
+        return songs
     }
 
     /**
@@ -112,6 +142,8 @@ data class YouTubeSong(
     val durationSeconds: Int?,
     val thumbnailUrl: String?,
 )
+
+private const val TAG = "LyrianYouTubeMusic"
 
 /** 可播放的音訊串流。 */
 data class AudioStream(
