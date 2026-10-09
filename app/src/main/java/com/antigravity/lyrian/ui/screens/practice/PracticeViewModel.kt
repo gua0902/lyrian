@@ -27,6 +27,7 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
+import kotlin.random.Random
 
 /**
  * 練習頁的 UI 狀態。
@@ -59,16 +60,52 @@ data class PracticeUiState(
 
     val correctCount: Int get() = selections.values.count { it.isCorrect }
 
+    /**
+     * 已作答的**最後一行**索引；尚未作答任何一題時為 -1。
+     *
+     * 給歌詞捲動判斷「這題答完了沒」（見 `LyricFollowController`）：
+     * 使用者還在思考時不能搶畫面，所以要比較「想捲過去的行」與這個值。
+     */
+    val lastAnsweredLineIndex: Int
+        get() = questions
+            .filter { selections.containsKey(it.blankIndex) }
+            .maxOfOrNull { it.lineIndex }
+            ?: -1
+
     val total: Int get() = questions.size
 
     val percent: Int get() = if (total > 0) Math.round(correctCount * 100f / total) else 0
 }
+
+/** 找不到練習資料。使用者唯一的出路是返回。 */
+private const val ERROR_NO_SESSION = "找不到這首歌的練習資料，請重新搜尋。"
+
+/** 有歌詞，但沒有任何一行可以挖空（純演奏曲、或全是很短的虛詞）。 */
+private const val ERROR_NO_BLANKS = "這首歌沒有可挖空的歌詞。"
+
+private const val TAG = "LyrianPractice"
+
+/** 歌曲的基本資訊。與歌詞來源分開，因為兩層退路取到的方式不同。 */
+private data class SongHead(
+    val songId: Long,
+    val title: String,
+    val artist: String,
+    val coverUrl: String?,
+)
+
+/** 一份完整的練習資料來源：歌曲資訊 + 歌詞行。 */
+private data class SongSource(
+    val head: SongHead,
+    val lines: List<LyricLine>,
+)
 
 /**
  * 練習頁的 ViewModel。
  *
  * 資料來源是 [PracticeSessionStore]（搜尋頁選歌時寫入），
  * 因此**不需要重新打 API**——歌詞在搜尋時就已取得。
+ *
+ * **載入有兩層退路**，見 [load]：記憶體 session → Room 快取。
  */
 @HiltViewModel
 class PracticeViewModel @Inject constructor(
@@ -88,6 +125,14 @@ class PracticeViewModel @Inject constructor(
     private var lyricsPersisted = false
     private var localSongId: Long? = null
 
+    /**
+     * 目前這首歌的基本資訊。
+     *
+     * 由 [applySource] 填入，供 [ensureSongPersisted] 使用。
+     * **不從 `sessionStore` 讀**——程序死亡後回復時那裡是空的。
+     */
+    private var songHead: SongHead? = null
+
     /** 全部題目的選項**預先算好**，避免每次換題重算（也讓上下題的選項穩定）。 */
     private var optionsByBlank: Map<Int, List<String>> = emptyMap()
 
@@ -97,29 +142,95 @@ class PracticeViewModel @Inject constructor(
     }
 
     private fun load(songId: Long?) {
-        val session = songId?.let { sessionStore.take(it) }
-
-        if (session == null) {
-            _uiState.update {
-                it.copy(isLoading = false, errorMessage = "找不到這首歌的練習資料，請重新搜尋。")
-            }
+        if (songId == null) {
+            failWith(ERROR_NO_SESSION)
             return
         }
 
-        val lines = LyricsParser.parse(
-            lyricsFile = session.lyricsFile,
-            syncedLyrics = session.syncedLyrics,
-            plainLyrics = session.plainLyrics,
+        // 第 1 層：記憶體中的 session（涵蓋設定變更／旋轉螢幕）。
+        // 用 get() 而非已移除的 take()——見 PracticeSessionStore 的類別註解。
+        sessionStore.get(songId)?.let { session ->
+            applySource(
+                source = SongSource(
+                    head = SongHead(
+                        songId = songId,
+                        title = session.title,
+                        artist = session.artist,
+                        coverUrl = session.coverUrl,
+                    ),
+                    lines = LyricsParser.parse(
+                        lyricsFile = session.lyricsFile,
+                        syncedLyrics = session.syncedLyrics,
+                        plainLyrics = session.plainLyrics,
+                    ),
+                ),
+            )
+            return
+        }
+
+        // 第 2 層：程序被系統回收後，從 Room 快取取回。
+        // 這條路徑需要第 1 次作答時寫入的 song / lyric_line（見 ensureSongPersisted）。
+        viewModelScope.launch {
+            val restored = restoreFromCache(songId)
+            if (restored != null) {
+                applySource(restored)
+            } else {
+                failWith(ERROR_NO_SESSION)
+            }
+        }
+    }
+
+    /**
+     * 從 Room 取回一首歌（程序死亡後的路徑）。
+     *
+     * ⚠️ **`lyric_line` 只存 `text`，不存挖空位置**，所以回復時要重跑
+     * [FillChoiceBuilder.buildDataset]。因為亂數種子固定為 `songId`
+     * （見 [randomFor]），挖出來的字與死亡前一致。
+     *
+     * @return 找不到歌曲或沒有歌詞行時回傳 null
+     */
+    private suspend fun restoreFromCache(songId: Long): SongSource? = runCatching {
+        val song = songDao.findByLrclibId(songId) ?: return@runCatching null
+        val storedLines = lyricLineDao.getForSong(song.id)
+        if (storedLines.isEmpty()) return@runCatching null
+
+        SongSource(
+            head = SongHead(
+                songId = songId,
+                title = song.title,
+                artist = song.artist,
+                coverUrl = song.coverUrl,
+            ),
+            lines = storedLines.map { entity ->
+                LyricLine(
+                    index = entity.lineIndex,
+                    text = entity.text,
+                    startMs = entity.startMs,
+                    endMs = entity.endMs,
+                )
+            },
         )
-        val dataset = FillChoiceBuilder.buildDataset(lines)
+    }.onFailure {
+        android.util.Log.w(TAG, "從快取回復練習進度失敗", it)
+    }.getOrNull()
+
+    /** 把一份歌詞來源轉成 UI 狀態。兩條來源路徑共用，確保行為一致。 */
+    private fun applySource(source: SongSource) {
+        songHead = source.head
+
+        val dataset = FillChoiceBuilder.buildDataset(
+            source.lines,
+            randomFor(source.head.songId),
+        )
 
         if (dataset.questions.isEmpty()) {
             _uiState.update {
                 it.copy(
                     isLoading = false,
-                    errorMessage = "這首歌沒有可挖空的歌詞。",
-                    songTitle = session.title,
-                    artist = session.artist,
+                    errorMessage = ERROR_NO_BLANKS,
+                    songTitle = source.head.title,
+                    artist = source.head.artist,
+                    coverUrl = source.head.coverUrl,
                     lines = dataset.lines,
                 )
             }
@@ -129,22 +240,41 @@ class PracticeViewModel @Inject constructor(
         val allAnswers = dataset.questions.map { it.answer }
 
         // 一次把所有題目的選項算好並快取——換題時不必重算，選項也不會跳動
+        val seed = source.head.songId
         optionsByBlank = dataset.questions.associate { question ->
-            question.blankIndex to FillChoiceBuilder.buildOptions(question, allAnswers)
+            question.blankIndex to FillChoiceBuilder.buildOptions(
+                question,
+                allAnswers,
+                randomFor(seed + question.blankIndex),
+            )
         }
 
         _uiState.update {
             it.copy(
                 isLoading = false,
-                songTitle = session.title,
-                artist = session.artist,
-                coverUrl = session.coverUrl,
+                songTitle = source.head.title,
+                artist = source.head.artist,
+                coverUrl = source.head.coverUrl,
                 lines = dataset.lines,
                 questions = dataset.questions,
                 options = optionsByBlank[0].orEmpty(),
             )
         }
     }
+
+    private fun failWith(message: String) {
+        _uiState.update { it.copy(isLoading = false, errorMessage = message) }
+    }
+
+    /**
+     * 挖空的亂數種子。
+     *
+     * **以 `songId` 為種子**，讓同一首歌永遠挖同一組字。這有兩個好處：
+     *  1. 從 Room 回復時（第 2 層）挖出來的字與死亡前一致——否則使用者會發現
+     *     「同一個空格換了字」
+     *  2. 同一首歌重複進入的體驗穩定，不再每次不同
+     */
+    private fun randomFor(seed: Long): Random = Random(seed.hashCode())
 
     fun onSelectOption(choice: String) {
         val state = _uiState.value
@@ -211,7 +341,6 @@ class PracticeViewModel @Inject constructor(
     private fun persist(question: FillChoiceQuestion, choice: String, isCorrect: Boolean) {
         viewModelScope.launch {
             runCatching {
-                val session = sessionStore.peek()
                 val songId = ensureSongPersisted()
 
                 val vocabId = if (!isCorrect) {
@@ -248,30 +377,30 @@ class PracticeViewModel @Inject constructor(
                     attempts = 1,
                     correct = if (isCorrect) 1 else 0,
                 )
-
-                // 避免未使用的變數警告，同時保留 session 供日後擴充
-                session?.songId
             }.onFailure { error ->
-                android.util.Log.w("Lyrian", "記錄作答失敗（不影響練習）", error)
+                android.util.Log.w(TAG, "記錄作答失敗（不影響練習）", error)
             }
         }
     }
 
-    /** 第一次作答時把歌曲與歌詞寫入快取；之後沿用同一個 id。 */
+    /**
+     * 第一次作答時把歌曲與歌詞寫入快取；之後沿用同一個 id。
+     *
+     * ⚠️ **不能依賴 `sessionStore`**：程序死亡後回復的那條路徑
+     * （見 [restoreFromCache]）根本沒有記憶體 session，但歌已經在 Room 裡了。
+     * 因此這裡只依賴 [songHead] 與 [_uiState]。
+     */
     private suspend fun ensureSongPersisted(): Long? {
         localSongId?.let { return it }
 
-        val session = sessionStore.peek() ?: return null
+        val head = songHead ?: return null
 
         val songId = songDao.upsertByLrclibId(
             SongEntity(
-                lrclibId = session.songId,
-                title = session.title,
-                artist = session.artist,
-                album = session.album,
-                durationMs = session.durationMs,
-                coverUrl = session.coverUrl,
-                genre = session.genre,
+                lrclibId = head.songId,
+                title = head.title,
+                artist = head.artist,
+                coverUrl = head.coverUrl,
                 createdAt = System.currentTimeMillis(),
             ),
         )

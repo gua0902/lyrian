@@ -47,6 +47,8 @@ import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.setValue
+import androidx.compose.runtime.snapshotFlow
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -77,6 +79,15 @@ private const val WRONG_ANSWER_DELAY_MS = 900L
 
 /** 答對後的停頓：短一些，維持流暢的節奏。 */
 private const val CORRECT_ANSWER_DELAY_MS = 450L
+
+/**
+ * 當前句強調色的淡入時間。
+ *
+ * 捲動的位移由 `animateScrollToItem` 的 easing 負責，但那是「位置」；
+ * 顏色淡入才是讓眼睛跟得上「現在唱到哪」的關鍵。600ms 足以被感知，
+ * 又不會慢到讓人覺得卡。
+ */
+private const val CURRENT_LINE_FADE_MS = 600
 
 /**
  * 練習頁：四選一填空。
@@ -170,6 +181,8 @@ private fun PracticeContent(
                 lines = state.lines,
                 questions = state.questions,
                 currentLineIndex = currentLineIndex,
+                answeredLineIndex = state.lastAnsweredLineIndex,
+                answerTick = state.selections.size,
                 selections = state.selections,
                 listState = listState,
             )
@@ -308,12 +321,21 @@ private fun PlayerHeader(
  * **滑動穩定的關鍵**：上下各留半個視窗高度的 `contentPadding`，
  * 因此 `animateScrollToItem(index)` 會讓該行自然落在中央附近，
  * 不需要自己量高度、算 offset（那正是之前位移不穩的原因）。
+ *
+ * ## 主控權的規則
+ *
+ * 見 [LyricFollowController]。重點是：使用者一動手就讓位，
+ * 閒置 3 秒**且當前題已作答**才漸出漸入地收回主控權。
  */
 @Composable
 private fun LyricsViewport(
     lines: List<LyricLine>,
     questions: List<com.antigravity.lyrian.domain.model.FillChoiceQuestion>,
     currentLineIndex: Int,
+    /** 已作答的最後一行；用來判斷「這題答完了沒」 */
+    answeredLineIndex: Int,
+    /** 作答次數；每次作答都會重設閒置計時 */
+    answerTick: Int,
     selections: Map<Int, ChoiceRecord>,
     listState: LazyListState,
 ) {
@@ -322,12 +344,50 @@ private fun LyricsViewport(
         questions.associate { it.lineIndex to it.blankIndex }
     }
 
+    val controller = androidx.compose.runtime.remember { LyricFollowController() }
+
+    // 程式自己發起的捲動，不該被誤判成使用者手動捲動
+    var programmaticScroll by androidx.compose.runtime.remember {
+        androidx.compose.runtime.mutableStateOf(false)
+    }
+
+    // 使用者用手指捲動 → 讓位
+    LaunchedEffect(listState) {
+        snapshotFlow { listState.isScrollInProgress }
+            .collect { inProgress ->
+                if (inProgress && !programmaticScroll) {
+                    controller.onManualScroll(System.currentTimeMillis())
+                }
+            }
+    }
+
+    // 每次作答重設閒置計時——「答完之後再等 3 秒」才回歸
+    LaunchedEffect(answerTick) {
+        controller.onAnswered(System.currentTimeMillis())
+    }
+
     BoxWithConstraints(modifier = Modifier.fillMaxSize()) {
         val halfViewport = maxHeight / 2
 
-        LaunchedEffect(currentLineIndex) {
-            runCatching {
-                listState.animateScrollToItem(index = currentLineIndex, scrollOffset = 0)
+        // 依主控權決定要不要跟隨。answerTick 是 key，讓「答完」能喚醒它重試。
+        LaunchedEffect(currentLineIndex, answerTick) {
+            if (controller.shouldAutoScroll(
+                    nowMs = System.currentTimeMillis(),
+                    lineIndex = currentLineIndex,
+                    answeredLine = answeredLineIndex,
+                )
+            ) {
+                programmaticScroll = true
+                try {
+                    // 逐格捲動（而非直接跳）——手指離開的位置才不會被硬切
+                    listState.animateScrollToItem(index = currentLineIndex, scrollOffset = 0)
+                } catch (cancellation: kotlinx.coroutines.CancellationException) {
+                    // 取消是正常的（換題／離開畫面）。**必須原樣往上拋**，
+                    // 否則會破壞結構化並行——這正是先前用 runCatching 的錯誤。
+                    throw cancellation
+                } finally {
+                    programmaticScroll = false
+                }
             }
         }
 
@@ -354,6 +414,10 @@ private fun LyricsViewport(
  *
  * **所有挖空的行都顯示底線**（整首歌一開始就挖好），
  * 未輪到的行用較低對比呈現，當前句最突出。
+ *
+ * 當前句的顏色用 `animateColorAsState` **漸出漸入**——這是「鏡頭回來了」的
+ * 視覺交代。捲動本身由 `animateScrollToItem` 的 easing 負責，
+ * 但那是位移；顏色淡入才是讓眼睛跟得上的關鍵。
  */
 @Composable
 private fun LyricRow(
@@ -367,7 +431,20 @@ private fun LyricRow(
         label = "lyricAlpha",
     )
 
-    val primaryColor = MaterialTheme.colorScheme.primary
+    // 當前句的強調色：漸出漸入，不是硬切
+    val currentAccent by animateColorAsState(
+        targetValue = if (isCurrent) {
+            MaterialTheme.colorScheme.primary
+        } else {
+            MaterialTheme.colorScheme.onSurface
+        },
+        animationSpec = androidx.compose.animation.core.tween(
+            durationMillis = CURRENT_LINE_FADE_MS,
+            easing = androidx.compose.animation.core.FastOutSlowInEasing,
+        ),
+        label = "currentLineAccent",
+    )
+
     val successColor = MaterialTheme.colorScheme.secondary
     val errorColor = MaterialTheme.colorScheme.error
     val onSurface = MaterialTheme.colorScheme.onSurface
@@ -397,10 +474,10 @@ private fun LyricRow(
                 append(record.choice)
             }
 
-            // 未作答：顯示底線。當前句用 primary 強調
+            // 未作答：顯示底線。當前句用強調色
             else -> withStyle(
                 SpanStyle(
-                    color = if (isCurrent) primaryColor else onSurface,
+                    color = if (isCurrent) currentAccent else onSurface,
                     fontWeight = if (isCurrent) FontWeight.Bold else FontWeight.Normal,
                 ),
             ) {

@@ -505,4 +505,150 @@ Kotlin 允許，D8 不接受。
 - `android-opencc` 2021-05 後未再更新；`s2twp` 詞庫本身來自 OpenCC 上游，
   是資料而非 API，腐爛風險低，但值得在升級 OpenCC 上游時一併檢查。
 
+---
+
+## TASK-10：修好「旋轉螢幕就退回主畫面」＋ 歌詞捲動的主控權
+
+### 目標
+
+擁有者實測回報兩件事：
+
+1. **旋轉方向就退回主畫面**（原本以為是隨機閃退，其實 100% 可重現）
+2. 歌詞捲動的矛盾：「跟時間戳跑怕使用者跟不上，跟使用者速度又對不上音樂」
+
+### 1. ★ 主因：`take()` 是破壞性的
+
+`PracticeSessionStore.take()` 的語意是**取出並移除**：
+
+```kotlin
+fun take(songId: Long): Session? = sessions.remove(songId)   // 舊版
+```
+
+而 `PracticeViewModel.load()` 用的正是它。於是旋轉螢幕時：
+
+| 步驟 | 發生的事 |
+|---|---|
+| 1 | 旋轉 → Activity 重建 → `PracticeViewModel` **重建** |
+| 2 | `take()` 第二次被呼叫，但資料已在第一次被移除 → **回傳 null** |
+| 3 | ViewModel 進入錯誤狀態，唯一出路是按「返回」→ **退回主畫面** |
+
+**最刺眼的是**：`PracticeSessionStore` 的註解自己寫著
+「讀取但**不**移除（ViewModel 可能因設定變更而重建）」，
+而 `peek()` 就是為此存在的——但 `load()` 用的是 `take()`。
+**註解與實作互相矛盾**，這就是 bug。
+
+**修法**：移除 `take()`，讀取一律用不再具破壞性的 `get()`。
+練習資料的生命週期由「開始練下一首歌」決定，不是由「第一次讀取」決定。
+
+### 2. 程序死亡後可從 Room 回復
+
+原本 session 只存在記憶體，App 被系統回收後就沒了。但 `ensureSongPersisted()`
+早就把歌詞寫進 `lyric_line` 表——**只是沒有任何路徑讀回來**。
+
+現在 `load()` 是兩層退路：
+
+```
+第 1 層  sessionStore.get(songId)     記憶體（涵蓋旋轉、深色模式、字型大小變更）
+第 2 層  Room: song + lyric_line      程序被系統回收後
+第 3 層  都沒有 → 錯誤畫面            誠實：使用者從未作答過，本來就沒東西可回復
+```
+
+**關鍵取捨**：`lyric_line` **只存 `text`，不存挖空位置**，所以第 2 層要重跑
+`FillChoiceBuilder.buildDataset()`。若沿用 `Random.Default`，回復後**挖的字會跟死亡前不同**。
+
+因此把亂數種子固定為 `songId`：
+
+```kotlin
+private fun randomFor(seed: Long): Random = Random(seed.hashCode())
+```
+
+這順帶修掉一個既有的不一致——**同一首歌每次進來挖的字都不一樣**。
+
+### 3. 歌詞捲動的主控權
+
+先釐清一件事：**原本根本沒有「跟時間戳跑」這回事**。
+捲動唯一的驅動來源是作答進度，而播放鍵是 `clickable { }`（空的）、
+進度條拖曳是「跳到第 N 題」不是「跳到第 N 秒」。
+
+所以矛盾是**未來接上 Media3 時才會發生**。現在先把規則做成可測的元件，
+新增 `LyricFollowController`（**不依賴 Android／Compose**，時間由外部傳入）。
+
+擁有者指定的規則：
+
+| 事件 | 行為 |
+|---|---|
+| 使用者手動捲動 | 讓位，進 `MANUAL` |
+| 閒置 3 秒**且當前題已作答** | 漸出漸入收回主控權 |
+| 閒置 3 秒**但尚未作答** | **絕不搶畫面**，等答完再繼續 |
+| 作答 | 重設閒置計時（「答完之後再等 3 秒」，不是「早就過 3 秒所以立刻跳走」）|
+
+「**尚未作答就不搶畫面**」是整個設計的核心——使用者正在思考時把歌詞抽走，
+是最糟的體驗。
+
+### 4. 順手修掉：`runCatching` 吞掉 `CancellationException`
+
+原本：
+
+```kotlin
+LaunchedEffect(currentLineIndex) {
+    runCatching { listState.animateScrollToItem(...) }   // ← 反模式
+}
+```
+
+`runCatching` 連 `CancellationException` 都吃掉了，這會**破壞結構化並行**
+（協程被取消卻假裝成功繼續跑）。改為明確重新拋出：
+
+```kotlin
+} catch (cancellation: CancellationException) {
+    throw cancellation
+} finally { ... }
+```
+
+同時用 `snapshotFlow { listState.isScrollInProgress }` 區分
+「使用者手動捲動」與「程式自己捲動」（後者不該被誤判成使用者動手）。
+
+### 5. 漸出漸入
+
+捲動的**位移**由 `animateScrollToItem` 的 easing 負責，
+但那是位置——讓眼睛跟得上「現在唱到哪」的是**顏色**。
+因此當前句的強調色改用 `animateColorAsState` + `FastOutSlowInEasing`（600ms）淡入，
+而不是硬切。
+
+### 6. 完成事項
+
+| 日期 | 項目 | 狀態 |
+|------|------|------|
+| 2026-10-09 | `PracticeSessionStore` 移除破壞性的 `take()`，改為 `get()` + LRU 上限 8 | ✅ |
+| 2026-10-09 | `PracticeViewModel` 兩層退路：記憶體 → Room | ✅ |
+| 2026-10-09 | 挖空亂數以 `songId` 為種子（同一首歌結果穩定） | ✅ |
+| 2026-10-09 | `LyricFollowController`：3 秒閒置 + 已作答才收回主控權 | ✅ |
+| 2026-10-09 | 漸出漸入（`animateColorAsState`, 600ms） | ✅ |
+| 2026-10-09 | 修掉 `runCatching` 吞 `CancellationException` | ✅ |
+| 2026-10-09 | **單元測試 155 個**（+28）全通過 | ✅ |
+
+### 7. 測試抓到的事
+
+`PracticeSessionStoreTest` 有一個測試一開始是**紅的**，而且它抓到的是
+**我自己的錯誤假設**，不是程式的 bug：
+
+我原本斷言「淘汰不會影響正在練習的那一首」——放入第 42 首，再放 20 首別的歌，
+然後期待第 42 首還在。但 LRU 上限是 8，第 42 首**本來就該被淘汰**。
+
+改寫成兩條正確的契約：
+
+1. **剛剛選的歌一定拿得到**——真實流程是「搜尋 → 選歌 → 立刻進練習頁」，
+   剛 `put` 的必然是最近使用，不可能被淘汰
+2. **很久沒用的歌會被淘汰，但可由 Room 接回**——而且這正好驗證了第 2 層退路的價值
+
+### 8. 待處理
+
+- **播放鍵仍是空的**。擁有者指定「播放鍵要同時控制歌詞滾動和播放器」，
+  但音源整條鏈都還沒接：`SongSearchResult` **沒有 `videoId`**，
+  `YouTubeMusicSource` 完全沒被呼叫，Media3 也還沒加進依賴。
+  這是下一個任務。
+- ⚠️ **對齊風險（接音源前必須先解）**：LRCLIB 的時間戳與 YouTube 影片可能
+  來自**不同版本**（錄音室 vs 現場 vs remaster），長度不同就會整首錯位。
+  接 Media3 時必須用 `durationMs` 做驗證，而不是假設兩者一致。
+
+
 
