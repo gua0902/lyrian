@@ -29,6 +29,7 @@ class SongSearchRepositoryTest {
                 limit: Int,
             ): ItunesSearchResponseDto = ItunesSearchResponseDto()
         },
+        chineseConverter = com.antigravity.lyrian.data.text.ChineseConverter(),
     )
 
     /** 取自 LRCLIB `/api/search` 的實測形狀。 */

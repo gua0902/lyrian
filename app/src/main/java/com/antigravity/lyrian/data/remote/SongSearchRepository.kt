@@ -1,6 +1,7 @@
 package com.antigravity.lyrian.data.remote
 
 import com.antigravity.lyrian.data.lyrics.LyricsParser
+import com.antigravity.lyrian.data.text.ChineseConverter
 import com.antigravity.lyrian.domain.practice.FillChoiceBuilder
 import javax.inject.Inject
 import javax.inject.Singleton
@@ -43,6 +44,7 @@ data class SongSearchResult(
 class SongSearchRepository @Inject constructor(
     private val lrclibApi: LrclibApi,
     private val itunesApi: ItunesApi,
+    private val chineseConverter: ChineseConverter,
 ) {
 
     companion object {
@@ -108,9 +110,10 @@ class SongSearchRepository @Inject constructor(
 
         return SongSearchResult(
             lrclibId = entry.id,
-            title = entry.trackName,
-            artist = artist,
-            album = entry.albumName,
+            // 歌名與歌手通過簡繁轉換——LRCLIB 由社群貢獻，可能含簡體
+            title = chineseConverter.toTraditionalIfNeeded(entry.trackName),
+            artist = chineseConverter.toTraditionalIfNeeded(artist),
+            album = entry.albumName?.let { chineseConverter.toTraditionalIfNeeded(it) },
             // LRCLIB 的 duration 單位是「秒」（浮點數），換成毫秒
             durationMs = entry.duration?.let { Math.round(it * 1000) },
             coverUrl = NameMatcher.artworkUrlAtSize(match?.artworkUrl100),

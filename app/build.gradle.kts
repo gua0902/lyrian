@@ -114,6 +114,9 @@ dependencies {
     // YouTube Music 音源（GPL-3.0，見 innertube/README.md）
     implementation(project(":innertube"))
 
+    // 中文簡繁轉換（Apache-2.0）
+    implementation(libs.opencc4j)
+
     // Test
     testImplementation(libs.junit)
     testImplementation(libs.kotlinx.coroutines.test)

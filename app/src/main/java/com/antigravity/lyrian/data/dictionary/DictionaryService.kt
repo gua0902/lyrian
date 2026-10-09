@@ -4,6 +4,7 @@ import com.antigravity.lyrian.data.remote.FreeDictionaryApi
 import com.antigravity.lyrian.data.remote.FreeDictionaryResponseDto
 import com.antigravity.lyrian.data.remote.WiktionaryApi
 import com.antigravity.lyrian.data.remote.WiktionaryEntryDto
+import com.antigravity.lyrian.data.text.ChineseConverter
 import javax.inject.Inject
 import javax.inject.Singleton
 import kotlinx.coroutines.async
@@ -46,6 +47,7 @@ data class DictionaryEntry(
 class DictionaryService @Inject constructor(
     private val freeDictionaryApi: FreeDictionaryApi,
     private val wiktionaryApi: WiktionaryApi,
+    private val chineseConverter: ChineseConverter,
 ) {
 
     /**
@@ -78,8 +80,10 @@ class DictionaryService @Inject constructor(
             word = normalized,
             partOfSpeech = partOfSpeech?.toAbbreviation(),
             // 取第一條定義即可——字庫是速查，不是完整詞典
+            // 通過簡繁轉換：字典來源可能回傳簡體（未來的 ECDICT 中文釋義尤其如此）
             definition = definition?.definitions?.firstOrNull()?.definition
                 ?.cleanWiktionaryMarkup()
+                ?.let { chineseConverter.toTraditionalIfNeeded(it) }
                 ?.takeIf { it.isNotBlank() },
             phonetic = pronunciation?.phonetic,
             phoneticAccent = pronunciation?.accent,

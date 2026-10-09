@@ -22,6 +22,7 @@ coroutinesTest = "1.9.0"
 turbine = "1.2.0"
 mockk = "1.13.13"
 materialIconsExtended = "1.7.6"
+opencc4j = "1.6.2"
 
 [libraries]
 androidx-core-ktx = { group = "androidx.core", name = "core-ktx", version.ref = "coreKtx" }
@@ -67,6 +68,10 @@ kotlinx-serialization-json = { group = "org.jetbrains.kotlinx", name = "kotlinx-
 coil-compose = { group = "io.coil-kt", name = "coil-compose", version.ref = "coil" }
 androidx-datastore-preferences = { group = "androidx.datastore", name = "datastore-preferences", version.ref = "datastore" }
 androidx-security-crypto = { group = "androidx.security", name = "security-crypto", version.ref = "securityCrypto" }
+
+# 中文簡繁轉換（Apache-2.0）。含字典資料約 2.7 MB
+# jieba-analysis 是 optional，Gradle 不會拉進來（那是分詞用的，純轉換不需要）
+opencc4j = { group = "com.github.houbb", name = "opencc4j", version.ref = "opencc4j" }
 
 # Test
 junit = { group = "junit", name = "junit", version.ref = "junit" }
