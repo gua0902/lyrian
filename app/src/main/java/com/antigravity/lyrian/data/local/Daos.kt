@@ -95,6 +95,40 @@ interface VocabDao {
     @Update
     suspend fun update(vocab: VocabEntity)
 
+    @Query("SELECT * FROM vocab WHERE id = :id LIMIT 1")
+    suspend fun findById(id: Long): VocabEntity?
+
+    @Query("SELECT * FROM vocab WHERE id = :id LIMIT 1")
+    fun observeById(id: Long): Flow<VocabEntity?>
+
+    /**
+     * 把查到的字典資料寫回，並標記為已查過。
+     *
+     * 寫回後就不必再連外——同一個字只查一次。
+     */
+    @Query(
+        """
+        UPDATE vocab SET
+            translation = COALESCE(:translation, translation),
+            phonetic = COALESCE(:phonetic, phonetic),
+            phoneticAccent = COALESCE(:accent, phoneticAccent),
+            partOfSpeech = COALESCE(:partOfSpeech, partOfSpeech),
+            cefr = COALESCE(:cefr, cefr),
+            dictionaryFetched = 1,
+            updatedAt = :now
+        WHERE id = :id
+        """,
+    )
+    suspend fun updateDictionary(
+        id: Long,
+        translation: String?,
+        phonetic: String?,
+        accent: String?,
+        partOfSpeech: String?,
+        cefr: String?,
+        now: Long,
+    )
+
     /**
      * 把一個答錯的單字收進字庫。
      *

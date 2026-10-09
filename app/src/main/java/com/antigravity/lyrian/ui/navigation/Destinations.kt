@@ -62,6 +62,13 @@ object Routes {
     /** 對應 [PRACTICE]，但填入實際的 songId */
     fun practice(songId: Long) = "practice/$songId"
 
+    const val VOCAB_DETAIL = "vocab/{vocabId}"
+
+    /** 對應 [VOCAB_DETAIL]，但填入實際的 vocabId */
+    fun vocabDetail(vocabId: Long) = "vocab/$vocabId"
+
+    const val ARG_VOCAB_ID = "vocabId"
+
     const val SETTINGS = "settings"
     const val SETTINGS_AI = "settings/ai"
     const val SETTINGS_APPEARANCE = "settings/appearance"

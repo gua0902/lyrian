@@ -2,7 +2,7 @@
   "formatVersion": 1,
   "database": {
     "version": 1,
-    "identityHash": "4985e292e66e87d17d4d8b486f9ecb3a",
+    "identityHash": "0aa606f2d3beb0ac678c3ae54e2a1ea1",
     "entities": [
       {
         "tableName": "song",
@@ -172,7 +172,7 @@
       },
       {
         "tableName": "vocab",
-        "createSql": "CREATE TABLE IF NOT EXISTS `${TABLE_NAME}` (`id` INTEGER PRIMARY KEY AUTOINCREMENT NOT NULL, `lemma` TEXT NOT NULL, `surfaceForm` TEXT, `translation` TEXT, `phonetic` TEXT, `partOfSpeech` TEXT, `cefr` TEXT, `firstSongId` INTEGER, `contextLine` TEXT, `errorCount` INTEGER NOT NULL, `correctStreak` INTEGER NOT NULL, `status` TEXT NOT NULL, `createdAt` INTEGER NOT NULL, `updatedAt` INTEGER NOT NULL)",
+        "createSql": "CREATE TABLE IF NOT EXISTS `${TABLE_NAME}` (`id` INTEGER PRIMARY KEY AUTOINCREMENT NOT NULL, `lemma` TEXT NOT NULL, `surfaceForm` TEXT, `translation` TEXT, `phonetic` TEXT, `phoneticAccent` TEXT, `partOfSpeech` TEXT, `cefr` TEXT, `firstSongId` INTEGER, `contextLine` TEXT, `dictionaryFetched` INTEGER NOT NULL, `errorCount` INTEGER NOT NULL, `correctStreak` INTEGER NOT NULL, `status` TEXT NOT NULL, `createdAt` INTEGER NOT NULL, `updatedAt` INTEGER NOT NULL)",
         "fields": [
           {
             "fieldPath": "id",
@@ -205,6 +205,12 @@
             "notNull": false
           },
           {
+            "fieldPath": "phoneticAccent",
+            "columnName": "phoneticAccent",
+            "affinity": "TEXT",
+            "notNull": false
+          },
+          {
             "fieldPath": "partOfSpeech",
             "columnName": "partOfSpeech",
             "affinity": "TEXT",
@@ -227,6 +233,12 @@
             "columnName": "contextLine",
             "affinity": "TEXT",
             "notNull": false
+          },
+          {
+            "fieldPath": "dictionaryFetched",
+            "columnName": "dictionaryFetched",
+            "affinity": "INTEGER",
+            "notNull": true
           },
           {
             "fieldPath": "errorCount",
@@ -623,7 +635,7 @@
     "views": [],
     "setupQueries": [
       "CREATE TABLE IF NOT EXISTS room_master_table (id INTEGER PRIMARY KEY,identity_hash TEXT)",
-      "INSERT OR REPLACE INTO room_master_table (id,identity_hash) VALUES(42, '4985e292e66e87d17d4d8b486f9ecb3a')"
+      "INSERT OR REPLACE INTO room_master_table (id,identity_hash) VALUES(42, '0aa606f2d3beb0ac678c3ae54e2a1ea1')"
     ]
   }
 }

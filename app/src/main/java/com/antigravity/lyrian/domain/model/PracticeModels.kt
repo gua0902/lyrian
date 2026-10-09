@@ -1,20 +1,49 @@
 package com.antigravity.lyrian.domain.model
 
 /**
- * 一行歌詞。時間軸單位一律是**毫秒**。
+ * 一行歌詞，**可選擇是否已挖空**。
  *
- * 來源優先序見 [com.antigravity.lyrian.data.lyrics.LyricsParser]：
- * LRCLIB 的 `lyricsfile`（有 endMs）→ `syncedLyrics`（endMs 為 null）→ `plainLyrics`（推算）。
+ * 依擁有者指定：整首歌詞在練習開始時就**全部挖空**，
+ * 不是等到輪到那一句才挖——否則使用者會先把後面的歌詞看光，
+ * 輪到時就沒有挑戰性了。
  *
- * @property index 在歌曲中的行序（0-based，解析後重新編號）
- * @property endMs 只有 `lyricsfile` 來源才有；其他來源為 null
+ * 時間軸單位一律是**毫秒**。來源優先序見
+ * [com.antigravity.lyrian.data.lyrics.LyricsParser]。
+ *
+ * @property blankStart 空格在 [text] 中的起始索引；-1 表示沒有挖空
+ * @property blankEnd 空格在 [text] 中的結束索引（不含）
+ * @property answer 該空格的答案；null 表示這行沒有挖空
  */
 data class LyricLine(
     val index: Int,
     val text: String,
     val startMs: Long,
     val endMs: Long? = null,
-)
+    val blankStart: Int = -1,
+    val blankEnd: Int = -1,
+    val answer: String? = null,
+) {
+    /** 這行是否有挖空。 */
+    val hasBlank: Boolean get() = answer != null && blankStart >= 0
+
+    /** 空格前的文字。 */
+    val prefix: String get() = if (hasBlank) text.substring(0, blankStart) else text
+
+    /** 空格後的文字。 */
+    val suffix: String get() = if (hasBlank) text.substring(blankEnd) else ""
+
+    /**
+     * 逐字稿中要顯示的內容。
+     *
+     * @param filled 有值時顯示這個字（已作答）；null 則顯示底線
+     * @param showBlank 是否顯示空格。未輪到的句子仍會挖空（依擁有者指定），
+     *   但 UI 可選擇用較低對比呈現
+     */
+    fun render(filled: String? = null, showBlank: Boolean = true): String {
+        if (!hasBlank || !showBlank) return text
+        return prefix + (filled ?: "____") + suffix
+    }
+}
 
 /**
  * 一個挖空題目。

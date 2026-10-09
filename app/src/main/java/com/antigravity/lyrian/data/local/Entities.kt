@@ -76,16 +76,21 @@ data class VocabEntity(
     val lemma: String,
     /** 原文實際出現的形（例如 `Hope`） */
     val surfaceForm: String? = null,
-    /** 中文釋義（ECDICT，尚未接上時為 null） */
+    /** 字義。目前來自 Wiktionary（英文）；接上 ECDICT 後改為中文 */
     val translation: String? = null,
+    /** 國際音標，例如 `/həʊp/` */
     val phonetic: String? = null,
-    /** 詞性 */
+    /** 音標腔調：`英` 或 `美`。字典來源已擇一，不並列 */
+    val phoneticAccent: String? = null,
+    /** 詞性的**英文縮寫**，例如 `n.` / `v.` / `adj.` */
     val partOfSpeech: String? = null,
-    /** CEFR 等級（A1..C2），由 ECDICT 詞頻推算 */
+    /** CEFR 等級（A1..C2）；接上 ECDICT 後才會有值 */
     val cefr: String? = null,
     val firstSongId: Long? = null,
     /** 出現的完整歌詞原句——複習時當題幹用 */
     val contextLine: String? = null,
+    /** 字典資料是否已查過。用來避免重複連外 */
+    val dictionaryFetched: Boolean = false,
     val errorCount: Int = 0,
     val correctStreak: Int = 0,
     /** learning / reviewing / mastered */

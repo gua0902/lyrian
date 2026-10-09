@@ -112,4 +112,8 @@
     <string name="onboarding_byok_why_body">App 不內建金鑰，所以沒有額度限制、也不會轉售 API。金鑰加密存在這台裝置上，支援多把金鑰輪替以繞過速率限制。</string>
     <string name="onboarding_setup_key">設定金鑰</string>
     <string name="onboarding_later">稍後再說</string>
+    <string name="wordbank_detail_title">單字詳情</string>
+    <string name="wordbank_detail_meaning">字義</string>
+    <string name="wordbank_detail_context">出現在歌詞中</string>
+    <string name="wordbank_detail_no_data">查不到這個字的字典資料。</string>
 </resources>

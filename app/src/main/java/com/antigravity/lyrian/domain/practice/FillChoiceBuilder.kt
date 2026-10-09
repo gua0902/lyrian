@@ -128,9 +128,10 @@ object FillChoiceBuilder {
     ): FillChoiceDataset {
         val questions = mutableListOf<FillChoiceQuestion>()
 
-        for (line in lines) {
+        // 把挖空結果**同時**套回每一行——這樣整首歌一開始就都是挖好的
+        val blankedLines = lines.map { line ->
             val candidates = findBlankCandidates(line.text, minWordLength)
-            if (candidates.isEmpty()) continue
+            if (candidates.isEmpty()) return@map line
 
             val picked = candidates[random.nextInt(candidates.size)]
             questions += FillChoiceQuestion(
@@ -142,9 +143,15 @@ object FillChoiceBuilder {
                 startMs = line.startMs,
                 endMs = line.endMs,
             )
+
+            line.copy(
+                blankStart = picked.start,
+                blankEnd = picked.end,
+                answer = picked.word,
+            )
         }
 
-        return FillChoiceDataset(lines = lines, questions = questions)
+        return FillChoiceDataset(lines = blankedLines, questions = questions)
     }
 
     /**

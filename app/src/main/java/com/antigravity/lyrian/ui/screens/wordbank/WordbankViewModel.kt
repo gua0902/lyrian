@@ -1,7 +1,9 @@
 package com.antigravity.lyrian.ui.screens.wordbank
 
+import androidx.lifecycle.SavedStateHandle
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
+import com.antigravity.lyrian.data.dictionary.DictionaryService
 import com.antigravity.lyrian.data.local.VocabDao
 import com.antigravity.lyrian.data.local.VocabEntity
 import dagger.hilt.android.lifecycle.HiltViewModel
@@ -12,6 +14,7 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.stateIn
+import kotlinx.coroutines.launch
 
 /** 字庫的篩選條件。 */
 enum class WordbankFilter { ALL, MASTERED, REVIEWING }
@@ -21,7 +24,6 @@ data class WordbankUiState(
     val items: List<VocabEntity> = emptyList(),
     val total: Int = 0,
     val mastered: Int = 0,
-    val learning: Int = 0,
 ) {
     /** 「待複習」= 尚未掌握的全部 */
     val dueForReview: Int get() = total - mastered
@@ -30,12 +32,12 @@ data class WordbankUiState(
 @HiltViewModel
 class WordbankViewModel @Inject constructor(
     private val vocabDao: VocabDao,
+    private val dictionaryService: DictionaryService,
 ) : ViewModel() {
 
     private val _filter = MutableStateFlow(WordbankFilter.ALL)
     val filter: StateFlow<WordbankFilter> = _filter.asStateFlow()
 
-    /** 目前的清單（依篩選條件切換來源）。 */
     private val listFlow = combine(_filter, vocabDao.observeAll()) { filter, all ->
         when (filter) {
             WordbankFilter.ALL -> all
@@ -55,7 +57,6 @@ class WordbankViewModel @Inject constructor(
             items = items,
             total = total,
             mastered = mastered,
-            learning = total - mastered,
         )
     }.stateIn(
         scope = viewModelScope,
@@ -66,4 +67,89 @@ class WordbankViewModel @Inject constructor(
     fun onFilterChange(filter: WordbankFilter) {
         _filter.value = filter
     }
+
+    /**
+     * 為還沒有字典資料的單字補查。
+     *
+     * **只查缺的**——`dictionaryFetched` 為 true 的會跳過，
+     * 因此同一個字一輩子只連外一次。
+     *
+     * 一次最多查 [MAX_LOOKUPS]，避免進入字庫頁時一次打太多 API。
+     */
+    fun fetchMissingDictionaryData() {
+        viewModelScope.launch {
+            val pending = uiState.value.items
+                .filterNot { it.dictionaryFetched }
+                .take(MAX_LOOKUPS)
+
+            for (vocab in pending) {
+                val entry = dictionaryService.lookup(vocab.lemma) ?: continue
+                vocabDao.updateDictionary(
+                    id = vocab.id,
+                    translation = entry.definition,
+                    phonetic = entry.phonetic,
+                    accent = entry.phoneticAccent,
+                    partOfSpeech = entry.partOfSpeech,
+                    cefr = null,
+                    now = System.currentTimeMillis(),
+                )
+            }
+        }
+    }
+
+    private companion object {
+        /**
+         * 一次最多補查幾個字。
+         *
+         * 字典 API 沒有明確的速率限制，但**不該在進入頁面時一次打幾十個請求**——
+         * 那既慢又無礼。剩下的會在下次進入時陸續補齊。
+         */
+        const val MAX_LOOKUPS = 8
+    }
+}
+
+/**
+ * 單字詳情頁的 ViewModel。
+ *
+ * 進入時若還沒有字典資料就補查一次；之後不再連外。
+ */
+@HiltViewModel
+class VocabDetailViewModel @Inject constructor(
+    private val vocabDao: VocabDao,
+    private val dictionaryService: DictionaryService,
+    savedStateHandle: SavedStateHandle,
+) : ViewModel() {
+
+    private val vocabId: Long =
+        savedStateHandle.get<String>(VocabDetailRoute.ARG)?.toLongOrNull() ?: -1L
+
+    val entry: StateFlow<VocabEntity?> = vocabDao.observeById(vocabId)
+        .stateIn(
+            scope = viewModelScope,
+            started = SharingStarted.WhileSubscribed(5_000),
+            initialValue = null,
+        )
+
+    init {
+        viewModelScope.launch {
+            val vocab = vocabDao.findById(vocabId) ?: return@launch
+            if (vocab.dictionaryFetched) return@launch
+
+            val result = dictionaryService.lookup(vocab.lemma) ?: return@launch
+            vocabDao.updateDictionary(
+                id = vocabId,
+                translation = result.definition,
+                phonetic = result.phonetic,
+                accent = result.phoneticAccent,
+                partOfSpeech = result.partOfSpeech,
+                cefr = null,
+                now = System.currentTimeMillis(),
+            )
+        }
+    }
+}
+
+/** 詳情頁的路由參數名稱。 */
+object VocabDetailRoute {
+    const val ARG = "vocabId"
 }

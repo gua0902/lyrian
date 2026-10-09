@@ -1,5 +1,6 @@
 package com.antigravity.lyrian.ui.screens.wordbank
 
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -22,6 +23,7 @@ import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
 import androidx.compose.material3.TopAppBar
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -47,8 +49,16 @@ import com.antigravity.lyrian.data.local.VocabEntity
  */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-fun WordbankScreen(viewModel: WordbankViewModel = hiltViewModel()) {
+fun WordbankScreen(
+    onOpenDetail: (Long) -> Unit,
+    viewModel: WordbankViewModel = hiltViewModel(),
+) {
     val state by viewModel.uiState.collectAsStateWithLifecycle()
+
+    // 進入時補查缺的字典資料（只查還沒查過的，一次最多 8 個）
+    LaunchedEffect(state.items) {
+        viewModel.fetchMissingDictionaryData()
+    }
 
     Scaffold(
         topBar = {
@@ -75,7 +85,7 @@ fun WordbankScreen(viewModel: WordbankViewModel = hiltViewModel()) {
                 item { EmptyState(filter = state.filter) }
             } else {
                 items(items = state.items, key = { it.id }) { vocab ->
-                    VocabCard(vocab)
+                    VocabCard(vocab = vocab, onClick = { onOpenDetail(vocab.id) })
                 }
             }
         }
@@ -149,9 +159,11 @@ private fun FilterRow(current: WordbankFilter, onChange: (WordbankFilter) -> Uni
  * 顯示 `surfaceContainerLow`——依 PRD 指定的色調層級。
  */
 @Composable
-private fun VocabCard(vocab: VocabEntity) {
+private fun VocabCard(vocab: VocabEntity, onClick: () -> Unit) {
     Card(
-        modifier = Modifier.fillMaxWidth(),
+        modifier = Modifier
+            .fillMaxWidth()
+            .clickable(onClick = onClick),
         colors = CardDefaults.cardColors(
             containerColor = MaterialTheme.colorScheme.surfaceContainerLow,
         ),
@@ -171,18 +183,25 @@ private fun VocabCard(vocab: VocabEntity) {
                 )
 
                 Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                    // CEFR 標籤（接上 ECDICT 後才會有值）
-                    vocab.cefr?.let { cefr ->
-                        TagChip(text = cefr, emphasized = true)
-                    }
                     vocab.partOfSpeech?.let { pos ->
-                        TagChip(text = pos, emphasized = false)
+                        Text(
+                            text = pos,
+                            style = MaterialTheme.typography.labelMedium,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
                     }
                 }
             }
 
             // 第二行：音標 + 簡短釋義
-            val detail = listOfNotNull(vocab.phonetic, vocab.translation)
+            val pronunciation = buildString {
+                vocab.phonetic?.let { append(it) }
+                vocab.phoneticAccent?.let {
+                    if (isNotEmpty()) append("  ")
+                    append("(").append(it).append(")")
+                }
+            }
+            val detail = listOfNotNull(pronunciation.takeIf { it.isNotBlank() }, vocab.translation)
                 .filter { it.isNotBlank() }
                 .joinToString("  ")
 
@@ -205,15 +224,6 @@ private fun VocabCard(vocab: VocabEntity) {
                 )
             }
 
-            // 錯誤次數（答錯越多次越需要複習）
-            if (vocab.errorCount > 1) {
-                Text(
-                    text = stringResource(R.string.wordbank_error_count, vocab.errorCount),
-                    style = MaterialTheme.typography.labelSmall,
-                    color = MaterialTheme.colorScheme.error,
-                    modifier = Modifier.padding(top = 8.dp),
-                )
-            }
         }
     }
 }

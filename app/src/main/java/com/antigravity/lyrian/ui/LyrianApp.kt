@@ -58,7 +58,8 @@ fun LyrianApp(
     // 這些畫面是全螢幕的，不顯示底部導覽
     val isFullScreen = currentRoute == Routes.ONBOARDING ||
         currentRoute?.startsWith("practice/") == true ||
-        currentRoute?.startsWith("settings") == true
+        currentRoute?.startsWith("settings") == true ||
+        currentRoute?.startsWith("vocab/") == true
 
     val currentTopLevel = TopLevelDestination.entries.firstOrNull { destination ->
         currentDestination?.hierarchy?.any { it.route == destination.route } == true
@@ -138,7 +139,24 @@ fun LyrianApp(
                     )
                 }
 
-                composable(TopLevelDestination.WORDBANK.route) { WordbankScreen() }
+                composable(TopLevelDestination.WORDBANK.route) {
+                    WordbankScreen(
+                        onOpenDetail = { vocabId ->
+                            navController.navigate(Routes.vocabDetail(vocabId))
+                        },
+                    )
+                }
+
+                composable(
+                    route = Routes.VOCAB_DETAIL,
+                    arguments = listOf(
+                        navArgument(Routes.ARG_VOCAB_ID) { type = NavType.StringType },
+                    ),
+                ) {
+                    com.antigravity.lyrian.ui.screens.wordbank.VocabDetailScreen(
+                        onBack = { navController.popBackStack() },
+                    )
+                }
 
                 composable(TopLevelDestination.MY.route) {
                     MyScreen(
