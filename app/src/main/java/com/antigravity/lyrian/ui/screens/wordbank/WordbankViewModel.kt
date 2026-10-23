@@ -3,7 +3,8 @@ package com.antigravity.lyrian.ui.screens.wordbank
 import androidx.lifecycle.SavedStateHandle
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
-import com.antigravity.lyrian.data.dictionary.DictionaryService
+import com.antigravity.lyrian.data.dictionary.DictionaryRepository
+import com.antigravity.lyrian.data.dictionary.DictionaryResult
 import com.antigravity.lyrian.data.local.VocabDao
 import com.antigravity.lyrian.data.local.VocabEntity
 import dagger.hilt.android.lifecycle.HiltViewModel
@@ -32,7 +33,7 @@ data class WordbankUiState(
 @HiltViewModel
 class WordbankViewModel @Inject constructor(
     private val vocabDao: VocabDao,
-    private val dictionaryService: DictionaryService,
+    private val dictionary: DictionaryRepository,
 ) : ViewModel() {
 
     private val _filter = MutableStateFlow(WordbankFilter.ALL)
@@ -73,7 +74,8 @@ class WordbankViewModel @Inject constructor(
      *
      * **只查缺的**——`dictionaryFetched` 為 true 的會跳過。
      *
-     * 一次最多查 [MAX_LOOKUPS]，避免進入字庫頁時一次打太多 API。
+     * 字典是離線資產，這裡不會連外；[MAX_LOOKUPS] 只是限制每次進入頁面時的
+     * 解析量，剩下的會在下次進入時補齊。
      */
     fun fetchMissingDictionaryData() {
         viewModelScope.launch {
@@ -82,23 +84,21 @@ class WordbankViewModel @Inject constructor(
                 .take(MAX_LOOKUPS)
 
             for (vocab in pending) {
-                val entry = dictionaryService.lookup(vocab.lemma)
-
-                val hasData = entry != null && entry.hasContent
-                if (!hasData) {
+                val result = dictionary.lookup(vocab.lemma)
+                if (result !is DictionaryResult.Found) {
                     // 查不到就**不要**標記為已查過——否則這個字永遠不會再試，
                     // 使用者只看得到一句「查不到」。
-                    // 目前仍然計入這一輪的配額，避免一次掃完整個字庫。
                     continue
                 }
 
                 vocabDao.updateDictionary(
                     id = vocab.id,
-                    translation = entry.definition,
-                    phonetic = entry.phonetic,
-                    accent = entry.phoneticAccent,
-                    partOfSpeech = entry.partOfSpeech,
-                    cefr = null,
+                    translation = result.entry.translation,
+                    phonetic = result.entry.phonetic,
+                    // ECDICT 的標音不區分英／美，因此不標腔調，避免標錯
+                    accent = null,
+                    partOfSpeech = result.entry.partOfSpeech,
+                    cefr = result.entry.level?.label,
                     now = System.currentTimeMillis(),
                     markFetched = true,
                 )
@@ -107,12 +107,7 @@ class WordbankViewModel @Inject constructor(
     }
 
     private companion object {
-        /**
-         * 一次最多補查幾個字。
-         *
-         * 字典 API 沒有明確的速率限制，但**不該在進入頁面時一次打幾十個請求**——
-         * 那既慢又無礼。剩下的會在下次進入時陸續補齊。
-         */
+        /** 一次最多補查幾個字（純本機解析，不需要節流，只是避免一次掃完整個字庫）。 */
         const val MAX_LOOKUPS = 8
     }
 }
@@ -125,7 +120,7 @@ class WordbankViewModel @Inject constructor(
 @HiltViewModel
 class VocabDetailViewModel @Inject constructor(
     private val vocabDao: VocabDao,
-    private val dictionaryService: DictionaryService,
+    private val dictionary: DictionaryRepository,
     savedStateHandle: SavedStateHandle,
 ) : ViewModel() {
 
@@ -144,16 +139,15 @@ class VocabDetailViewModel @Inject constructor(
             val vocab = vocabDao.findById(vocabId) ?: return@launch
             if (vocab.dictionaryFetched) return@launch
 
-            val result = dictionaryService.lookup(vocab.lemma) ?: return@launch
-            if (!result.hasContent) return@launch
+            val result = dictionary.lookup(vocab.lemma) as? DictionaryResult.Found ?: return@launch
 
             vocabDao.updateDictionary(
                 id = vocabId,
-                translation = result.definition,
-                phonetic = result.phonetic,
-                accent = result.phoneticAccent,
-                partOfSpeech = result.partOfSpeech,
-                cefr = null,
+                translation = result.entry.translation,
+                phonetic = result.entry.phonetic,
+                accent = null,
+                partOfSpeech = result.entry.partOfSpeech,
+                cefr = result.entry.level?.label,
                 now = System.currentTimeMillis(),
                 markFetched = true,
             )

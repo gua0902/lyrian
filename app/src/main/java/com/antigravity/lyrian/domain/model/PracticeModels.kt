@@ -86,20 +86,24 @@ data class FillChoiceDataset(
  * 一行的挖空決策。
  *
  * @property chosenWord 選中的字；null 表示這行過濾後沒有可挖的字
- * @property chosenLevelSource 選中字的等級來源
- * @property rejected 被過濾掉的候選字與各自的等級來源
+ * @property chosenLemma 選中字的原形（`abandoned` → `abandon`）；沒有詞形變化時等於 [chosenWord]
+ * @property chosenLevel 選中字的 CEFR 等級；未收錄時為 null
+ * @property chosenLevelSource 選中字的等級**來源**，例如 `CEFR-J`、`詞頻推估`
+ * @property rejected 被過濾掉的候選字與各自的排除原因
  */
 data class BlankDecision(
     val lineIndex: Int,
     val chosenWord: String?,
-    val chosenLevelSource: String?,
+    val chosenLemma: String? = null,
+    val chosenLevel: String? = null,
+    val chosenLevelSource: String? = null,
     val rejected: List<RejectedCandidate> = emptyList(),
 )
 
 /** 被過濾掉的候選字。 */
 data class RejectedCandidate(
     val word: String,
-    /** 命中的等級來源，例如「Top 1000 高頻詞」 */
+    /** 被排除的原因，例如 `Top 1000 高頻詞`、`CEFR-J A2（低於 B1）` */
     val levelSource: String,
 )
 
@@ -137,6 +141,22 @@ data class Attempt(
 data class ChoiceRecord(
     val choice: String,
     val isCorrect: Boolean,
+)
+
+/**
+ * 結果頁要顯示的一個字。
+ *
+ * 依擁有者指定，列表**每條只顯示 eng、詞性、中文釋義三項**，
+ * 不顯示例句、不顯示等級細節——那是單字詳情頁的事。
+ *
+ * @property word 顯示的形（錯題是正解，延伸詞彙是原形）
+ * @property partOfSpeech 詞性縮寫，例如 `n.`
+ * @property meaning 繁體中文釋義
+ */
+data class ResultWord(
+    val word: String,
+    val partOfSpeech: String? = null,
+    val meaning: String? = null,
 )
 
 /**

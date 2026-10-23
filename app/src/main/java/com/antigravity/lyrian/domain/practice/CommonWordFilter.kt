@@ -70,6 +70,18 @@ object CommonWordFilter {
             } else {
                 token
             }
+
+        /**
+         * 被這條規則擋掉時顯示的原因，例如 `代名詞（it's→it）`。
+         *
+         * 縮寫展開命中時必須標出展開了什麼，否則使用者會覺得
+         * 「it's 明明不是代名詞，為什麼被當成代名詞」。
+         */
+        fun rejectionLabel(): String = if (matchedForm != null && matchedForm != token) {
+            "$sourceLabel（$token→$matchedForm）"
+        } else {
+            sourceLabel
+        }
     }
 
     // ---------- 分類清單 ----------

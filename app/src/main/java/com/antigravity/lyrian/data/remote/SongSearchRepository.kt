@@ -1,7 +1,8 @@
 package com.antigravity.lyrian.data.remote
 
+import com.antigravity.lyrian.data.lang.WordLevelSource
 import com.antigravity.lyrian.data.lyrics.LyricsParser
-import com.antigravity.lyrian.data.text.ChineseConverter
+import com.antigravity.lyrian.domain.model.CefrLevel
 import com.antigravity.lyrian.domain.practice.FillChoiceBuilder
 import javax.inject.Inject
 import javax.inject.Singleton
@@ -44,7 +45,6 @@ data class SongSearchResult(
 class SongSearchRepository @Inject constructor(
     private val lrclibApi: LrclibApi,
     private val itunesApi: ItunesApi,
-    private val chineseConverter: ChineseConverter,
 ) {
 
     companion object {
@@ -58,10 +58,17 @@ class SongSearchRepository @Inject constructor(
     /**
      * 搜尋可練習的歌曲。
      *
+     * @param minLevel 使用者設定的挖空等級下限
+     * @param levelSource 等級／詞頻資料；決定「幾個填空」的數字
      * @return 只包含**確實能挖空**的歌（`blankCount > 0`）——
      *   純演奏曲或沒有合格歌詞的項目對四選一沒有意義。
      */
-    suspend fun search(artist: String, track: String): List<SongSearchResult> {
+    suspend fun search(
+        artist: String,
+        track: String,
+        minLevel: CefrLevel = CefrLevel.DEFAULT,
+        levelSource: WordLevelSource = WordLevelSource.None,
+    ): List<SongSearchResult> {
         val entries = lrclibApi.search(
             userAgent = LRCLIB_USER_AGENT,
             artistName = artist.trim().ifEmpty { null },
@@ -79,7 +86,7 @@ class SongSearchRepository @Inject constructor(
         val itunesTracks = fetchItunesTracks("$artist $track")
 
         return dedupe(
-            entries.map { toSearchResult(it, itunesTracks) },
+            entries.map { toSearchResult(it, itunesTracks, minLevel, levelSource) },
         ).filter { it.blankCount > 0 }
     }
 
@@ -98,6 +105,8 @@ class SongSearchRepository @Inject constructor(
     fun toSearchResult(
         entry: LrclibTrackDto,
         itunesTracks: List<ItunesTrackDto>,
+        minLevel: CefrLevel = CefrLevel.DEFAULT,
+        levelSource: WordLevelSource = WordLevelSource.None,
     ): SongSearchResult {
         val artist = NameMatcher.normalizeArtist(entry.artistName)
         val match = NameMatcher.pickBest(entry.trackName, artist, itunesTracks)
@@ -110,15 +119,23 @@ class SongSearchRepository @Inject constructor(
 
         return SongSearchResult(
             lrclibId = entry.id,
-            // 歌名與歌手通過簡繁轉換——LRCLIB 由社群貢獻，可能含簡體
-            title = chineseConverter.toTraditionalIfNeeded(entry.trackName),
-            artist = chineseConverter.toTraditionalIfNeeded(artist),
-            album = entry.albumName?.let { chineseConverter.toTraditionalIfNeeded(it) },
-            // LRCLIB 的 duration 單位是「秒」（浮點數），換成毫秒
-            durationMs = entry.duration?.let { Math.round(it * 1000) },
+            // iTunes 是**歌曲資訊的權威來源**：歌名、歌手、專輯、時長都以它為準，
+            // LRCLIB 只提供歌詞。LRCLIB 由社群貢獻，常出現 `Adele, Adele`、
+            // 大小寫不一、時長差幾秒的狀況。
+            title = match?.trackName ?: entry.trackName,
+            artist = match?.artistName?.let(NameMatcher::normalizeArtist) ?: artist,
+            album = match?.collectionName ?: entry.albumName,
+            // 時長優先取 iTunes 的 trackTimeMillis——YouTube 候選排序靠它，
+            // 它必須是**官方錄音室長度**，而不是歌詞檔自己的長度。
+            durationMs = match?.trackTimeMillis
+                ?: entry.duration?.let { Math.round(it * 1000) },
             coverUrl = NameMatcher.artworkUrlAtSize(match?.artworkUrl100),
             genre = NameMatcher.translateGenre(match?.primaryGenreName),
-            blankCount = FillChoiceBuilder.countBlankableLines(lines),
+            blankCount = FillChoiceBuilder.countBlankableLines(
+                lines,
+                minLevel = minLevel,
+                levelSource = levelSource,
+            ),
             lyricsFile = entry.lyricsfile,
             syncedLyrics = entry.syncedLyrics,
             plainLyrics = entry.plainLyrics,

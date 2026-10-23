@@ -1,7 +1,10 @@
 package com.antigravity.lyrian.domain.practice
 
+import com.antigravity.lyrian.data.lang.WordLevel
+import com.antigravity.lyrian.data.lang.WordLevelSource
 import com.antigravity.lyrian.domain.model.Attempt
 import com.antigravity.lyrian.domain.model.BlankDecision
+import com.antigravity.lyrian.domain.model.CefrLevel
 import com.antigravity.lyrian.domain.model.FillChoiceDataset
 import com.antigravity.lyrian.domain.model.FillChoiceQuestion
 import com.antigravity.lyrian.domain.model.LyricLine
@@ -58,14 +61,19 @@ object FillChoiceBuilder {
         "grace", "shine", "river", "cloud", "color", "dance", "quiet", "brave",
     )
 
-    /** 可挖空的候選單字，附帶在原文中的位置。 */
-    data class BlankCandidate(val word: String, val start: Int, val end: Int)
+    /** 可挖空的候選單字，附帶在原文中的位置與等級判定。 */
+    data class BlankCandidate(
+        val word: String,
+        val start: Int,
+        val end: Int,
+        val level: WordLevel,
+    )
 
     /**
      * 一行的掃描結果。
      *
      * @property candidates 通過過濾、可挖空的位置
-     * @property rejected 被等級表擋掉的候選（含等級來源），供偵錯輸出
+     * @property rejected 被等級表／詞頻表／等級門檻擋掉的候選（含原因），供偵錯輸出
      */
     data class LineScan(
         val candidates: List<BlankCandidate>,
@@ -86,10 +94,16 @@ object FillChoiceBuilder {
      * 掃描一行：分出可挖空的候選與被過濾掉的字。
      *
      * 過濾順序（擁有者指定）：**命中等級表 → 挖空前先過濾**。
+     * 判斷本身委派給 [BlankPolicy]——這裡只負責切字與記錄。
+     *
+     * @param minLevel 使用者設定的最低等級（預設 [CefrLevel.DEFAULT] = B1）
+     * @param levelSource 等級／詞頻資料；預設為空資料（等同關閉等級過濾，供測試用）
      */
     fun scanLine(
         text: String,
         minWordLength: Int = BLANK_MIN_WORD_LENGTH,
+        minLevel: CefrLevel = CefrLevel.DEFAULT,
+        levelSource: WordLevelSource = WordLevelSource.None,
     ): LineScan {
         val candidates = mutableListOf<BlankCandidate>()
         val rejected = mutableListOf<RejectedCandidate>()
@@ -100,21 +114,17 @@ object FillChoiceBuilder {
             // 太短的字連等級都不用查（a / am / oh）
             if (token.length < minWordLength) return@forEach
 
-            val level = CommonWordFilter.classify(token)
-            if (level.isCommon) {
-                rejected += RejectedCandidate(
+            when (val verdict = BlankPolicy.evaluate(token, minLevel, levelSource, minWordLength)) {
+                is BlankPolicy.Rejected -> rejected += RejectedCandidate(
                     word = token,
-                    levelSource = if (level.matchedForm != null) {
-                        "${level.sourceLabel}（${level.token}→${level.matchedForm}）"
-                    } else {
-                        level.sourceLabel
-                    },
+                    levelSource = verdict.reason,
                 )
-            } else {
-                candidates += BlankCandidate(
+
+                is BlankPolicy.Accepted -> candidates += BlankCandidate(
                     word = token,
                     start = match.range.first,
                     end = match.range.last + 1,
+                    level = verdict.level,
                 )
             }
         }
@@ -125,13 +135,16 @@ object FillChoiceBuilder {
     /**
      * 找出可挖空的候選單字。
      *
-     * 條件：長度 >= [minWordLength] **且**通過 [CommonWordFilter] 的等級過濾
-     * （Top 1000 高頻詞、代名詞、be/do/have、冠詞、介系詞、助動詞都會被排除）。
+     * 條件：長度 >= [minWordLength]、不在常見詞表與 BNC 前 2000 內、
+     * 且等級不低於 [minLevel]。
      */
     fun findBlankCandidates(
         text: String,
         minWordLength: Int = BLANK_MIN_WORD_LENGTH,
-    ): List<BlankCandidate> = scanLine(text, minWordLength).candidates
+        minLevel: CefrLevel = CefrLevel.DEFAULT,
+        levelSource: WordLevelSource = WordLevelSource.None,
+    ): List<BlankCandidate> =
+        scanLine(text, minWordLength, minLevel, levelSource).candidates
 
     /**
      * 把整首歌詞轉成題目集。
@@ -148,13 +161,15 @@ object FillChoiceBuilder {
         lines: List<LyricLine>,
         random: Random = Random.Default,
         minWordLength: Int = BLANK_MIN_WORD_LENGTH,
+        minLevel: CefrLevel = CefrLevel.DEFAULT,
+        levelSource: WordLevelSource = WordLevelSource.None,
     ): FillChoiceDataset {
         val questions = mutableListOf<FillChoiceQuestion>()
         val decisions = mutableListOf<BlankDecision>()
 
         // 把挖空結果**同時**套回每一行——這樣整首歌一開始就都是挖好的
         val blankedLines = lines.map { line ->
-            val scan = scanLine(line.text, minWordLength)
+            val scan = scanLine(line.text, minWordLength, minLevel, levelSource)
             if (scan.candidates.isEmpty()) {
                 // 過濾後沒有可挖的字：記錄下來，讓偵錯輸出能說明為什麼這行沒有題目
                 decisions += BlankDecision(
@@ -171,8 +186,9 @@ object FillChoiceBuilder {
             decisions += BlankDecision(
                 lineIndex = line.index,
                 chosenWord = picked.word,
-                // 被選中的字必然「非常見詞」，這裡記錄它的等級來源以便驗證
-                chosenLevelSource = CommonWordFilter.classify(picked.word).sourceLabel,
+                chosenLemma = picked.level.lemma,
+                chosenLevel = picked.level.level?.label,
+                chosenLevelSource = picked.level.source,
                 rejected = scan.rejected,
             )
 
@@ -209,7 +225,11 @@ object FillChoiceBuilder {
     fun countBlankableLines(
         lines: List<LyricLine>,
         minWordLength: Int = BLANK_MIN_WORD_LENGTH,
-    ): Int = lines.count { findBlankCandidates(it.text, minWordLength).isNotEmpty() }
+        minLevel: CefrLevel = CefrLevel.DEFAULT,
+        levelSource: WordLevelSource = WordLevelSource.None,
+    ): Int = lines.count {
+        findBlankCandidates(it.text, minWordLength, minLevel, levelSource).isNotEmpty()
+    }
 
     /**
      * 產生一題的 4 個選項：正解 + 3 個干擾項。

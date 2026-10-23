@@ -118,4 +118,58 @@
     <string name="wordbank_detail_meaning">字義</string>
     <string name="wordbank_detail_context">出現在歌詞中</string>
     <string name="wordbank_detail_no_data">查不到這個字的字典資料。</string>
+
+    <!-- 學習設定（模組 4） -->
+    <string name="settings_learning_level">挖空等級</string>
+    <string name="settings_learning_level_hint">只挖這個等級以上的字。等級越低，挖空的字越簡單、題目越多。</string>
+    <string name="settings_learning_level_current">目前：%1$s</string>
+
+    <!-- 單字詳情（模組 5） -->
+    <string name="wordbank_detail_pronounce">朗讀</string>
+    <string name="wordbank_detail_not_found">查無此詞</string>
+    <string name="wordbank_detail_not_found_hint">離線字典沒有收錄「%1$s」。可以改用朗讀猜讀音。</string>
+    <string name="wordbank_detail_level">等級</string>
+
+    <!-- 練習結果頁（模組 2） -->
+    <string name="result_title">這一輪完成了</string>
+    <string name="result_stat_blanks">挖空</string>
+    <string name="result_stat_correct">答對</string>
+    <string name="result_stat_wrong">答錯</string>
+    <string name="result_stat_accuracy">正確率</string>
+    <string name="result_stat_duration">用時</string>
+    <string name="result_wrong_title">錯題</string>
+    <string name="result_wrong_empty">這輪沒有答錯的字，保持下去。</string>
+    <string name="result_accent_title">值得學的表達</string>
+    <string name="result_accent_empty">AI 未啟用，這一區暫時沒有內容。</string>
+    <string name="result_extend_title">延伸詞彙</string>
+    <string name="result_extend_hint">這首歌裡沒被挖空、但等級在 %1$s 以上的字</string>
+    <string name="result_extend_empty">這首歌沒有其他符合等級的字。</string>
+    <string name="result_extend_more">展開其餘 %1$d 個</string>
+    <string name="result_extend_less">收合</string>
+    <string name="result_action_again">再練一次</string>
+    <string name="result_action_change_song">換一首</string>
+    <string name="result_action_wordbank">查看字庫</string>
+    <string name="result_duration_format">%1$d 分 %2$d 秒</string>
+    <string name="result_duration_seconds">%1$d 秒</string>
+
+    <!-- 播放器（模組 3） -->
+    <string name="player_searching">正在找官方錄音室版本…</string>
+    <string name="player_switch_version">換版本</string>
+    <string name="player_version_label">版本 %1$d / %2$d</string>
+    <string name="player_offset_title">歌詞微調</string>
+    <string name="player_offset_value">%1$s 秒</string>
+    <string name="player_offset_reset">歸零</string>
+    <string name="player_offset_earlier">歌詞提早</string>
+    <string name="player_offset_later">歌詞延後</string>
+    <string name="player_no_candidate">YouTube 上找不到這首歌，先以純歌詞練習。</string>
+    <string name="player_unavailable">這個版本無法播放（%1$s），換一個版本試試。</string>
+    <string name="player_error">播放器出了問題：%1$s</string>
+    <string name="player_loading">播放器載入中…</string>
+    <string name="player_embedded_hint">為了不擋廣告，播放器保持可見。</string>
+
+    <!-- AI（模組 6） -->
+    <string name="ai_enabled">啟用 AI 功能</string>
+    <string name="ai_enabled_hint">本輪只儲存設定，App 不會發出任何 AI 請求。</string>
+    <string name="ai_saved">已儲存</string>
+    <string name="ai_service_disabled">AI 未啟用</string>
 </resources>

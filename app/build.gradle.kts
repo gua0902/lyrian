@@ -111,20 +111,11 @@ dependencies {
     implementation(libs.androidx.datastore.preferences)
     implementation(libs.androidx.security.crypto)
 
-    // YouTube Music 音源（GPL-3.0，見 innertube/README.md）
-    implementation(project(":innertube"))
-
-    // 中文簡繁轉換：兩套並存，理由見 ChineseConverter 的類別註解
-    //  - opencc4j（Apache-2.0）：純 Java，JVM 單元測試與原生程式庫載入失敗時的退路
-    //  - android-opencc（MIT）：裝置上用原生 S2TWP，做台灣用語替換
-    implementation(libs.opencc4j)
-    implementation(libs.android.opencc)
-
-    // Media3 / ExoPlayer：播放 YouTube Music 的音訊串流
-    implementation(libs.androidx.media3.exoplayer)
-    implementation(libs.androidx.media3.common)
-    implementation(libs.androidx.media3.session)
-    implementation(libs.androidx.media3.datasource.okhttp)
+    // 音源：官方 YouTube IFrame Player（WebView）+ 公開搜尋頁解析，見 data/audio。
+    // 已移除的實作：
+    //  - innertube（z-huang/InnerTune，GPL-3.0）：內部 API，違反 YouTube 服務條款，
+    //    且 GPL 會傳染整個 App
+    //  - Media3 / ExoPlayer：不再自己播串流，時間軸改由 IFrame 提供
 
     // Test
     testImplementation(libs.junit)

@@ -20,6 +20,7 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.statusBars
+import androidx.compose.foundation.layout.navigationBars
 import androidx.compose.foundation.layout.windowInsetsPadding
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyListState
@@ -44,6 +45,7 @@ import androidx.compose.material3.Slider
 import androidx.compose.material3.SliderDefaults
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
@@ -64,14 +66,17 @@ import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.buildAnnotatedString
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.text.withStyle
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import android.webkit.WebView
 import androidx.hilt.navigation.compose.hiltViewModel
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import coil.compose.AsyncImage
 import coil.request.ImageRequest
 import com.antigravity.lyrian.R
+import com.antigravity.lyrian.data.settings.PlaybackOffsets
 import com.antigravity.lyrian.domain.model.ChoiceRecord
 import com.antigravity.lyrian.domain.model.LyricLine
 import kotlinx.coroutines.delay
@@ -102,6 +107,14 @@ private val PREVIOUS_LINE_PEEK = 48.dp
 
 /** 歌詞行距（仿 Apple Music 的寬鬆排版）。 */
 private val LYRIC_LINE_SPACING = 22.dp
+
+/**
+ * 內嵌播放器的寬度（高 = 寬 × 9/16）。
+ *
+ * 擁有者要求「內嵌在封面區域且保持可見，不可縮成 1x1 隱藏」——
+ * 所以它佔用的就是原本 48dp 封面縮圖的位置，只是放大到看得見的程度。
+ */
+private val PLAYER_WIDTH = 112.dp
 
 /** 非當前句的透明度。 */
 private const val LYRIC_DIM_ALPHA = 0.42f
@@ -149,6 +162,8 @@ private val FEEDBACK_WRONG = Color(0xFFFF9E9E)
 @Composable
 fun PracticeScreen(
     onBack: () -> Unit,
+    onOpenWordbank: () -> Unit = onBack,
+    onOpenWord: (String) -> Unit = {},
     viewModel: PracticeViewModel = hiltViewModel(),
 ) {
     val state by viewModel.uiState.collectAsStateWithLifecycle()
@@ -164,22 +179,27 @@ fun PracticeScreen(
                 modifier = Modifier.padding(innerPadding),
             )
 
-            state.isComplete -> CompleteState(
-                correct = state.correctCount,
-                total = state.total,
+            state.isComplete -> PracticeResultScreen(
+                state = state,
                 onReplay = viewModel::onReplay,
-                onBack = onBack,
+                onChangeSong = onBack,
+                onOpenWordbank = onOpenWordbank,
+                onOpenWord = onOpenWord,
                 modifier = Modifier.padding(innerPadding),
             )
 
             else -> PracticeContent(
                 state = state,
+                player = viewModel.player,
                 onBack = onBack,
                 onSelectOption = viewModel::onSelectOption,
                 onNext = viewModel::onNext,
                 onSeek = viewModel::onSeekTo,
                 onTogglePlayPause = viewModel::onTogglePlayPause,
                 onSeekPlayback = viewModel::onSeekPlayback,
+                onSwitchVersion = viewModel::onSwitchVersion,
+                onAdjustOffset = viewModel::onAdjustOffset,
+                onResetOffset = viewModel::onResetOffset,
                 modifier = Modifier.padding(innerPadding),
             )
         }
@@ -189,12 +209,16 @@ fun PracticeScreen(
 @Composable
 private fun PracticeContent(
     state: PracticeUiState,
+    player: com.antigravity.lyrian.data.audio.YouTubePlayerController,
     onBack: () -> Unit,
     onSelectOption: (String) -> Unit,
     onNext: () -> Unit,
     onSeek: (Int) -> Unit,
     onTogglePlayPause: () -> Unit,
     onSeekPlayback: (Long) -> Unit,
+    onSwitchVersion: () -> Unit,
+    onAdjustOffset: (Long) -> Unit,
+    onResetOffset: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
     val haptics = LocalHapticFeedback.current
@@ -226,6 +250,7 @@ private fun PracticeContent(
                 title = state.songTitle,
                 artist = state.artist,
                 coverUrl = state.coverUrl,
+                player = player,
                 questionProgress = if (state.total > 0) {
                     state.activeBlankIndex.toFloat() / state.total
                 } else {
@@ -242,8 +267,14 @@ private fun PracticeContent(
                     positionMs = state.playbackPositionMs,
                     durationMs = state.playbackDurationMs,
                     notice = state.playbackError ?: state.audioNotice,
+                    lyricOffsetMs = state.lyricOffsetMs,
+                    versionIndex = state.playerVersionIndex,
+                    versionCount = state.playerVersionCount,
                     onTogglePlayPause = onTogglePlayPause,
                     onSeekPlayback = onSeekPlayback,
+                    onSwitchVersion = onSwitchVersion,
+                    onAdjustOffset = onAdjustOffset,
+                    onResetOffset = onResetOffset,
                 ),
             )
 
@@ -327,8 +358,14 @@ private data class AudioControls(
     val positionMs: Long,
     val durationMs: Long?,
     val notice: String?,
+    val lyricOffsetMs: Long,
+    val versionIndex: Int,
+    val versionCount: Int,
     val onTogglePlayPause: () -> Unit,
     val onSeekPlayback: (Long) -> Unit,
+    val onSwitchVersion: () -> Unit,
+    val onAdjustOffset: (Long) -> Unit,
+    val onResetOffset: () -> Unit,
 )
 
 /**
@@ -346,6 +383,7 @@ private fun PlayerHeader(
     title: String,
     artist: String,
     coverUrl: String?,
+    player: com.antigravity.lyrian.data.audio.YouTubePlayerController,
     questionProgress: Float,
     total: Int,
     onSeek: (Int) -> Unit,
@@ -361,7 +399,7 @@ private fun PlayerHeader(
             Row(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .height(72.dp)
+                    .height(76.dp)
                     .padding(horizontal = 8.dp),
                 verticalAlignment = Alignment.CenterVertically,
             ) {
@@ -373,26 +411,38 @@ private fun PlayerHeader(
                     )
                 }
 
-                Box(
-                    modifier = Modifier
-                        .size(48.dp)
-                        .clip(RoundedCornerShape(12.dp))
-                        .background(Color.White.copy(alpha = 0.16f)),
-                    contentAlignment = Alignment.Center,
-                ) {
-                    if (coverUrl != null) {
-                        AsyncImage(
-                            model = coverUrl,
-                            contentDescription = null,
-                            contentScale = ContentScale.Crop,
-                            modifier = Modifier.fillMaxSize(),
-                        )
-                    } else {
-                        Icon(
-                            imageVector = Icons.Filled.MusicNote,
-                            contentDescription = null,
-                            tint = ON_IMAGE_SECONDARY,
-                        )
+                // 封面位置 = 播放器位置。
+                // 擁有者要求播放器「內嵌在封面區域且保持可見，不可縮成 1x1 隱藏」，
+                // 所以音源就緒時這裡直接放官方播放器，沒就緒時放封面縮圖。
+                if (audio.isReady) {
+                    YouTubePlayerBox(
+                        player = player,
+                        modifier = Modifier
+                            .size(width = PLAYER_WIDTH, height = PLAYER_WIDTH * (9f / 16f))
+                            .clip(RoundedCornerShape(10.dp)),
+                    )
+                } else {
+                    Box(
+                        modifier = Modifier
+                            .size(48.dp)
+                            .clip(RoundedCornerShape(12.dp))
+                            .background(Color.White.copy(alpha = 0.16f)),
+                        contentAlignment = Alignment.Center,
+                    ) {
+                        if (coverUrl != null) {
+                            AsyncImage(
+                                model = coverUrl,
+                                contentDescription = null,
+                                contentScale = ContentScale.Crop,
+                                modifier = Modifier.fillMaxSize(),
+                            )
+                        } else {
+                            Icon(
+                                imageVector = Icons.Filled.MusicNote,
+                                contentDescription = null,
+                                tint = ON_IMAGE_SECONDARY,
+                            )
+                        }
                     }
                 }
 
@@ -406,6 +456,7 @@ private fun PlayerHeader(
                         style = MaterialTheme.typography.titleMedium,
                         color = ON_IMAGE_PRIMARY,
                         maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
                     )
                     Text(
                         text = buildArtistLine(artist, audio),
@@ -420,6 +471,10 @@ private fun PlayerHeader(
 
             if (audio.isReady && audio.durationMs != null) {
                 PlaybackScrubber(audio = audio)
+            }
+
+            if (audio.isReady) {
+                LyricTuneBar(audio = audio)
             }
 
             if (audio.notice != null) {
@@ -448,6 +503,102 @@ private fun PlayerHeader(
                 )
             }
         }
+    }
+}
+
+/**
+ * 官方 YouTube 播放器。
+ *
+ * ⚠️ **必須保持可見**：擁有者明訂不可縮成 1x1 隱藏，也不可攔截廣告。
+ * 這裡給它 16:9 的真實大小，嵌在封面原本的位置。
+ */
+@Composable
+private fun YouTubePlayerBox(
+    player: com.antigravity.lyrian.data.audio.YouTubePlayerController,
+    modifier: Modifier = Modifier,
+) {
+    androidx.compose.ui.viewinterop.AndroidView(
+        modifier = modifier,
+        factory = { context ->
+            WebView(context).also { webView ->
+                // WebView 不能放在單例裡（會洩漏 Activity），所以由這裡建立、
+                // 交給控制器驅動；旋轉螢幕重建時控制器會把同一部影片載回來。
+                player.attach(webView)
+            }
+        },
+    )
+
+    androidx.compose.runtime.DisposableEffect(player) {
+        onDispose { player.detach() }
+    }
+}
+
+/**
+ * 歌詞微調列：`−0.5 秒` / 目前偏移 / `+0.5 秒`，以及「換版本」。
+ *
+ * 調整**立即生效**：下一次位置輪詢就會用新的 offset 找歌詞行（見 `PracticeViewModel`）。
+ */
+@Composable
+private fun LyricTuneBar(audio: AudioControls) {
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(horizontal = 8.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        TextButton(
+            onClick = { audio.onAdjustOffset(-PlaybackOffsets.STEP_MS) },
+            contentPadding = PaddingValues(horizontal = 8.dp),
+        ) {
+            Text("−0.5", color = ON_IMAGE_PRIMARY, style = MaterialTheme.typography.labelMedium)
+        }
+
+        Text(
+            text = stringResource(
+                R.string.player_offset_value,
+                formatOffsetSeconds(audio.lyricOffsetMs),
+            ),
+            style = MaterialTheme.typography.labelMedium,
+            color = ON_IMAGE_SECONDARY,
+            modifier = Modifier.clickable(onClick = audio.onResetOffset),
+        )
+
+        TextButton(
+            onClick = { audio.onAdjustOffset(PlaybackOffsets.STEP_MS) },
+            contentPadding = PaddingValues(horizontal = 8.dp),
+        ) {
+            Text("+0.5", color = ON_IMAGE_PRIMARY, style = MaterialTheme.typography.labelMedium)
+        }
+
+        Spacer(Modifier.weight(1f))
+
+        if (audio.versionCount > 1) {
+            TextButton(
+                onClick = audio.onSwitchVersion,
+                contentPadding = PaddingValues(horizontal = 12.dp),
+            ) {
+                Text(
+                    text = stringResource(R.string.player_switch_version),
+                    color = ON_IMAGE_PRIMARY,
+                    style = MaterialTheme.typography.labelMedium,
+                )
+                Text(
+                    text = " ${audio.versionIndex + 1}/${audio.versionCount}",
+                    color = ON_IMAGE_SECONDARY,
+                    style = MaterialTheme.typography.labelSmall,
+                )
+            }
+        }
+    }
+}
+
+/** 偏移顯示：`+1.5` / `0.0` / `−0.5`。 */
+private fun formatOffsetSeconds(offsetMs: Long): String {
+    val seconds = offsetMs / 1000.0
+    return when {
+        seconds > 0 -> "+%.1f".format(seconds)
+        seconds < 0 -> "−%.1f".format(-seconds)
+        else -> "0.0"
     }
 }
 
@@ -806,6 +957,8 @@ private fun BottomStats(current: Int, total: Int, percent: Int) {
     Row(
         modifier = Modifier
             .fillMaxWidth()
+            // 只有這裡需要導覽列內距：背景要畫到最底部，文字不能壓在系統手勢列上
+            .windowInsetsPadding(WindowInsets.navigationBars)
             .padding(horizontal = 20.dp, vertical = 12.dp),
         horizontalArrangement = Arrangement.SpaceBetween,
         verticalAlignment = Alignment.CenterVertically,
@@ -847,37 +1000,5 @@ private fun ErrorState(message: String, onBack: () -> Unit, modifier: Modifier =
         )
         Spacer(Modifier.height(24.dp))
         Button(onClick = onBack) { Text(stringResource(R.string.action_back)) }
-    }
-}
-
-@Composable
-private fun CompleteState(
-    correct: Int,
-    total: Int,
-    onReplay: () -> Unit,
-    onBack: () -> Unit,
-    modifier: Modifier = Modifier,
-) {
-    Column(
-        modifier = modifier
-            .fillMaxSize()
-            .padding(32.dp),
-        verticalArrangement = Arrangement.Center,
-        horizontalAlignment = Alignment.CenterHorizontally,
-    ) {
-        Text(
-            text = stringResource(R.string.practice_complete_title),
-            style = MaterialTheme.typography.headlineSmall,
-        )
-        Spacer(Modifier.height(8.dp))
-        Text(
-            text = stringResource(R.string.practice_complete_score, correct, total),
-            style = MaterialTheme.typography.bodyLarge,
-            color = MaterialTheme.colorScheme.onSurfaceVariant,
-        )
-        Spacer(Modifier.height(24.dp))
-        Button(onClick = onReplay) { Text(stringResource(R.string.practice_replay)) }
-        Spacer(Modifier.height(8.dp))
-        OutlinedButton(onClick = onBack) { Text(stringResource(R.string.practice_back_to_search)) }
     }
 }

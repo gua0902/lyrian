@@ -29,8 +29,6 @@ class SongSearchRepositoryTest {
                 limit: Int,
             ): ItunesSearchResponseDto = ItunesSearchResponseDto()
         },
-        // context = null ⇒ 走 opencc4j 退路，不需 Android 框架
-        chineseConverter = com.antigravity.lyrian.data.text.ChineseConverter(context = null),
     )
 
     /** 取自 LRCLIB `/api/search` 的實測形狀。 */

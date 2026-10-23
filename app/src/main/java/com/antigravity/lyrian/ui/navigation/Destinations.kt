@@ -69,6 +69,18 @@ object Routes {
 
     const val ARG_VOCAB_ID = "vocabId"
 
+    /**
+     * 只查字典、不經字庫的單字詳情。
+     *
+     * 結果頁的兩份字表（錯題、延伸詞彙）都是「當場查字」，那些字沒有
+     * `vocab` 資料列，所以不能用 [VOCAB_DETAIL]。
+     */
+    const val WORD_DETAIL = "word/{word}"
+
+    fun wordDetail(word: String) = "word/${android.net.Uri.encode(word)}"
+
+    const val ARG_WORD = "word"
+
     const val SETTINGS = "settings"
     const val SETTINGS_AI = "settings/ai"
     const val SETTINGS_APPEARANCE = "settings/appearance"

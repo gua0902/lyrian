@@ -12,14 +12,23 @@ import com.antigravity.lyrian.data.local.SongDao
 import com.antigravity.lyrian.data.local.SongEntity
 import com.antigravity.lyrian.data.local.VocabDao
 import com.antigravity.lyrian.data.active.PracticeSessionStore
-import com.antigravity.lyrian.data.audio.AudioPlayerController
-import com.antigravity.lyrian.data.audio.AudioSourceResolver
+import com.antigravity.lyrian.data.audio.YouTubeCandidateScorer
+import com.antigravity.lyrian.data.audio.YouTubePlayerController
+import com.antigravity.lyrian.data.audio.YouTubeWebSearch
+import com.antigravity.lyrian.data.dictionary.DictionaryRepository
+import com.antigravity.lyrian.data.dictionary.DictionaryResult
+import com.antigravity.lyrian.data.lang.LanguageData
+import com.antigravity.lyrian.data.lang.LanguageDataStore
 import com.antigravity.lyrian.data.lyrics.LyricsParser
+import com.antigravity.lyrian.data.settings.PlaybackOffsets
+import com.antigravity.lyrian.data.settings.UserSettings
+import com.antigravity.lyrian.domain.model.CefrLevel
 import com.antigravity.lyrian.domain.model.ChoiceRecord
 import com.antigravity.lyrian.domain.model.BlankDecision
 import com.antigravity.lyrian.domain.model.FillChoiceQuestion
 import com.antigravity.lyrian.domain.model.LyricLine
 import com.antigravity.lyrian.domain.model.PracticeModeId
+import com.antigravity.lyrian.domain.model.ResultWord
 import com.antigravity.lyrian.domain.practice.FillChoiceBuilder
 import com.antigravity.lyrian.ui.navigation.Routes
 import com.antigravity.lyrian.util.toDayKey
@@ -88,8 +97,7 @@ data class PracticeUiState(
      */
     val waitingForBlankIndex: Int? = null,
     /** 音源相關的提示（例如「找不到對應的錄音版本」）。 */
-    val audioNotice: String? = null,
-    /**
+    val audioNotice: String? = null,    /**
      * 播放器本身回報的錯誤。
      *
      * 與 [audioNotice] **分開存放**：播放器是單例，它的錯誤會一直留在狀態裡，
@@ -97,6 +105,39 @@ data class PracticeUiState(
      * 這個欄位每次載入新歌時都會清空。
      */
     val playbackError: String? = null,
+
+    /** 使用者為這首歌設定的歌詞偏移（毫秒）。正值＝歌詞延後。 */
+    val lyricOffsetMs: Long = 0L,
+    /** 目前播放的是候選清單中的第幾個版本（0-based）。 */
+    val playerVersionIndex: Int = 0,
+    /** 候選版本總數；<= 1 時不顯示「換版本」。 */
+    val playerVersionCount: Int = 0,
+
+    // ---------- 結果頁（模組 2）----------
+
+    /** 這一輪開始的時間（第一次組完題）。用來算「用時」。 */
+    val sessionStartedAtMs: Long = 0L,
+    /** 用時（毫秒）；尚未完成時為 null。 */
+    val elapsedMs: Long? = null,
+    /** 答錯的題目（正解 + 詞性 + 釋義）。 */
+    val wrongWords: List<ResultWord> = emptyList(),
+    /**
+     * 延伸詞彙：本首歌中**沒被挖空**、等級高於設定值的字。
+     *
+     * 依原形去重、等級高者優先，最多 [EXTENSION_LIMIT] 條。
+     */
+    val extensionWords: List<ResultWord> = emptyList(),
+    /** 原始（未查字典）的延伸詞彙，字典查完後才填 [extensionWords]。 */
+    val extensionCandidates: List<String> = emptyList(),
+    /** 這一輪使用的挖空等級門檻（結果頁要顯示「高於 B1」這種說明）。 */
+    val minLevel: CefrLevel = CefrLevel.DEFAULT,
+    /**
+     * AI 是否已啟用。
+     *
+     * 本輪 AI 一律是「未啟用」（模組 6 只做設定儲存），因此結果頁的
+     * 「值得學的表達」區塊整塊隱藏——擁有者指定 AI 未啟用時不顯示空殼。
+     */
+    val aiConfigured: Boolean = false,
 ) {
     val currentQuestion: FillChoiceQuestion?
         get() = questions.getOrNull(activeBlankIndex)
@@ -104,9 +145,15 @@ data class PracticeUiState(
     val currentRecord: ChoiceRecord?
         get() = currentQuestion?.let { selections[it.blankIndex] }
 
-    /** 全部答完 */
+    /**
+     * 全部答完。
+     *
+     * ⚠️ 判斷依據是**答了幾題**，不是 [activeBlankIndex]。
+     * 歌曲驅動時題目軸由播放時間決定，最後一句唱完之後 index 不會再增加——
+     * 用 index 判斷的話，跟著歌唱歌永遠不會「完成」，也就永遠看不到結果頁。
+     */
     val isComplete: Boolean
-        get() = questions.isNotEmpty() && activeBlankIndex >= questions.size
+        get() = questions.isNotEmpty() && selections.size >= questions.size
 
     val correctCount: Int get() = selections.values.count { it.isCorrect }
 
@@ -162,6 +209,9 @@ private const val FADE_OUT_MS = 300L
 /** 因為等作答而暫停時顯示的提示。 */
 private const val WAITING_FOR_ANSWER = "已暫停，補上這句的填空就會繼續播放。"
 
+/** 結果頁的延伸詞彙上限（擁有者指定最多 20 條）。 */
+private const val EXTENSION_LIMIT = 20
+
 private const val TAG = "LyrianPractice"
 
 /** 歌曲的基本資訊。與歌詞來源分開，因為兩層退路取到的方式不同。 */
@@ -201,8 +251,12 @@ class PracticeViewModel @Inject constructor(
     private val attemptDao: AttemptDao,
     private val vocabDao: VocabDao,
     private val dailyStatDao: DailyStatDao,
-    private val audioResolver: AudioSourceResolver,
-    val player: AudioPlayerController,
+    private val youTubeSearch: YouTubeWebSearch,
+    private val playbackOffsets: PlaybackOffsets,
+    private val languageData: LanguageDataStore,
+    private val userSettings: UserSettings,
+    private val dictionary: DictionaryRepository,
+    val player: YouTubePlayerController,
     savedStateHandle: SavedStateHandle,
 ) : ViewModel() {
 
@@ -226,14 +280,17 @@ class PracticeViewModel @Inject constructor(
 
     init {
         val songId = savedStateHandle.get<String>(Routes.ARG_SONG_ID)?.toLongOrNull()
-        load(songId)
+        viewModelScope.launch { load(songId) }
         observePlayback()
     }
 
     // ---------- 音訊 ----------
 
-    /** 是否已經解析過音源（避免每次按播放都重打 YouTube）。 */
+    /** 是否已經搜尋過音源（避免每次按播放都重打 YouTube）。 */
     private var audioResolved = false
+
+    /** 排序後的候選版本；「換版本」就是換這份清單的索引。 */
+    private var candidates: List<YouTubeCandidateScorer.Scored> = emptyList()
 
     /**
      * 「上一句沒作答就暫停」的計時器。
@@ -260,19 +317,28 @@ class PracticeViewModel @Inject constructor(
                         playbackError = playback.error,
                     )
                 }
+
+                // 不允許嵌入是最常見的失敗（版權方關掉了嵌入）。
+                // 這時自動換下一個候選，而不是叫使用者自己想辦法。
+                if (playback.error != null && playback.error.contains("嵌入")) {
+                    onSwitchVersion(auto = true)
+                }
             }
         }
 
-        // 播放中才輪詢位置。Media3 沒有「位置變化」的 callback
-        // （位置是連續值，全部回報會太吵），因此以固定間隔取樣。
+        // 播放中才輪詢位置。
         //
         // ⚠️ **暫停時不更新位置**——這正是「暫停期間歌詞時間軸同步凍結」的實作：
         // 不取樣，`singingLineIndex` 就不會前進。
+        //
+        // ⚠️ 位置要加上**使用者微調的 offset** 才拿去比對歌詞時間戳；
+        // 這是 offset 唯一的作用點，所以「調整立即生效」。
         viewModelScope.launch {
             while (true) {
                 if (_uiState.value.isPlaying) {
                     val position = player.currentPositionMs()
-                    val lineIndex = lineIndexAt(position)
+                    val lyricPosition = position + _uiState.value.lyricOffsetMs
+                    val lineIndex = lineIndexAt(lyricPosition)
                     val previousLine = _uiState.value.singingLineIndex
 
                     _uiState.update {
@@ -335,7 +401,8 @@ class PracticeViewModel @Inject constructor(
                 )
             }
             // 0.3 秒淡出後才 pause，不是硬切
-            player.fadeOutAndPause(FADE_OUT_MS)
+            player.fadeOut(FADE_OUT_MS)
+            player.pause()
         }
     }
 
@@ -351,6 +418,11 @@ class PracticeViewModel @Inject constructor(
      * ⚠️ **時長不符時不硬播**：見 `AudioTrackMatcher`。若挑到的版本
      * 與 LRCLIB 的時間戳明顯不是同一個錄音，硬播只會讓歌詞整首錯位。
      */
+    /**
+     * 找音源：用「歌手 + 歌名」搜 YouTube，排序後取最佳候選。
+     *
+     * 只做一次（[audioResolved]）；換版本會走 [onSwitchVersion]，不會重新搜尋。
+     */
     fun prepareAudio() {
         if (audioResolved || _uiState.value.isAudioLoading) return
         val head = songHead ?: return
@@ -361,56 +433,105 @@ class PracticeViewModel @Inject constructor(
         }
 
         viewModelScope.launch {
-            val resolved = audioResolver.resolve(
-                title = head.title,
-                artist = head.artist,
+            val query = "${head.artist} ${head.title}".trim()
+            val videos = youTubeSearch.search(query)
+
+            if (videos.isEmpty()) {
+                _uiState.update {
+                    it.copy(isAudioLoading = false, audioNotice = NO_AUDIO_MATCH)
+                }
+                return@launch
+            }
+
+            val ranked = YouTubeCandidateScorer.rank(
+                candidates = videos,
+                expectedTitle = head.title,
+                expectedArtist = head.artist,
                 expectedDurationMs = head.durationMs,
             )
 
-            when (resolved) {
-                is AudioSourceResolver.Result.Failed -> {
-                    _uiState.update {
-                        it.copy(
-                            isAudioLoading = false,
-                            audioNotice = describeAudioFailure(resolved.failure),
-                        )
-                    }
+            if (ranked.isEmpty()) {
+                _uiState.update {
+                    it.copy(isAudioLoading = false, audioNotice = NO_AUDIO_MATCH)
                 }
-
-                is AudioSourceResolver.Result.Ok -> {
-                    val ok = resolved.resolved
-                    player.prepare(ok.stream.url)
-
-                    _uiState.update {
-                        it.copy(
-                            isAudioLoading = false,
-                            isAudioReady = true,
-                            audioNotice = if (ok.isConfident) null else AUDIO_MAY_NOT_ALIGN,
-                        )
-                    }
-                }
+                return@launch
             }
+
+            candidates = ranked
+            playCandidate(index = 0)
+        }
+    }
+
+    /** 播放候選清單中的第 [index] 個版本。 */
+    private fun playCandidate(index: Int) {
+        val list = candidates
+        val chosen = list.getOrNull(index)
+        if (chosen == null) {
+            _uiState.update { it.copy(isAudioLoading = false, audioNotice = NO_AUDIO_MATCH) }
+            return
+        }
+
+        player.load(videoId = chosen.video.videoId, startAtMs = 0L, autoPlay = false)
+
+        _uiState.update {
+            it.copy(
+                isAudioLoading = false,
+                isAudioReady = true,
+                playerVersionIndex = index,
+                playerVersionCount = list.size,
+                audioNotice = if (chosen.isConfident) {
+                    null
+                } else {
+                    AUDIO_MAY_NOT_ALIGN
+                },
+                playbackError = null,
+            )
         }
     }
 
     /**
-     * 把音源失敗翻成**可行動**的訊息。
+     * 換下一個候選版本。
      *
-     * 三種失敗刻意講不同的話，因為**使用者的下一步不一樣**，
-     * 而且回報問題時能直接指出是哪一段壞掉：
-     *
-     * | 訊息 | 壞在哪 | 使用者該做什麼 |
-     * |---|---|---|
-     * | 找不到對應的錄音版本 | YouTube 搜尋配對不到 | 換一首歌 |
-     * | 這個版本無法播放 | `player` 回非 OK（地區／年齡限制） | 換一首歌 |
-     * | 音源服務暫時無法使用 | 連線或 Piped 失敗 | 稍後再試 |
+     * @param auto true 表示是「播放器回報不能嵌入」時自動換的，不再顯示提示
      */
-    private fun describeAudioFailure(failure: AudioSourceResolver.Failure): String = when (failure) {
-        is AudioSourceResolver.Failure.NoCandidate -> NO_AUDIO_MATCH
-        is AudioSourceResolver.Failure.Unavailable ->
-            "YouTube 上這個版本無法播放（${failure.reason}），只能純歌詞練習。"
-        is AudioSourceResolver.Failure.Error ->
-            "音源服務暫時無法使用（${failure.message}），只能純歌詞練習。"
+    fun onSwitchVersion(auto: Boolean = false) {
+        val list = candidates
+        if (list.size <= 1) return
+
+        val next = (_uiState.value.playerVersionIndex + 1) % list.size
+        playCandidate(next)
+
+        if (!auto) {
+            _uiState.update { it.copy(audioNotice = null) }
+        }
+    }
+
+    /**
+     * 微調歌詞偏移。**調整立即生效**：下一次位置輪詢就套用新的 offset。
+     *
+     * @param deltaMs 正數＝歌詞延後（歌聲比歌詞早）
+     */
+    fun onAdjustOffset(deltaMs: Long) {
+        val head = songHead ?: return
+        val next = (_uiState.value.lyricOffsetMs + deltaMs)
+            .coerceIn(-PlaybackOffsets.MAX_OFFSET_MS, PlaybackOffsets.MAX_OFFSET_MS)
+
+        playbackOffsets.setOffsetMs(head.songId, next)
+
+        // 立即用新 offset 重算「正在唱哪一行」，不必等下一次輪詢
+        val lyricPosition = player.currentPositionMs() + next
+        _uiState.update {
+            it.copy(
+                lyricOffsetMs = next,
+                singingLineIndex = lineIndexAt(lyricPosition) ?: it.singingLineIndex,
+            )
+        }
+    }
+
+    fun onResetOffset() {
+        val head = songHead ?: return
+        playbackOffsets.setOffsetMs(head.songId, 0L)
+        _uiState.update { it.copy(lyricOffsetMs = 0L) }
     }
 
     /**
@@ -460,19 +581,21 @@ class PracticeViewModel @Inject constructor(
 
     override fun onCleared() {
         super.onCleared()
-        // 使用者真的離開練習頁（不是旋轉）→ 停掉音樂並釋放原生解碼器。
-        //
-        // ⚠️ 這裡是唯一正確的釋放點：ViewModel 在**設定變更**時不會被清除，
-        // 所以旋轉螢幕時音樂不中斷；只有離開這個頁面才會走到這裡。
+        // 使用者真的離開練習頁（不是旋轉）→ 停掉播放。
+        // WebView 本身由畫面的 DisposableEffect 解除綁定（見 PracticeScreen）。
         player.stop()
-        player.release()
     }
 
-    private fun load(songId: Long?) {
+    private suspend fun load(songId: Long?) {
         if (songId == null) {
             failWith(ERROR_NO_SESSION)
             return
         }
+
+        // 語言資料（等級／原形／詞頻）約 6 萬筆，第一次載入要解析 0.9 MB，
+        // 因此在 IO 執行緒完成後才組題——否則第一次進練習頁會掉一格畫面。
+        val language = languageData.get()
+        val minLevel = userSettings.minLevelValue
 
         // 第 1 層：記憶體中的 session（涵蓋設定變更／旋轉螢幕）。
         // 用 get() 而非已移除的 take()——見 PracticeSessionStore 的類別註解。
@@ -492,19 +615,19 @@ class PracticeViewModel @Inject constructor(
                         plainLyrics = session.plainLyrics,
                     ),
                 ),
+                language = language,
+                minLevel = minLevel,
             )
             return
         }
 
         // 第 2 層：程序被系統回收後，從 Room 快取取回。
         // 這條路徑需要第 1 次作答時寫入的 song / lyric_line（見 ensureSongPersisted）。
-        viewModelScope.launch {
-            val restored = restoreFromCache(songId)
-            if (restored != null) {
-                applySource(restored)
-            } else {
-                failWith(ERROR_NO_SESSION)
-            }
+        val restored = restoreFromCache(songId)
+        if (restored != null) {
+            applySource(restored, language, minLevel)
+        } else {
+            failWith(ERROR_NO_SESSION)
         }
     }
 
@@ -544,20 +667,27 @@ class PracticeViewModel @Inject constructor(
     }.getOrNull()
 
     /** 把一份歌詞來源轉成 UI 狀態。兩條來源路徑共用，確保行為一致。 */
-    private fun applySource(source: SongSource) {
+    private fun applySource(
+        source: SongSource,
+        language: LanguageData,
+        minLevel: com.antigravity.lyrian.domain.model.CefrLevel,
+    ) {
         songHead = source.head
 
         // 播放器是單例，可能還留著上一首歌的狀態 → 每次都清乾淨
         autoPauseJob?.cancel()
         player.stop()
         audioResolved = false
+        candidates = emptyList()
 
         val dataset = FillChoiceBuilder.buildDataset(
             source.lines,
             randomFor(source.head.songId),
+            minLevel = minLevel,
+            levelSource = language,
         )
 
-        logBlankDecisions(dataset.debug)
+        logBlankDecisions(dataset.debug, minLevel)
 
         if (dataset.questions.isEmpty()) {
             _uiState.update {
@@ -599,8 +729,66 @@ class PracticeViewModel @Inject constructor(
                 singingLineIndex = null,
                 waitingForBlankIndex = null,
                 playbackPositionMs = 0L,
+                // 每首歌有自己的歌詞偏移（存在本地，下次進來仍然有效）
+                lyricOffsetMs = playbackOffsets.offsetMs(source.head.songId),
+                playerVersionIndex = 0,
+                playerVersionCount = 0,
+                isAudioReady = false,
+                isAudioLoading = false,
+                // 結果頁的統計只存在這一次的 session，不落庫
+                sessionStartedAtMs = System.currentTimeMillis(),
+                elapsedMs = null,
+                wrongWords = emptyList(),
+                extensionWords = emptyList(),
+                minLevel = minLevel,
+                extensionCandidates = computeExtensionCandidates(
+                    lines = source.lines,
+                    minLevel = minLevel,
+                    language = language,
+                    blanked = allAnswers.map { it.lowercase() }.toSet(),
+                ),
             )
         }
+    }
+
+    /**
+     * 找出「本首歌中沒被挖空、等級高於設定值」的字。
+     *
+     * 依擁有者指定：**依原形去重、等級高者優先、最多 20 條**。
+     * 「高於設定值」是嚴格大於，所以從下一個等級開始掃——這樣也自然排除了
+     * 已經挖空的字（那些是 >= 門檻）。
+     */
+    private fun computeExtensionCandidates(
+        lines: List<LyricLine>,
+        minLevel: CefrLevel,
+        language: LanguageData,
+        blanked: Set<String>,
+    ): List<String> {
+        val floor = CefrLevel.entries.getOrNull(minLevel.ordinal + 1) ?: CefrLevel.C2
+
+        // lemma → 該原形目前為止看到的最高等級（排序用）
+        val byLemma = LinkedHashMap<String, Int>()
+
+        lines.forEach { line ->
+            FillChoiceBuilder
+                .scanLine(line.text, minLevel = floor, levelSource = language)
+                .candidates
+                .filterNot { it.word.lowercase() in blanked }
+                .forEach { candidate ->
+                    val lemma = candidate.level.lemma
+                    val rank = candidate.level.treatAsLevel.ordinal
+                    val previous = byLemma[lemma]
+                    if (previous == null || rank > previous) byLemma[lemma] = rank
+                }
+        }
+
+        return byLemma.entries
+            .sortedWith(
+                compareByDescending<Map.Entry<String, Int>> { it.value }
+                    .thenBy { it.key },
+            )
+            .map { it.key }
+            .take(EXTENSION_LIMIT)
     }
 
     private fun failWith(message: String) {
@@ -608,17 +796,19 @@ class PracticeViewModel @Inject constructor(
     }
 
     /**
-     * 印出「挖空的詞 + 其等級來源」，讓擁有者能直接驗證過濾是否有效。
+     * 印出「挖空的詞 + 原形 + 等級 + 判定來源」，讓擁有者能直接驗證過濾是否有效。
      *
      * 輸出長這樣（可在 logcat 用 `LyrianPractice` 過濾）：
      * ```
-     * D/LyrianPractice: 挖空 L3: silhouette | 等級來源: 非常見詞（通過過濾）
-     * D/LyrianPractice:   L3 過濾: love(Top 1000 高頻詞), it's(代名詞（it's→it）)
+     * D/LyrianPractice: 挖空統計：42 行 → 18 題（門檻 B1）；過濾掉 96 個字
+     * D/LyrianPractice: 挖空 L3: silhouettes | 原形: silhouette | 等級: C1 | 來源: Octanove C1/C2
+     * D/LyrianPractice:   L3 過濾: love(Top 1000 高頻詞), it's(代名詞（it's→it）), time(CEFR-J A2（低於 B1）)
      * ```
-     *
-     * 同時會印出總計，方便一眼看出這首歌被過濾掉多少字。
      */
-    private fun logBlankDecisions(decisions: List<BlankDecision>) {
+    private fun logBlankDecisions(
+        decisions: List<BlankDecision>,
+        minLevel: com.antigravity.lyrian.domain.model.CefrLevel,
+    ) {
         if (decisions.isEmpty()) return
 
         val blanks = decisions.count { it.chosenWord != null }
@@ -626,14 +816,16 @@ class PracticeViewModel @Inject constructor(
 
         android.util.Log.d(
             TAG,
-            "挖空統計：${decisions.size} 行 → $blanks 題；過濾掉 $filtered 個常見詞",
+            "挖空統計：${decisions.size} 行 → $blanks 題（門檻 ${minLevel.label}）；過濾掉 $filtered 個字",
         )
 
         decisions.forEach { decision ->
             if (decision.chosenWord != null) {
                 android.util.Log.d(
                     TAG,
-                    "挖空 L${decision.lineIndex}: ${decision.chosenWord} | 等級來源: ${decision.chosenLevelSource}",
+                    "挖空 L${decision.lineIndex}: ${decision.chosenWord} | 原形: " +
+                        "${decision.chosenLemma ?: decision.chosenWord} | 等級: " +
+                        "${decision.chosenLevel ?: "未收錄"} | 來源: ${decision.chosenLevelSource}",
                 )
             } else {
                 android.util.Log.d(TAG, "挖空 L${decision.lineIndex}: （無合格單字）")
@@ -679,7 +871,51 @@ class PracticeViewModel @Inject constructor(
             _uiState.update {
                 it.copy(waitingForBlankIndex = null, audioNotice = null)
             }
-            viewModelScope.launch { player.fadeInAndPlay(FADE_OUT_MS) }
+            viewModelScope.launch {
+                player.fadeIn(FADE_OUT_MS)
+                player.play()
+            }
+        }
+
+        finishIfComplete()
+    }
+
+    /**
+     * 全部答完時，算出結果頁要的統計與兩份字表。
+     *
+     * 「用時」只存在 session 狀態裡（擁有者指定不新增資料表）；
+     * 字典查詢是離線資產，查 20~30 個字只是一連串雜湊查表。
+     */
+    private fun finishIfComplete() {
+        val state = _uiState.value
+        if (state.elapsedMs != null) return
+        if (state.questions.isEmpty() || state.selections.size < state.questions.size) return
+
+        val elapsed = (System.currentTimeMillis() - state.sessionStartedAtMs).coerceAtLeast(0L)
+        _uiState.update { it.copy(elapsedMs = elapsed) }
+
+        viewModelScope.launch {
+            val wrong = state.questions
+                .filter { question -> state.selections[question.blankIndex]?.isCorrect == false }
+                .map { toResultWord(it.answer) }
+
+            val extension = state.extensionCandidates.map { toResultWord(it) }
+
+            _uiState.update { it.copy(wrongWords = wrong, extensionWords = extension) }
+        }
+    }
+
+    /** 查一個字的詞性與中文釋義；查不到時只留單字本身。 */
+    private suspend fun toResultWord(word: String): ResultWord {
+        val hit = dictionary.lookup(word)
+        return if (hit is DictionaryResult.Found) {
+            ResultWord(
+                word = word,
+                partOfSpeech = hit.entry.partOfSpeech,
+                meaning = hit.entry.translation,
+            )
+        } else {
+            ResultWord(word = word)
         }
     }
 
@@ -720,7 +956,8 @@ class PracticeViewModel @Inject constructor(
         // 控制項會看起來完全失效。
         val question = state.questions.getOrNull(clamped)
         if (state.isAudioReady && question != null) {
-            onSeekPlayback(question.startMs)
+            // 歌詞位置 = 播放位置 + offset，所以跳回歌詞時間要反過來扣掉 offset
+            onSeekPlayback((question.startMs - state.lyricOffsetMs).coerceAtLeast(0L))
         }
     }
 
@@ -737,6 +974,11 @@ class PracticeViewModel @Inject constructor(
                 options = optionsByBlank[0].orEmpty(),
                 waitingForBlankIndex = null,
                 singingLineIndex = null,
+                // 結果頁的統計歸零重算（延伸詞彙不必重查，字是一樣的）
+                sessionStartedAtMs = System.currentTimeMillis(),
+                elapsedMs = null,
+                wrongWords = emptyList(),
+                extensionWords = emptyList(),
             )
         }
 

@@ -23,22 +23,12 @@ annotation class LrclibRetrofit
 @Retention(AnnotationRetention.BINARY)
 annotation class ItunesRetrofit
 
-@Qualifier
-@Retention(AnnotationRetention.BINARY)
-annotation class DictionaryRetrofit
-
-@Qualifier
-@Retention(AnnotationRetention.BINARY)
-annotation class WiktionaryRetrofit
-
 @Module
 @InstallIn(SingletonComponent::class)
 object NetworkModule {
 
     private const val LRCLIB_BASE_URL = "https://lrclib.net/"
     private const val ITUNES_BASE_URL = "https://itunes.apple.com/"
-    private const val DICTIONARY_BASE_URL = "https://freedictionaryapi.com/"
-    private const val WIKTIONARY_BASE_URL = "https://en.wiktionary.org/"
 
     @Provides
     @Singleton
@@ -90,18 +80,6 @@ object NetworkModule {
 
     @Provides
     @Singleton
-    @DictionaryRetrofit
-    fun provideDictionaryRetrofit(client: OkHttpClient, json: Json): Retrofit =
-        buildRetrofit(DICTIONARY_BASE_URL, client, json)
-
-    @Provides
-    @Singleton
-    @WiktionaryRetrofit
-    fun provideWiktionaryRetrofit(client: OkHttpClient, json: Json): Retrofit =
-        buildRetrofit(WIKTIONARY_BASE_URL, client, json)
-
-    @Provides
-    @Singleton
     fun provideLrclibApi(@LrclibRetrofit retrofit: Retrofit): LrclibApi =
         retrofit.create(LrclibApi::class.java)
 
@@ -109,14 +87,4 @@ object NetworkModule {
     @Singleton
     fun provideItunesApi(@ItunesRetrofit retrofit: Retrofit): ItunesApi =
         retrofit.create(ItunesApi::class.java)
-
-    @Provides
-    @Singleton
-    fun provideFreeDictionaryApi(@DictionaryRetrofit retrofit: Retrofit): FreeDictionaryApi =
-        retrofit.create(FreeDictionaryApi::class.java)
-
-    @Provides
-    @Singleton
-    fun provideWiktionaryApi(@WiktionaryRetrofit retrofit: Retrofit): WiktionaryApi =
-        retrofit.create(WiktionaryApi::class.java)
 }

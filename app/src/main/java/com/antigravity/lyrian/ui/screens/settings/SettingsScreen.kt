@@ -35,14 +35,15 @@ import com.antigravity.lyrian.R
 /**
  * 設定頁（PRD v2 的六類）。
  *
- * 目前只有「AI 與內容」可進入，其餘顯示「即將推出」——
- * **明確標示而非隱藏**，讓使用者知道有哪些設定存在。
+ * 「學習與複習」現在可以進入（挖空等級，模組 4）；「AI 與內容」可儲存 BYOK 設定。
+ * 其餘顯示「即將推出」——**明確標示而非隱藏**，讓使用者知道有哪些設定存在。
  */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun SettingsScreen(
     onBack: () -> Unit,
     onOpenAiSettings: () -> Unit,
+    onOpenLearningSettings: () -> Unit,
 ) {
     Scaffold(
         topBar = {
@@ -80,8 +81,9 @@ fun SettingsScreen(
             SettingRow(
                 icon = Icons.Filled.School,
                 title = stringResource(R.string.settings_learning),
-                subtitle = stringResource(R.string.settings_coming_soon),
-                enabled = false,
+                subtitle = stringResource(R.string.settings_learning_level),
+                enabled = true,
+                onClick = onOpenLearningSettings,
             )
             SettingRow(
                 icon = Icons.Filled.VpnKey,

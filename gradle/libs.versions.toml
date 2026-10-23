@@ -22,9 +22,6 @@ coroutinesTest = "1.9.0"
 turbine = "1.2.0"
 mockk = "1.13.13"
 materialIconsExtended = "1.7.6"
-opencc4j = "1.6.2"
-androidOpencc = "1.2.0"
-media3 = "1.11.1"
 
 [libraries]
 androidx-core-ktx = { group = "androidx.core", name = "core-ktx", version.ref = "coreKtx" }
@@ -71,22 +68,11 @@ coil-compose = { group = "io.coil-kt", name = "coil-compose", version.ref = "coi
 androidx-datastore-preferences = { group = "androidx.datastore", name = "datastore-preferences", version.ref = "datastore" }
 androidx-security-crypto = { group = "androidx.security", name = "security-crypto", version.ref = "securityCrypto" }
 
-# 中文簡繁轉換（Apache-2.0）。含字典資料約 2.7 MB
-# jieba-analysis 是 optional，Gradle 不會拉進來（那是分詞用的，純轉換不需要）
-opencc4j = { group = "com.github.houbb", name = "opencc4j", version.ref = "opencc4j" }
-
-# OpenCC 原生版（MIT），提供 opencc4j 沒有的 S2TWP（台灣標準字 + 台灣用語）。
-# 來源是 JitPack：com.github.qichuan:android-opencc，需在 settings.gradle.kts 加 jitpack.io。
-# 內含 libChineseConverter.so（4 個 ABI，約 4.2 MB）與 openccdata 字典（約 1.1 MB）。
-android-opencc = { group = "com.github.qichuan", name = "android-opencc", version.ref = "androidOpencc" }
-
-# Media3 / ExoPlayer（Apache-2.0）。播放 YouTube Music 的 128kbps 音訊串流。
-# 版本以 Google Maven 的實際最新穩定版為準（2026-09 為 1.11.1），
-# **不要憑記憶寫版本**——Media3 的 API 每個版本都可能動。
-androidx-media3-exoplayer = { group = "androidx.media3", name = "media3-exoplayer", version.ref = "media3" }
-androidx-media3-common = { group = "androidx.media3", name = "media3-common", version.ref = "media3" }
-androidx-media3-session = { group = "androidx.media3", name = "media3-session", version.ref = "media3" }
-androidx-media3-datasource-okhttp = { group = "androidx.media3", name = "media3-datasource-okhttp", version.ref = "media3" }
+# 中文簡繁轉換已移除：釋義改由離線字典直接提供繁體中文（tools/build_assets.py
+# 在產生資產時就轉好），App 執行期不需要 OpenCC，也就不需要 JitPack。
+#
+# Media3 / ExoPlayer 也已移除：音源改用官方 YouTube IFrame Player，
+# 不再自己解析串流位址。
 
 # Test
 junit = { group = "junit", name = "junit", version.ref = "junit" }

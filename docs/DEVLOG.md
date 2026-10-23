@@ -983,6 +983,185 @@ D/LyrianPractice:   L5 過濾: I(代名詞), in(介系詞), about(介系詞), wh
 - Android 12 以下的模糊是用「極小縮圖放大」近似，效果比真正的
   RenderEffect 粗糙，需要在實機上確認可接受度。
 
+---
+
+## TASK-14：任務書七個模組（模組 0–6）
+
+擁有者給了一份 7 模組的任務書，明訂「逐條實作，不要新增其他功能」。
+下面照模組順序記錄**實際採用的路線、失敗的嘗試、量到的數字**。
+
+### 模組 0：前置清理
+
+| 刪除 | 原本用途 | 為什麼可以刪 |
+|---|---|---|
+| `data/dictionary/DictionaryService.kt` | 併 freedictionaryapi + Wiktionary 的線上查詢 | 模組 5 改成離線字典（繁中釋義）|
+| `data/remote/DictionaryApis.kt` | 上面兩個 API 的 DTO | 同上 |
+| `data/text/ChineseConverter.kt` + 2 個測試 | opencc4j + android-opencc 的簡繁轉換 | 釋義在**產生資產時**就轉成繁體，執行期不需要 OpenCC |
+| 依賴 `opencc4j`、`android-opencc`、JitPack repo | 同上 | 同上（少 5.3 MB 原生庫與字典）|
+| `data/audio/AudioPlayerController.kt` | Media3 / ExoPlayer | 模組 3 改用官方 IFrame Player |
+| `data/audio/AudioSourceResolver.kt`、`AudioTrackMatcher.kt`、`YouTubeMusicSource.kt` + 20 個測試 | InnerTube 取串流 + 時長匹配 | 同上 |
+| `:innertube` 整個模組（GPL-3.0） | YouTube Music 內部 API | 同上。**順帶解掉 GPL 傳染問題** |
+| 依賴 `media3-*`（4 個） | 播放音訊串流 | 同上 |
+| `DictionaryDtoTest`、`ChineseConverterTest`、`ChineseConverterInstrumentedTest`、`AudioTrackMatcherTest` | 對應實作的測試 | 實作已刪 |
+
+**Supabase**：全專案 grep 過，**沒有任何 Supabase 程式碼或依賴**，這一項本來就是空的。
+
+APK 從 **31.16 MB → 20.77 MB**（主要來自 OpenCC 的原生庫與 Media3）。
+
+### 模組 1：狀態列沉浸式
+
+**真正的原因不是「狀態列不透明」，而是外層 Scaffold 把全螢幕頁往下推。**
+
+`LyrianApp` 的 `Scaffold` 用預設 `contentWindowInsets`，於是 `Modifier.padding(innerPadding)`
+把整個 `NavHost` 往下推了一個狀態列的高度，頂端露出 Scaffold 的底色——那就是
+使用者看到的「黑條」。設定頁更慘：它自己還有 `TopAppBar` 會再推一次，變成兩倍空白。
+
+修法兩件：
+
+1. 全螢幕路由（練習／設定／詳情／onboarding）用 `WindowInsets(0)`，
+   讓內容真的畫到最頂端；各頁自己的 `TopAppBar`／`windowInsetsPadding` 只算一次。
+2. `SystemBarIcons(lightIcons)`：練習頁的背景是**任意封面的模糊圖**（永遠偏暗），
+   所以固定用白色圖示；其餘頁面跟隨主題。同一組顏色不可能同時在淺色 surface
+   與深色封面上都清楚，因此**依路由切換**而不是全域設定一次。
+
+> 方向裡寫的 `@capacitor/status-bar` 不適用——本專案早已是原生 Kotlin/Compose
+> （TASK-03 就放棄 Capacitor 了），因此改用 `WindowCompat.getInsetsController`。
+
+### 模組 2：練習結果頁
+
+`PracticeResultScreen`：完成標題、歌曲資訊（封面／歌名／歌手）、五項統計
+（挖空／答對／答錯／正確率／用時）、錯題、值得學的表達（容器）、延伸詞彙、底部三個操作。
+
+- **列表每條只有 eng、詞性、中文釋義三項**（擁有者指定），不顯示例句與等級。
+- **延伸詞彙**：本首歌中未被挖空、等級**嚴格高於**設定值的字，依原形去重、
+  等級高者優先、上限 20 條，預設顯示 8 條可展開。
+- **片語區塊**：容器已存在但**AI 未啟用時整塊隱藏**，所以目前畫面上看不到它。
+- **統計只存在 session 狀態**，沒有新增任何資料表。
+
+**順手修掉一個既有的死路**：`isComplete` 原本用 `activeBlankIndex >= questions.size`，
+但歌曲驅動時題目軸由播放時間決定，最後一句唱完 index 不會再增加——
+也就是說**跟著歌唱歌永遠看不到結果頁**。改成用「已作答題數」判斷。
+
+### 模組 3：iTunes 取資訊 + YouTube 播放
+
+**搜尋**：仍以 LRCLIB 為索引（它是唯一提供**時間軸歌詞**的免費來源，不能換掉），
+但**歌曲資訊改以 iTunes 為權威**：歌名、歌手、專輯、**trackTimeMillis**、封面都取 iTunes。
+時長特別重要——它是 YouTube 候選排序的主要訊號，必須是官方錄音室長度，
+而不是歌詞檔自己的長度。
+
+**播放層：兩條路都評估過，選了官方 IFrame Player。**
+
+| 方案 | 結論 |
+|---|---|
+| a. YouTube IFrame Player API | ✅ 採用。官方、廣告自然播放、`getCurrentTime()` 就是時間軸 |
+| b. NewPipe Extractor | ❌ 放棄。要自己實作 `Downloader`、追簽章與 PoToken；而且它**繞過廣告**，與擁有者「不加入任何廣告攔截」直接衝突 |
+
+**搜尋結果怎麼拿**：抓公開搜尋頁 `youtube.com/results`，解析內嵌的 `ytInitialData`。
+不寫死 JSON 路徑，而是**遞迴找出所有 `videoRenderer`**——YouTube 每隔幾個月就改結構，
+固定路徑一定會壞。不需要任何 API key。
+
+**排序**（`YouTubeCandidateScorer`，純函式，10 個測試）：
+`歌手 - Topic` 頻道 +40、Official Audio +25、時長每差 1 秒 −1.2 分、
+觀看數 `6×log10`、Live/Cover/Remix/Karaoke/8D/Slowed/Nightcore/Sped Up/Tutorial/Reaction
+等關鍵字 **−1000**。
+
+**時間軸凍結**：廣告期間 IFrame 回報的時間會**倒退**，所以 `onTick` 做單調夾制——
+倒退超過 1.5 秒就忽略該次回報，只更新播放狀態。這就實現了「廣告期間歌詞自然凍結，
+不必特別偵測廣告」。
+
+**其他**：播放器嵌在封面原本的位置（112×63dp，16:9，**保持可見**）；每首歌一個
+本地 offset（±0.5 秒級距、±5 秒上限），調整立即生效；「換版本」切到下一個候選，
+遇到 `101/150`（不允許嵌入）自動換下一個。
+
+### 模組 4：單字分級資料
+
+**找到了 C1/C2 的真資料**。任務書說「資料缺乏 c1、c2 單字資料」——
+`openlanguageprofiles/olp-en-cefrj` 同時提供 **CEFR-J 1.5（A1–B2，6,864 字）**
+與 **Octanove C1/C2（1,988 字）**，所以 C1/C2 不是猜的。等級不足的字才用
+ECDICT 的 BNC 排名推估 C1/C2，且**推估永遠不會蓋掉真資料**。
+
+**詞形還原**用 ECDICT 的 `exchange` 為主、BNC lemma 表為輔。
+
+> ⚠️ **踩到的坑**：ECDICT 的 `exchange` 欄位裡，`0:` 才是原形，`1:` 是「這個字
+> 自己是什麼變化」（`1:s` 複數、`1:pd` 過去式＋過去分詞）。一開始讀 `1:`，
+> 於是 `years → s`、`dreaming → i`、`met → pd`——等級欄位出現一堆垃圾。
+> 這個 bug 只有實際跑三首歌的報表才看得出來。
+
+**三首歌的實測**（`tools/fetch_lyrics.py` + `BlankReportTest`，門檻＝題數）：
+
+| 歌 | A1 | A2 | **B1（預設）** | B2 |
+|---|---|---|---|---|
+| Hello（48 行）| 19 | 10 | **2** | 1 |
+| expectations（48 行）| 23 | 23 | **22** | 13 |
+| Yellow（37 行）| 16 | 10 | **2** | 0 |
+
+B1 門檻的挖空明細（節錄）：
+
+```
+Hello  L3  healing   原形 healing   等級 B1  來源 CEFR-J
+       L5  California 原形 california 等級 C1  來源 詞頻推估
+expectations L1 convinced 原形 convince 等級 B2 來源 CEFR-J
+       L10 stipulations 原形 stipulation 等級 C2 來源 Octanove C1/C2
+Yellow L25 bleed     原形 bleed     等級 B1  來源 CEFR-J
+```
+
+**⚠️ 這是一個必須讓擁有者決定的取捨**：B1 門檻對歌詞簡單的歌（Hello、Yellow）
+幾乎挖不出字，因為它們的實詞幾乎都在 A1/A2。設定調到 A1 就有 16–23 題。
+規格寫「預設 B1」，所以預設值沒動；但**如果實機體驗覺得題數太少，
+唯一該改的地方就是 `UserSettings` 的預設值**，不要動過濾規則。
+
+體積：`levels.tsv` 386 KB + `lemma.tsv` 526 KB + `freq.tsv` 14 KB = 0.93 MB
+（任務書允許到 5 MB）。
+
+### 模組 5：釋義查詢
+
+**沒有用 GitHub + jsDelivr + IndexedDB 那條路**，改成**把分片直接放進 APK 的 assets**：
+
+| 方向 | 採用 | 理由 |
+|---|---|---|
+| a. 靜態 JSON 分片（GitHub/jsDelivr）+ IndexedDB | ⚠️ 部分採用：**分片格式與 `assets/data/dict/a…z.json` 一模一樣**，但不從網路取 | App 是原生 Android，把 1.5 MB 的分片放進 APK 之後**完全離線**，比「先連網才有釋義」嚴格更好，也少一個會消失的服務 |
+| b. 內嵌 SQLite | ❌ 不採用 | 唯讀、整份載入、只查不寫，SQLite 只是多一層成本 |
+| c. 免費詞典 API | ❌ 不採用 | 就是模組 0 要清掉的東西 |
+
+代價與取捨：**「首次查新詞需網路」這個驗收條件不成立**——所有詞條都離線可查。
+「查無此詞」與「查不到就再試」的狀態仍然實作。
+
+- 資料來源 ECDICT（MIT），`word / pos / 繁體中文釋義 / IPA / CEFR`，29,334 條。
+- **繁體化在 build time 做**（`tools/build_assets.py` 用 OpenCC 的 `s2twp`），
+  App 執行期沒有任何簡繁轉換。
+- IPA 正規化：ECDICT 用**西里爾字母的 schwa**（`ә`，跟拉丁 `ə` 長得一樣）與
+  直引號當重音，產生資產時換成正確符號（`ə`、`ˈ`）。
+- 查詢：原字有自己的 CEFR 等級就顯示自己（`abandoned` 是形容詞），
+  否則顯示原形的條目（`met` → `meet`）。
+- 快取：分片解析後留在 LRU（4 片），已查過的字寫回 Room 的 `vocab`。
+- 發音：**系統 TTS**（`Speaker`），不打包任何音檔。
+
+### 模組 6：AI 模塊預留
+
+`AiService` 四個方法（`explainPhrase` / `analyzeSongVocabulary` /
+`reviewTranslation` / `generateQuestions`），回傳 `AiResult`；
+`DisabledAiService` 全部回傳 `NotEnabled`，**建構子沒有任何 HTTP 依賴**，
+所以在結構上就不可能發出請求。
+
+設定頁：啟用開關、provider、端點、模型、金鑰。**移除了「連接測試」按鈕**——
+它會發請求，與驗收條件「專案內無任何 AI 請求發出」衝突。金鑰存
+`EncryptedSharedPreferences`，其餘存 SharedPreferences。
+
+### 尚未解決／需要在實機確認
+
+1. **B1 門檻對簡單歌曲題數過少**（見模組 4 的表）。這是產品決策，不是 bug。
+2. **播放鏈完全沒有在實機跑過**。IFrame 播放、`getCurrentTime()` 回報、
+   廣告期間的時間夾制、換版本時的自動跳轉——都只有編譯與單元測試層級的驗證。
+   `ytInitialData` 的解析有測試，但**沒有抓過真實的一頁**（離線環境）。
+3. **旋轉螢幕時音樂會中斷**。WebView 無法安全地跨 Activity 存活，
+   控制器會把同一部影片載回來並回到原本的位置——畫面與進度不跑掉，
+   但聲音會斷一下。這是相對 Media3 的退步，已在程式碼中註明。
+4. **沒有詞形還原的長尾**：字典沒收錄的字（`wanderlust` 這種）會顯示「查無此詞」。
+5. **iTunes 沒有回傳的曲目**（地下/獨立音樂）會退回 LRCLIB 的名稱與時長，
+   此時 YouTube 版本匹配的準確度較低。
+6. **狀態列**的修改無法在本機驗證（沒有裝置也沒有模擬器）。
+
+
 
 
 

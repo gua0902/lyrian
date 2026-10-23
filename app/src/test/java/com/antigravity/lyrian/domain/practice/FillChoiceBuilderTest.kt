@@ -1,5 +1,6 @@
 package com.antigravity.lyrian.domain.practice
 
+import com.antigravity.lyrian.data.lang.UNLISTED_SOURCE
 import com.antigravity.lyrian.domain.model.LyricLine
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
@@ -247,8 +248,8 @@ class FillChoiceBuilderTest {
 
         assertNotNull(decision.chosenWord)
         assertTrue(decision.chosenWord in listOf("whispering", "silhouettes"))
-        // 被選中的字必然是榜外的字
-        assertEquals(CommonWordFilter.NOT_COMMON_LABEL, decision.chosenLevelSource)
+        // 沒有傳入語言資料時，所有字都是「未收錄」——正式執行時會有真的等級
+        assertEquals(UNLISTED_SOURCE, decision.chosenLevelSource)
     }
 
     @Test

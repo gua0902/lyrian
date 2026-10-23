@@ -1,9 +1,12 @@
 package com.antigravity.lyrian.ui
 
+import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.padding
 import androidx.compose.material3.Scaffold
+import androidx.compose.material3.ScaffoldDefaults
 import androidx.compose.material3.SnackbarHost
 import androidx.compose.material3.SnackbarHostState
 import androidx.compose.material3.windowsizeclass.WindowSizeClass
@@ -25,6 +28,7 @@ import com.antigravity.lyrian.ui.navigation.LyrianNavigationBar
 import com.antigravity.lyrian.ui.navigation.LyrianNavigationRail
 import com.antigravity.lyrian.ui.navigation.Routes
 import com.antigravity.lyrian.ui.navigation.TopLevelDestination
+import com.antigravity.lyrian.ui.theme.SystemBarIcons
 import com.antigravity.lyrian.ui.screens.my.MyScreen
 import com.antigravity.lyrian.ui.screens.onboarding.OnboardingScreen
 import com.antigravity.lyrian.ui.screens.practice.PracticeScreen
@@ -59,7 +63,16 @@ fun LyrianApp(
     val isFullScreen = currentRoute == Routes.ONBOARDING ||
         currentRoute?.startsWith("practice/") == true ||
         currentRoute?.startsWith("settings") == true ||
-        currentRoute?.startsWith("vocab/") == true
+        currentRoute?.startsWith("vocab/") == true ||
+        currentRoute?.startsWith("word/") == true
+
+    /**
+     * 練習頁的背景是「專輯封面 + 模糊」，永遠偏暗，因此狀態列圖示要固定用淺色，
+     * 否則淺色主題下會變成深色圖示畫在深色背景上——完全看不見。
+     * 其他頁面沿用主題（深色主題才用淺色圖示）。
+     */
+    val isPracticeRoute = currentRoute?.startsWith("practice/") == true
+    SystemBarIcons(lightIcons = isPracticeRoute || isSystemInDarkTheme())
 
     val currentTopLevel = TopLevelDestination.entries.firstOrNull { destination ->
         currentDestination?.hierarchy?.any { it.route == destination.route } == true
@@ -89,6 +102,18 @@ fun LyrianApp(
                 if (!useRail && !isFullScreen) {
                     LyrianNavigationBar(current = currentTopLevel, onSelect = navigateToTopLevel)
                 }
+            },
+            // 全螢幕頁面**不套用系統列內距**：
+            //  - 練習頁要讓模糊背景一路畫到螢幕最頂端（狀態列圖示浮在圖上）
+            //  - 設定／詳情頁自己有 TopAppBar，M3 的 TopAppBar 已經會處理 statusBars
+            //
+            // ⚠️ 之前這裡是預設值，於是全螢幕頁被往下推了一個狀態列的高度，
+            // 頂端露出 Scaffold 的底色——那就是使用者回報的「頂部黑條」。
+            // 而且設定頁還會被 TopAppBar 再推一次，形成兩倍空白。
+            contentWindowInsets = if (isFullScreen) {
+                WindowInsets(0)
+            } else {
+                ScaffoldDefaults.contentWindowInsets
             },
         ) { innerPadding ->
             NavHost(
@@ -170,13 +195,44 @@ fun LyrianApp(
                         navArgument(Routes.ARG_SONG_ID) { type = NavType.StringType },
                     ),
                 ) {
-                    PracticeScreen(onBack = { navController.popBackStack() })
+                    PracticeScreen(
+                        onBack = { navController.popBackStack() },
+                        onOpenWordbank = {
+                            // 結果頁的「查看字庫」要真的跳到字庫，而不是留在練習頁
+                            navController.navigate(TopLevelDestination.WORDBANK.route) {
+                                popUpTo(navController.graph.findStartDestination().id) {
+                                    saveState = true
+                                }
+                                launchSingleTop = true
+                                restoreState = true
+                            }
+                        },
+                        onOpenWord = { word -> navController.navigate(Routes.wordDetail(word)) },
+                    )
+                }
+
+                composable(
+                    route = Routes.WORD_DETAIL,
+                    arguments = listOf(
+                        navArgument(Routes.ARG_WORD) { type = NavType.StringType },
+                    ),
+                ) {
+                    com.antigravity.lyrian.ui.screens.wordbank.WordDetailScreen(
+                        onBack = { navController.popBackStack() },
+                    )
                 }
 
                 composable(Routes.SETTINGS) {
                     SettingsScreen(
                         onBack = { navController.popBackStack() },
                         onOpenAiSettings = { navController.navigate(Routes.SETTINGS_AI) },
+                        onOpenLearningSettings = { navController.navigate(Routes.SETTINGS_LEARNING) },
+                    )
+                }
+
+                composable(Routes.SETTINGS_LEARNING) {
+                    com.antigravity.lyrian.ui.screens.settings.LearningSettingsScreen(
+                        onBack = { navController.popBackStack() },
                     )
                 }
 

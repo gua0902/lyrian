@@ -46,9 +46,14 @@ data class ItunesTrackDto(
     val trackName: String? = null,
     val artistName: String? = null,
     val collectionName: String? = null,
+    /** iTunes 的曲目 id；iTunes 是**歌曲資訊的權威來源** */
+    val trackId: Long? = null,
     /** 音樂曲風，例如 "Pop"。這不是「學習主題」 */
     @SerialName("primaryGenreName") val primaryGenreName: String? = null,
+    /** **官方錄音室長度**（毫秒）。YouTube 候選的排序主要靠它 */
     val trackTimeMillis: Long? = null,
     /** 約 100x100，可換成更大尺寸 */
     @SerialName("artworkUrl100") val artworkUrl100: String? = null,
+    /** 30 秒試聽片段。本輪不用它播放（播放走 YouTube），保留欄位以備離線示範 */
+    val previewUrl: String? = null,
 )
