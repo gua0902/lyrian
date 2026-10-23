@@ -39,7 +39,7 @@ class SongSearchRepositoryTest {
         trackName: String = "Hello",
         artistName: String = "Adele, Adele",
         duration: Double? = 296.0,
-        lyricsFile: String? = "lines:\n- text: I keep a little hope inside my heart\n  start_ms: 0\n  end_ms: 1000\n",
+        lyricsFile: String? = "lines:\n- text: I keep a lantern burning in the hollow\n  start_ms: 0\n  end_ms: 1000\n",
     ) = LrclibTrackDto(
         id = id,
         trackName = trackName,
@@ -102,7 +102,7 @@ class SongSearchRepositoryTest {
     fun `計算可挖空的行數（對應 UI 的 N 個填空）`() {
         val lyricsFile = buildString {
             append("lines:\n")
-            append("- text: I keep a little hope inside my heart\n  start_ms: 0\n  end_ms: 1000\n")
+            append("- text: I keep a lantern burning in the hollow\n  start_ms: 0\n  end_ms: 1000\n")
             append("- text: a b c\n  start_ms: 1000\n  end_ms: 2000\n")
             append("- text: A brand-new day, a brand-new start\n  start_ms: 2000\n  end_ms: 3000\n")
         }
@@ -120,7 +120,7 @@ class SongSearchRepositoryTest {
     @Test
     fun `保留原始歌詞供選歌後直接使用`() {
         val result = repository.toSearchResult(lrclibEntry(), emptyList())
-        assertTrue(result.lyricsFile!!.contains("I keep a little hope"))
+        assertTrue(result.lyricsFile!!.contains("I keep a lantern"))
     }
 
     // ---------- dedupe ----------

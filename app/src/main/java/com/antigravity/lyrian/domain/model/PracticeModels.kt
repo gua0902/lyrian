@@ -72,6 +72,35 @@ data class FillChoiceDataset(
     val lines: List<LyricLine>,
     /** 全部題目，依歌詞順序排列 */
     val questions: List<FillChoiceQuestion>,
+    /**
+     * 每一行的挖空決策（含被過濾掉的候選字與其等級來源）。
+     *
+     * 供偵錯輸出用——擁有者要能驗證「挖了哪個字、為什麼」，
+     * 由 `PracticeViewModel` 把這份資料印成 log。
+     * 預設空清單，讓只關心題目的呼叫端不必理會。
+     */
+    val debug: List<BlankDecision> = emptyList(),
+)
+
+/**
+ * 一行的挖空決策。
+ *
+ * @property chosenWord 選中的字；null 表示這行過濾後沒有可挖的字
+ * @property chosenLevelSource 選中字的等級來源
+ * @property rejected 被過濾掉的候選字與各自的等級來源
+ */
+data class BlankDecision(
+    val lineIndex: Int,
+    val chosenWord: String?,
+    val chosenLevelSource: String?,
+    val rejected: List<RejectedCandidate> = emptyList(),
+)
+
+/** 被過濾掉的候選字。 */
+data class RejectedCandidate(
+    val word: String,
+    /** 命中的等級來源，例如「Top 1000 高頻詞」 */
+    val levelSource: String,
 )
 
 /** 作答進度。對應 UI 的「作答進度：2 / 10 正確（20%）」。 */

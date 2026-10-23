@@ -12,6 +12,7 @@ import dagger.hilt.android.qualifiers.ApplicationContext
 import javax.inject.Inject
 import javax.inject.Singleton
 import kotlinx.coroutines.channels.awaitClose
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -132,6 +133,47 @@ class AudioPlayerController @Inject constructor(
         player?.pause()
     }
 
+    /**
+     * 音量淡出後暫停。
+     *
+     * 擁有者指定：答案是「錯過了就暫停」，但硬切會讓人以為 App 掛掉，
+     * 所以先 0.3 秒把音量收到 0 再 `pause()`。
+     *
+     * 暫停後音量會**還原成 1**——這樣下一次 [fadeInAndPlay] 從 0 開始淡入時
+     * 不會被上一次的殘留音量影響；而暫停期間本來就沒有聲音，還原無副作用。
+     */
+    suspend fun fadeOutAndPause(durationMs: Long = DEFAULT_FADE_MS) {
+        val exo = player ?: return
+        rampVolume(exo, from = exo.volume, to = 0f, durationMs = durationMs)
+        exo.pause()
+        exo.volume = 1f
+    }
+
+    /**
+     * 從目前位置淡入並播放。
+     *
+     * ⚠️ **不重頭播**：只呼叫 `play()`，不做 `seekTo(0)`——
+     * 擁有者明確要求「從暫停時的位置恢復播放」。
+     */
+    suspend fun fadeInAndPlay(durationMs: Long = DEFAULT_FADE_MS) {
+        val exo = player ?: return
+        exo.volume = 0f
+        exo.playWhenReady = true
+        exo.play()
+        rampVolume(exo, from = 0f, to = 1f, durationMs = durationMs)
+    }
+
+    /** 線性調整音量。步進式而非一次性設定，才能真的「淡」出來。 */
+    private suspend fun rampVolume(exo: ExoPlayer, from: Float, to: Float, durationMs: Long) {
+        for (step in 0..FADE_STEPS) {
+            // 播放器可能在淡入淡出途中被釋放（離開畫面）
+            if (player !== exo) return
+            val fraction = step.toFloat() / FADE_STEPS
+            exo.volume = from + (to - from) * fraction
+            delay((durationMs / FADE_STEPS).coerceAtLeast(1L))
+        }
+    }
+
     /** 播放／暫停切換。回傳切換後的狀態。 */
     fun togglePlayPause() {
         val exo = player ?: return
@@ -227,5 +269,13 @@ class AudioPlayerController @Inject constructor(
         data class IsPlayingChanged(val isPlaying: Boolean) : PlayerEvent
         data class PlaybackStateChanged(val playbackState: Int) : PlayerEvent
         data class Error(val message: String) : PlayerEvent
+    }
+
+    private companion object {
+        /** 擁有者指定：淡出／淡入各 0.3 秒。 */
+        const val DEFAULT_FADE_MS = 300L
+
+        /** 淡入淡出的步數。20 步 ≈ 每 15ms 一格，聽起來是連續的。 */
+        const val FADE_STEPS = 20
     }
 }

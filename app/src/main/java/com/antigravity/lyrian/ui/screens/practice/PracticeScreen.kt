@@ -2,7 +2,6 @@ package com.antigravity.lyrian.ui.screens.practice
 
 import androidx.compose.animation.animateColorAsState
 import androidx.compose.animation.core.animateFloatAsState
-import androidx.compose.animation.core.spring
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
@@ -48,15 +47,16 @@ import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
-import androidx.compose.runtime.setValue
-import androidx.compose.runtime.snapshotFlow
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.blur
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.hapticfeedback.HapticFeedbackType
 import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalHapticFeedback
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.SpanStyle
@@ -70,6 +70,7 @@ import androidx.compose.ui.unit.sp
 import androidx.hilt.navigation.compose.hiltViewModel
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import coil.compose.AsyncImage
+import coil.request.ImageRequest
 import com.antigravity.lyrian.R
 import com.antigravity.lyrian.domain.model.ChoiceRecord
 import com.antigravity.lyrian.domain.model.LyricLine
@@ -85,10 +86,56 @@ private const val CORRECT_ANSWER_DELAY_MS = 450L
  * 當前句強調色的淡入時間。
  *
  * 捲動的位移由 `animateScrollToItem` 的 easing 負責，但那是「位置」；
- * 顏色淡入才是讓眼睛跟得上「現在唱到哪」的關鍵。600ms 足以被感知，
- * 又不會慢到讓人覺得卡。
+ * 透明度淡入才是讓眼睛跟得上「現在唱到哪」的關鍵。
  */
 private const val CURRENT_LINE_FADE_MS = 600
+
+// ---------- 歌詞定位 ----------
+
+/**
+ * 目標行上方要露出多少「上一句」。
+ *
+ * 這是擁有者指定的效果：當前挖空句在歌詞區第一行，但上一句的尾巴仍看得見。
+ * 48dp 大約是一行 17sp 文字的高度，足以看出上一個句子存在。
+ */
+private val PREVIOUS_LINE_PEEK = 48.dp
+
+/** 歌詞行距（仿 Apple Music 的寬鬆排版）。 */
+private val LYRIC_LINE_SPACING = 22.dp
+
+/** 非當前句的透明度。 */
+private const val LYRIC_DIM_ALPHA = 0.42f
+
+// ---------- 封面背景 ----------
+
+/** 向 Coil 要求的縮圖邊長；先縮再放大，等於一種「窮人版模糊」。 */
+private const val BLUR_SOURCE_PX = 64
+
+/** 高斯模糊半徑（Android 12+ 才真的有效果，其餘靠上面的縮圖）。 */
+private val BLUR_RADIUS = 32.dp
+
+/** 背景略微放大，避免模糊後邊緣出現透明裁切。 */
+private const val BLUR_ZOOM = 1.2f
+
+/** 暗色遮罩強度：越高越可讀，越低越看得到封面。 */
+private const val BACKDROP_SCRIM_ALPHA = 0.62f
+
+// ---------- 畫在封面上的固定色 ----------
+//
+// 這些不取自 M3 colorScheme：背景是任意專輯封面，必須保證對比，
+// 所以固定用白色與其透明度（M3 的 onSurface 在淺色主題下會是深色，看不見）。
+
+/** 主要文字（歌名、當前歌詞）。 */
+private val ON_IMAGE_PRIMARY = Color.White
+
+/** 次要文字（歌手、其他歌詞、底部統計）。 */
+private val ON_IMAGE_SECONDARY = Color.White.copy(alpha = 0.7f)
+
+/** 答對的填字（淺綠）。 */
+private val FEEDBACK_CORRECT = Color(0xFF8FE0A8)
+
+/** 答錯的填字（淺紅）。 */
+private val FEEDBACK_WRONG = Color(0xFFFF9E9E)
 
 /**
  * 練習頁：四選一填空。
@@ -154,8 +201,13 @@ private fun PracticeContent(
     val listState = rememberLazyListState()
     val currentLineIndex = state.currentQuestion?.lineIndex ?: 0
 
-    // 答完自動前進（不分對錯）；依對錯給不同延遲
-    LaunchedEffect(state.currentRecord, state.activeBlankIndex) {
+    // 歌曲驅動時跟著「正在唱的那句」；沒有音源時退回作答進度
+    val targetLineIndex = state.singingLineIndex ?: currentLineIndex
+
+    // 答完自動前進（不分對錯）；依對錯給不同延遲。
+    // **歌曲驅動時不自動前進**——題目由播放時間軸決定，硬跳會跟歌曲打架。
+    LaunchedEffect(state.currentRecord, state.activeBlankIndex, state.isSongDriven) {
+        if (state.isSongDriven) return@LaunchedEffect
         val record = state.currentRecord ?: return@LaunchedEffect
 
         if (!record.isCorrect) {
@@ -166,56 +218,102 @@ private fun PracticeContent(
         onNext()
     }
 
-    Column(modifier = modifier.fillMaxSize()) {
-        PlayerHeader(
-            title = state.songTitle,
-            artist = state.artist,
-            coverUrl = state.coverUrl,
-            questionProgress = if (state.total > 0) {
-                state.activeBlankIndex.toFloat() / state.total
-            } else {
-                0f
-            },
-            total = state.total,
-            onSeek = onSeek,
-            onBack = onBack,
-            audio = AudioControls(
-                isReady = state.isAudioReady,
-                isLoading = state.isAudioLoading,
-                isPlaying = state.isPlaying,
-                isBuffering = state.isBuffering,
-                positionMs = state.playbackPositionMs,
-                durationMs = state.playbackDurationMs,
-                notice = state.playbackError ?: state.audioNotice,
-                onTogglePlayPause = onTogglePlayPause,
-                onSeekPlayback = onSeekPlayback,
-            ),
-        )
+    Box(modifier = modifier.fillMaxSize()) {
+        AlbumBackdrop(coverUrl = state.coverUrl)
 
-        Box(modifier = Modifier.weight(1f).fillMaxWidth()) {
-            LyricsViewport(
-                lines = state.lines,
-                questions = state.questions,
-                currentLineIndex = currentLineIndex,
-                answeredLineIndex = state.lastAnsweredLineIndex,
-                answerTick = state.selections.size,
-                isPlaying = state.isPlaying,
-                selections = state.selections,
-                listState = listState,
+        Column(modifier = Modifier.fillMaxSize()) {
+            PlayerHeader(
+                title = state.songTitle,
+                artist = state.artist,
+                coverUrl = state.coverUrl,
+                questionProgress = if (state.total > 0) {
+                    state.activeBlankIndex.toFloat() / state.total
+                } else {
+                    0f
+                },
+                total = state.total,
+                onSeek = onSeek,
+                onBack = onBack,
+                audio = AudioControls(
+                    isReady = state.isAudioReady,
+                    isLoading = state.isAudioLoading,
+                    isPlaying = state.isPlaying,
+                    isBuffering = state.isBuffering,
+                    positionMs = state.playbackPositionMs,
+                    durationMs = state.playbackDurationMs,
+                    notice = state.playbackError ?: state.audioNotice,
+                    onTogglePlayPause = onTogglePlayPause,
+                    onSeekPlayback = onSeekPlayback,
+                ),
+            )
+
+            Box(modifier = Modifier.weight(1f).fillMaxWidth()) {
+                LyricsViewport(
+                    lines = state.lines,
+                    questions = state.questions,
+                    targetLineIndex = targetLineIndex,
+                    selections = state.selections,
+                    listState = listState,
+                )
+            }
+
+            OptionGrid(
+                options = state.options,
+                answer = state.currentQuestion?.answer,
+                record = state.currentRecord,
+                onSelect = onSelectOption,
+            )
+
+            BottomStats(
+                current = state.activeBlankIndex + 1,
+                total = state.total,
+                percent = state.percent,
+            )
+        }
+    }
+}
+
+/**
+ * 背景：專輯封面 + 高斯模糊 + 暗色遮罩。
+ *
+ * **為什麼還要縮圖**：`Modifier.blur` 只在 Android 12+ 生效，本 App 的 minSdk 是 26。
+ * 先向 Coil 要一張很小的圖再放大，即使裝置不支援 RenderEffect，
+ * 也會因為放大插值而得到柔化的效果——兩個手段疊起來才是全版本都好看。
+ */
+@Composable
+private fun AlbumBackdrop(coverUrl: String?) {
+    Box(modifier = Modifier.fillMaxSize()) {
+        if (coverUrl != null) {
+            val context = LocalContext.current
+            AsyncImage(
+                model = ImageRequest.Builder(context)
+                    .data(coverUrl)
+                    .size(BLUR_SOURCE_PX)
+                    .build(),
+                contentDescription = null,
+                contentScale = ContentScale.Crop,
+                modifier = Modifier
+                    .fillMaxSize()
+                    // 先放大再模糊，避免邊緣出現透明裁切
+                    .graphicsLayer {
+                        scaleX = BLUR_ZOOM
+                        scaleY = BLUR_ZOOM
+                    }
+                    .blur(BLUR_RADIUS),
+            )
+        } else {
+            Box(
+                modifier = Modifier
+                    .fillMaxSize()
+                    .background(MaterialTheme.colorScheme.surface),
             )
         }
 
-        OptionGrid(
-            options = state.options,
-            answer = state.currentQuestion?.answer,
-            record = state.currentRecord,
-            onSelect = onSelectOption,
-        )
-
-        BottomStats(
-            current = state.activeBlankIndex + 1,
-            total = state.total,
-            percent = state.percent,
+        // 暗色遮罩：讓歌詞在任何封面上都有足夠對比
+        Box(
+            modifier = Modifier
+                .fillMaxSize()
+                .background(Color.Black.copy(alpha = BACKDROP_SCRIM_ALPHA)),
         )
     }
 }
@@ -254,8 +352,9 @@ private fun PlayerHeader(
     onBack: () -> Unit,
     audio: AudioControls,
 ) {
+    // 背景已經是模糊封面 → header 改用透明底，讓圖透上來（其餘元件仍是 M3）
     Surface(
-        color = MaterialTheme.colorScheme.surfaceContainer,
+        color = Color.Transparent,
         modifier = Modifier.fillMaxWidth(),
     ) {
         Column(modifier = Modifier.windowInsetsPadding(WindowInsets.statusBars)) {
@@ -270,6 +369,7 @@ private fun PlayerHeader(
                     Icon(
                         imageVector = Icons.AutoMirrored.Filled.ArrowBack,
                         contentDescription = stringResource(R.string.action_back),
+                        tint = ON_IMAGE_PRIMARY,
                     )
                 }
 
@@ -277,7 +377,7 @@ private fun PlayerHeader(
                     modifier = Modifier
                         .size(48.dp)
                         .clip(RoundedCornerShape(12.dp))
-                        .background(MaterialTheme.colorScheme.surfaceContainerHighest),
+                        .background(Color.White.copy(alpha = 0.16f)),
                     contentAlignment = Alignment.Center,
                 ) {
                     if (coverUrl != null) {
@@ -291,7 +391,7 @@ private fun PlayerHeader(
                         Icon(
                             imageVector = Icons.Filled.MusicNote,
                             contentDescription = null,
-                            tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                            tint = ON_IMAGE_SECONDARY,
                         )
                     }
                 }
@@ -304,12 +404,13 @@ private fun PlayerHeader(
                     Text(
                         text = title,
                         style = MaterialTheme.typography.titleMedium,
+                        color = ON_IMAGE_PRIMARY,
                         maxLines = 1,
                     )
                     Text(
                         text = buildArtistLine(artist, audio),
                         style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        color = ON_IMAGE_SECONDARY,
                         maxLines = 1,
                     )
                 }
@@ -325,7 +426,7 @@ private fun PlayerHeader(
                 Text(
                     text = audio.notice,
                     style = MaterialTheme.typography.labelSmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    color = ON_IMAGE_SECONDARY,
                     modifier = Modifier.padding(horizontal = 16.dp, vertical = 4.dp),
                 )
             }
@@ -342,7 +443,7 @@ private fun PlayerHeader(
                     colors = SliderDefaults.colors(
                         thumbColor = MaterialTheme.colorScheme.primary,
                         activeTrackColor = MaterialTheme.colorScheme.primary,
-                        inactiveTrackColor = MaterialTheme.colorScheme.surfaceContainerHighest,
+                        inactiveTrackColor = Color.White.copy(alpha = 0.24f),
                     ),
                 )
             }
@@ -435,26 +536,28 @@ private fun PlaybackScrubber(audio: AudioControls) {
 /**
  * 歌詞視窗。
  *
- * **滑動穩定的關鍵**：上下各留半個視窗高度的 `contentPadding`，
- * 因此 `animateScrollToItem(index)` 會讓該行自然落在中央附近，
- * 不需要自己量高度、算 offset（那正是之前位移不穩的原因）。
+ * ## 定位規則（擁有者指定）
  *
- * ## 主控權的規則
+ * 目標是讓**當前挖空句**落在歌詞區的**第一行可視位置**（緊接在歌名標題下方），
+ * 而**上一句仍保留在畫面中**——所以不是把目標置中，也不是把它頂到最上面，
+ * 而是讓它位於頂端再往下 [PREVIOUS_LINE_PEEK]：上一句的尾巴正好露在上面。
  *
- * 見 [LyricFollowController]。重點是：使用者一動手就讓位，
- * 閒置 3 秒**且當前題已作答**才漸出漸入地收回主控權。
+ * ## 為什麼用負的 scrollOffset
+ *
+ * `animateScrollToItem(index, scrollOffset)` 的正值是「往前捲」（目標會被推到頂端外），
+ * 負值則讓目標停在頂端**下方**。負 offset 讓上一句的尾端露出來，正是我們要的效果，
+ * 而且不需要自己量前一句的高度（那會因為換行數不同而不穩）。
+ *
+ * ## 快速連續換行
+ *
+ * `LaunchedEffect` 的 key 一變，前一個協程就會被**取消**，
+ * 正在跑的捲動動畫因此立刻中止，再從目前位置跑向新目標——不會疊加、不會抖動。
  */
 @Composable
 private fun LyricsViewport(
     lines: List<LyricLine>,
     questions: List<com.antigravity.lyrian.domain.model.FillChoiceQuestion>,
-    currentLineIndex: Int,
-    /** 已作答的最後一行；用來判斷「這題答完了沒」 */
-    answeredLineIndex: Int,
-    /** 作答次數；每次作答都會重設閒置計時 */
-    answerTick: Int,
-    /** 播放器是否正在播放——播放鍵同時控制滾動的實作點 */
-    isPlaying: Boolean,
+    targetLineIndex: Int,
     selections: Map<Int, ChoiceRecord>,
     listState: LazyListState,
 ) {
@@ -463,70 +566,36 @@ private fun LyricsViewport(
         questions.associate { it.lineIndex to it.blankIndex }
     }
 
-    val controller = androidx.compose.runtime.remember { LyricFollowController() }
-
-    // 播放鍵同時控制滾動：暫停時歌詞靜止，播放時才跟隨
-    LaunchedEffect(isPlaying) {
-        controller.onPlaybackChanged(isPlaying = isPlaying)
-    }
-
-    // 程式自己發起的捲動，不該被誤判成使用者手動捲動
-    var programmaticScroll by androidx.compose.runtime.remember {
-        androidx.compose.runtime.mutableStateOf(false)
-    }
-
-    // 使用者用手指捲動 → 讓位
-    LaunchedEffect(listState) {
-        snapshotFlow { listState.isScrollInProgress }
-            .collect { inProgress ->
-                if (inProgress && !programmaticScroll) {
-                    controller.onManualScroll(System.currentTimeMillis())
-                }
-            }
-    }
-
-    // 每次作答重設閒置計時——「答完之後再等 3 秒」才回歸
-    LaunchedEffect(answerTick) {
-        controller.onAnswered(System.currentTimeMillis())
-    }
-
     BoxWithConstraints(modifier = Modifier.fillMaxSize()) {
-        val halfViewport = maxHeight / 2
+        // 上下留白：頂端 0（第一行就貼齊歌詞區上緣）、底部留一個視窗高，
+        // 讓最後幾行也能被捲到頂端。
+        val bottomPadding = maxHeight
+        val peekPx = with(LocalDensity.current) { PREVIOUS_LINE_PEEK.roundToPx() }
 
-        // 依主控權決定要不要跟隨。answerTick 讓「答完」能喚醒它重試，
-        // isPlaying 讓「按下播放」立刻跟到當前句。
-        LaunchedEffect(currentLineIndex, answerTick, isPlaying) {
-            if (controller.shouldAutoScroll(
-                    nowMs = System.currentTimeMillis(),
-                    lineIndex = currentLineIndex,
-                    answeredLine = answeredLineIndex,
-                )
-            ) {
-                programmaticScroll = true
-                try {
-                    // 逐格捲動（而非直接跳）——手指離開的位置才不會被硬切
-                    listState.animateScrollToItem(index = currentLineIndex, scrollOffset = 0)
-                } catch (cancellation: kotlinx.coroutines.CancellationException) {
-                    // 取消是正常的（換題／離開畫面）。**必須原樣往上拋**，
-                    // 否則會破壞結構化並行——這正是先前用 runCatching 的錯誤。
-                    throw cancellation
-                } finally {
-                    programmaticScroll = false
-                }
-            }
+        LaunchedEffect(targetLineIndex) {
+            if (targetLineIndex !in lines.indices) return@LaunchedEffect
+            // key 變更 = 前一次動畫已被取消，這裡直接從現況捲向新目標
+            listState.animateScrollToItem(
+                index = targetLineIndex,
+                scrollOffset = -peekPx,
+            )
         }
 
         LazyColumn(
             state = listState,
             modifier = Modifier.fillMaxSize(),
-            contentPadding = PaddingValues(horizontal = 20.dp, vertical = halfViewport),
-            verticalArrangement = Arrangement.spacedBy(14.dp),
+            contentPadding = PaddingValues(
+                start = 20.dp,
+                end = 20.dp,
+                bottom = bottomPadding,
+            ),
+            verticalArrangement = Arrangement.spacedBy(LYRIC_LINE_SPACING),
         ) {
             itemsIndexed(items = lines, key = { _, line -> line.index }) { _, line ->
                 val blankIndex = blankIndexByLine[line.index]
                 LyricRow(
                     line = line,
-                    isCurrent = line.index == currentLineIndex,
+                    isCurrent = line.index == targetLineIndex,
                     record = blankIndex?.let { selections[it] },
                 )
             }
@@ -535,14 +604,18 @@ private fun LyricsViewport(
 }
 
 /**
- * 單行歌詞。
+ * 單行歌詞（仿 Apple Music 樣式）。
+ *
+ *  - **當前句**：大字、半粗體、全不透明
+ *  - **其他句**：小一點、半透明
+ *  - **行距加大**：讓眼睛在模糊背景上更容易鎖定一行
+ *
+ * 顏色刻意**不取自 M3 colorScheme**：這裡是畫在專輯封面上的，
+ * 必須保證在任何封面上都可讀，因此固定用白色與其透明度。
+ * 其餘元件（按鈕、滑桿、選項卡）仍走 Material 3。
  *
  * **所有挖空的行都顯示底線**（整首歌一開始就挖好），
- * 未輪到的行用較低對比呈現，當前句最突出。
- *
- * 當前句的顏色用 `animateColorAsState` **漸出漸入**——這是「鏡頭回來了」的
- * 視覺交代。捲動本身由 `animateScrollToItem` 的 easing 負責，
- * 但那是位移；顏色淡入才是讓眼睛跟得上的關鍵。
+ * 未輪到的行只是變淡，不是等到輪到才挖。
  */
 @Composable
 private fun LyricRow(
@@ -551,33 +624,18 @@ private fun LyricRow(
     record: ChoiceRecord?,
 ) {
     val alpha by animateFloatAsState(
-        targetValue = if (isCurrent) 1f else 0.4f,
-        animationSpec = spring(),
-        label = "lyricAlpha",
-    )
-
-    // 當前句的強調色：漸出漸入，不是硬切
-    val currentAccent by animateColorAsState(
-        targetValue = if (isCurrent) {
-            MaterialTheme.colorScheme.primary
-        } else {
-            MaterialTheme.colorScheme.onSurface
-        },
+        targetValue = if (isCurrent) 1f else LYRIC_DIM_ALPHA,
         animationSpec = androidx.compose.animation.core.tween(
             durationMillis = CURRENT_LINE_FADE_MS,
             easing = androidx.compose.animation.core.FastOutSlowInEasing,
         ),
-        label = "currentLineAccent",
+        label = "lyricAlpha",
     )
 
-    val successColor = MaterialTheme.colorScheme.secondary
-    val errorColor = MaterialTheme.colorScheme.error
-    val onSurface = MaterialTheme.colorScheme.onSurface
-
     val style = if (isCurrent) {
-        TextStyle(fontSize = 23.sp, lineHeight = 33.sp, fontWeight = FontWeight.Bold)
+        TextStyle(fontSize = 22.sp, lineHeight = 31.sp, fontWeight = FontWeight.SemiBold)
     } else {
-        TextStyle(fontSize = 15.sp, lineHeight = 22.sp, fontWeight = FontWeight.Normal)
+        TextStyle(fontSize = 17.sp, lineHeight = 26.sp, fontWeight = FontWeight.Normal)
     }
 
     val text = buildAnnotatedString {
@@ -589,21 +647,21 @@ private fun LyricRow(
         append(line.prefix)
 
         when {
-            // 已作答：顯示使用者填的字（對綠錯紅）
+            // 已作答：顯示使用者填的字（對綠錯紅，皆為淺色系以確保在封面上可讀）
             record != null -> withStyle(
                 SpanStyle(
-                    color = if (record.isCorrect) successColor else errorColor,
-                    fontWeight = FontWeight.Bold,
+                    color = if (record.isCorrect) FEEDBACK_CORRECT else FEEDBACK_WRONG,
+                    fontWeight = FontWeight.SemiBold,
                 ),
             ) {
                 append(record.choice)
             }
 
-            // 未作答：顯示底線。當前句用強調色
+            // 未作答：底線。當前句用純白強調
             else -> withStyle(
                 SpanStyle(
-                    color = if (isCurrent) currentAccent else onSurface,
-                    fontWeight = if (isCurrent) FontWeight.Bold else FontWeight.Normal,
+                    color = if (isCurrent) ON_IMAGE_PRIMARY else ON_IMAGE_SECONDARY,
+                    fontWeight = if (isCurrent) FontWeight.SemiBold else FontWeight.Normal,
                 ),
             ) {
                 append("____")
@@ -616,7 +674,7 @@ private fun LyricRow(
     Text(
         text = text,
         style = style,
-        color = onSurface,
+        color = ON_IMAGE_PRIMARY,
         modifier = Modifier
             .fillMaxWidth()
             .graphicsLayer { this.alpha = alpha },
@@ -755,12 +813,12 @@ private fun BottomStats(current: Int, total: Int, percent: Int) {
         Text(
             text = stringResource(R.string.practice_progress_count, current, total),
             style = MaterialTheme.typography.bodyMedium,
-            color = MaterialTheme.colorScheme.secondary,
+            color = ON_IMAGE_SECONDARY,
         )
         Text(
             text = stringResource(R.string.practice_accuracy, percent),
             style = MaterialTheme.typography.bodyMedium,
-            color = MaterialTheme.colorScheme.secondary,
+            color = ON_IMAGE_SECONDARY,
         )
     }
 }

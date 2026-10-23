@@ -16,6 +16,7 @@ import com.antigravity.lyrian.data.audio.AudioPlayerController
 import com.antigravity.lyrian.data.audio.AudioSourceResolver
 import com.antigravity.lyrian.data.lyrics.LyricsParser
 import com.antigravity.lyrian.domain.model.ChoiceRecord
+import com.antigravity.lyrian.domain.model.BlankDecision
 import com.antigravity.lyrian.domain.model.FillChoiceQuestion
 import com.antigravity.lyrian.domain.model.LyricLine
 import com.antigravity.lyrian.domain.model.PracticeModeId
@@ -24,6 +25,7 @@ import com.antigravity.lyrian.ui.navigation.Routes
 import com.antigravity.lyrian.util.toDayKey
 import dagger.hilt.android.lifecycle.HiltViewModel
 import javax.inject.Inject
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -72,6 +74,19 @@ data class PracticeUiState(
      * 前者來自音訊時間，後者來自使用者答到哪。
      */
     val singingLineIndex: Int? = null,
+    /**
+     * 目前是否由**歌曲時間軸**驅動節奏。
+     *
+     * true 表示歌詞與題目跟著播放時間走（擁有者指定的新模式）；
+     * false 表示沒有可用音源，退回「依作答進度推進」。
+     */
+    val isSongDriven: Boolean = false,
+    /**
+     * 因為「上一句還沒作答」而自動暫停時，正在等哪一個空格。
+     *
+     * null 表示沒有在等。作答完成後會清空並淡入恢復播放。
+     */
+    val waitingForBlankIndex: Int? = null,
     /** 音源相關的提示（例如「找不到對應的錄音版本」）。 */
     val audioNotice: String? = null,
     /**
@@ -132,6 +147,20 @@ private const val AUDIO_MAY_NOT_ALIGN =
  * 因此以固定間隔取樣。50ms 足以讓歌詞高亮跟得上歌聲，又不會浪費 CPU。
  */
 private const val POSITION_POLL_MS = 50L
+
+/**
+ * 「上一句沒作答就暫停」的寬限時間。
+ *
+ * 擁有者指定 0.5 秒：畫面捲到下一句後 0.5 秒內補上就不算錯過。
+ * 短於此會來不及反應，長於此就失去「跟上歌曲」的壓力。
+ */
+private const val ANSWER_GRACE_MS = 500L
+
+/** 音量淡出／淡入的時間。擁有者指定 0.3 秒。 */
+private const val FADE_OUT_MS = 300L
+
+/** 因為等作答而暫停時顯示的提示。 */
+private const val WAITING_FOR_ANSWER = "已暫停，補上這句的填空就會繼續播放。"
 
 private const val TAG = "LyrianPractice"
 
@@ -207,6 +236,13 @@ class PracticeViewModel @Inject constructor(
     private var audioResolved = false
 
     /**
+     * 「上一句沒作答就暫停」的計時器。
+     *
+     * 擁有者指定 0.5 秒的寬限：進入下一句後 0.5 秒內補上就不算錯過。
+     */
+    private var autoPauseJob: Job? = null
+
+    /**
      * 把播放器的狀態同步進 UI 狀態。
      *
      * 播放器是**單例**（旋轉螢幕不中斷音樂），所以它的狀態可能比這個
@@ -229,20 +265,84 @@ class PracticeViewModel @Inject constructor(
 
         // 播放中才輪詢位置。Media3 沒有「位置變化」的 callback
         // （位置是連續值，全部回報會太吵），因此以固定間隔取樣。
+        //
+        // ⚠️ **暫停時不更新位置**——這正是「暫停期間歌詞時間軸同步凍結」的實作：
+        // 不取樣，`singingLineIndex` 就不會前進。
         viewModelScope.launch {
             while (true) {
                 if (_uiState.value.isPlaying) {
                     val position = player.currentPositionMs()
+                    val lineIndex = lineIndexAt(position)
+                    val previousLine = _uiState.value.singingLineIndex
+
                     _uiState.update {
                         it.copy(
                             playbackPositionMs = position,
-                            singingLineIndex = lineIndexAt(position),
+                            singingLineIndex = lineIndex,
+                            isSongDriven = lineIndex != null,
                         )
+                    }
+
+                    if (lineIndex != null && lineIndex != previousLine) {
+                        onSingingLineAdvanced(previousLine, lineIndex)
                     }
                 }
                 delay(POSITION_POLL_MS)
             }
         }
+    }
+
+    /**
+     * 歌詞前進到新的一行時要處理兩件事：
+     *
+     * 1. **作答目標跟著歌曲走**——題目換成新這一行（如果它有挖空）
+     * 2. **上一句沒作答就暫停**——0.5 秒寬限後仍未作答，淡出暫停
+     */
+    private fun onSingingLineAdvanced(previousLine: Int?, currentLine: Int) {
+        // 1. 把作答目標移到目前這一行
+        val question = questionForLine(currentLine)
+        if (question != null) {
+            _uiState.update {
+                it.copy(
+                    activeBlankIndex = question.blankIndex,
+                    options = optionsByBlank[question.blankIndex].orEmpty(),
+                )
+            }
+        }
+
+        // 2. 上一句的空白若還沒作答 → 開始 0.5 秒的寬限計時
+        //
+        //    只在**往前**換行時判斷：使用者往回拖曳進度條時不該被暫停。
+        if (previousLine == null || currentLine <= previousLine) return
+
+        val previousQuestion = questionForLine(previousLine) ?: return
+        if (_uiState.value.selections.containsKey(previousQuestion.blankIndex)) return
+
+        autoPauseJob?.cancel()
+        autoPauseJob = viewModelScope.launch {
+            delay(ANSWER_GRACE_MS)
+            if (_uiState.value.selections.containsKey(previousQuestion.blankIndex)) return@launch
+
+            // ⚠️ 暫停時必須**把題目換回漏掉的那一句**。
+            // 否則畫面上會是「下一句」的選項，使用者永遠補不到上一句，
+            // 也就無法觸發「答完就恢復播放」。
+            _uiState.update {
+                it.copy(
+                    activeBlankIndex = previousQuestion.blankIndex,
+                    options = optionsByBlank[previousQuestion.blankIndex].orEmpty(),
+                    waitingForBlankIndex = previousQuestion.blankIndex,
+                    audioNotice = WAITING_FOR_ANSWER,
+                )
+            }
+            // 0.3 秒淡出後才 pause，不是硬切
+            player.fadeOutAndPause(FADE_OUT_MS)
+        }
+    }
+
+    /** 目前這一行的題目；沒有挖空時回傳 null。 */
+    private fun questionForLine(lineIndex: Int?): FillChoiceQuestion? {
+        if (lineIndex == null) return null
+        return _uiState.value.questions.firstOrNull { it.lineIndex == lineIndex }
     }
 
     /**
@@ -317,12 +417,23 @@ class PracticeViewModel @Inject constructor(
      * 播放鍵：**同時控制播放器與歌詞滾動**。
      *
      * 這是擁有者指定的核心行為——只有一個開關，不是兩個。
+     * 使用者手動操作時，要取消「等你作答」的自動暫停，否則會互相打架。
      */
     fun onTogglePlayPause() {
+        autoPauseJob?.cancel()
+
         if (!_uiState.value.isAudioReady) {
             prepareAudio()
             return
         }
+
+        if (_uiState.value.waitingForBlankIndex != null) {
+            // 使用者選擇自己恢復播放 → 不再等作答
+            _uiState.update {
+                it.copy(waitingForBlankIndex = null, audioNotice = null)
+            }
+        }
+
         player.togglePlayPause()
     }
 
@@ -437,6 +548,7 @@ class PracticeViewModel @Inject constructor(
         songHead = source.head
 
         // 播放器是單例，可能還留著上一首歌的狀態 → 每次都清乾淨
+        autoPauseJob?.cancel()
         player.stop()
         audioResolved = false
 
@@ -444,6 +556,8 @@ class PracticeViewModel @Inject constructor(
             source.lines,
             randomFor(source.head.songId),
         )
+
+        logBlankDecisions(dataset.debug)
 
         if (dataset.questions.isEmpty()) {
             _uiState.update {
@@ -480,12 +594,56 @@ class PracticeViewModel @Inject constructor(
                 lines = dataset.lines,
                 questions = dataset.questions,
                 options = optionsByBlank[0].orEmpty(),
+                // 換歌時把節奏狀態歸零，避免上一首的暫停／行號黏過來
+                isSongDriven = false,
+                singingLineIndex = null,
+                waitingForBlankIndex = null,
+                playbackPositionMs = 0L,
             )
         }
     }
 
     private fun failWith(message: String) {
         _uiState.update { it.copy(isLoading = false, errorMessage = message) }
+    }
+
+    /**
+     * 印出「挖空的詞 + 其等級來源」，讓擁有者能直接驗證過濾是否有效。
+     *
+     * 輸出長這樣（可在 logcat 用 `LyrianPractice` 過濾）：
+     * ```
+     * D/LyrianPractice: 挖空 L3: silhouette | 等級來源: 非常見詞（通過過濾）
+     * D/LyrianPractice:   L3 過濾: love(Top 1000 高頻詞), it's(代名詞（it's→it）)
+     * ```
+     *
+     * 同時會印出總計，方便一眼看出這首歌被過濾掉多少字。
+     */
+    private fun logBlankDecisions(decisions: List<BlankDecision>) {
+        if (decisions.isEmpty()) return
+
+        val blanks = decisions.count { it.chosenWord != null }
+        val filtered = decisions.sumOf { it.rejected.size }
+
+        android.util.Log.d(
+            TAG,
+            "挖空統計：${decisions.size} 行 → $blanks 題；過濾掉 $filtered 個常見詞",
+        )
+
+        decisions.forEach { decision ->
+            if (decision.chosenWord != null) {
+                android.util.Log.d(
+                    TAG,
+                    "挖空 L${decision.lineIndex}: ${decision.chosenWord} | 等級來源: ${decision.chosenLevelSource}",
+                )
+            } else {
+                android.util.Log.d(TAG, "挖空 L${decision.lineIndex}: （無合格單字）")
+            }
+
+            if (decision.rejected.isNotEmpty()) {
+                val detail = decision.rejected.joinToString { "${it.word}(${it.levelSource})" }
+                android.util.Log.d(TAG, "  L${decision.lineIndex} 過濾: $detail")
+            }
+        }
     }
 
     /**
@@ -504,6 +662,7 @@ class PracticeViewModel @Inject constructor(
         if (state.currentRecord != null) return // 已作答，忽略重複點擊
 
         val attempt = FillChoiceBuilder.grade(question, choice)
+        val wasWaitingForThis = state.waitingForBlankIndex == question.blankIndex
 
         _uiState.update {
             it.copy(
@@ -511,13 +670,29 @@ class PracticeViewModel @Inject constructor(
             )
         }
 
+        // 答錯仍照常進字庫（擁有者指定）——不論對錯都落庫，錯的才進字庫
         persist(question, choice, attempt.isCorrect)
+
+        // 剛剛就是因為這一句被暫停的 → 從暫停位置淡入恢復，**不重頭播**
+        if (wasWaitingForThis) {
+            autoPauseJob?.cancel()
+            _uiState.update {
+                it.copy(waitingForBlankIndex = null, audioNotice = null)
+            }
+            viewModelScope.launch { player.fadeInAndPlay(FADE_OUT_MS) }
+        }
     }
 
-    /** 前進到下一題。全部答完時 [PracticeUiState.isComplete] 會變成 true。 */
+    /**
+     * 前進到下一題。
+     *
+     * **歌曲驅動時不作用**——這時題目由播放時間軸決定，
+     * 答完一題就自己跳下一題會跟歌曲打架。沒有音源時才維持舊行為。
+     */
     fun onNext() {
         val state = _uiState.value
         if (state.currentRecord == null) return
+        if (state.isSongDriven) return
 
         val nextIndex = state.activeBlankIndex + 1
 
@@ -540,18 +715,33 @@ class PracticeViewModel @Inject constructor(
                 options = optionsByBlank[clamped].orEmpty(),
             )
         }
+
+        // 歌曲驅動時，「題目軸」必須連動歌曲位置，否則下一個輪詢就把它蓋回正在唱的那句，
+        // 控制項會看起來完全失效。
+        val question = state.questions.getOrNull(clamped)
+        if (state.isAudioReady && question != null) {
+            onSeekPlayback(question.startMs)
+        }
     }
 
     fun onReplay() {
         val state = _uiState.value
         if (state.questions.isEmpty()) return
 
+        autoPauseJob?.cancel()
+
         _uiState.update {
             it.copy(
                 activeBlankIndex = 0,
                 selections = emptyMap(),
                 options = optionsByBlank[0].orEmpty(),
+                waitingForBlankIndex = null,
+                singingLineIndex = null,
             )
+        }
+
+        if (state.isAudioReady) {
+            onSeekPlayback(0L)
         }
     }
 

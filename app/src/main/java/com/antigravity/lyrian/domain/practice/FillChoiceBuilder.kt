@@ -1,10 +1,12 @@
 package com.antigravity.lyrian.domain.practice
 
 import com.antigravity.lyrian.domain.model.Attempt
+import com.antigravity.lyrian.domain.model.BlankDecision
 import com.antigravity.lyrian.domain.model.FillChoiceDataset
 import com.antigravity.lyrian.domain.model.FillChoiceQuestion
 import com.antigravity.lyrian.domain.model.LyricLine
 import com.antigravity.lyrian.domain.model.PracticeModeId
+import com.antigravity.lyrian.domain.model.RejectedCandidate
 import com.antigravity.lyrian.domain.model.VocabCandidate
 import kotlin.random.Random
 
@@ -33,45 +35,17 @@ object FillChoiceBuilder {
     const val OPTION_COUNT = 4
 
     /**
-     * 不值得挖空的常見虛詞。
+     * 不值得挖空的常見詞，交由 [CommonWordFilter] 判定。
      *
-     * 這些字出現頻率極高、幾乎沒有學習價值（學習者早就會了），
-     * 挖它們只會讓題目變多卻沒有學習效果。
+     * 這份判定涵蓋：**Top 1000 高頻詞**、代名詞、be/do/have、冠詞、介系詞、助動詞。
+     * 比對是**整詞比對**（不是子字串），且會先做縮寫展開（`don't` → `do`、`it's` → `it`）。
      *
-     * **這是一份暫時的靜態清單**。擁有者已指示之後會改用 **CEFR 分級**篩選
-     * （依 Europe 語言共同參考框架，只挖 A2/B1 以上的字）。
-     * 屆時只要替換 [isWorthDrilling] 的實作即可，呼叫端不需改動。
-     */
-    private val STOP_WORDS: Set<String> = setOf(
-        // 冠詞、代名詞
-        "the", "and", "you", "your", "yours", "she", "her", "hers", "him", "his",
-        "they", "them", "their", "theirs", "our", "ours", "its", "who", "whom",
-        "this", "that", "these", "those", "all", "any", "both", "each", "few",
-        "more", "most", "other", "some", "such", "own", "same", "than", "too",
-        "very", "just", "only", "also", "even", "still", "yet", "ever", "never",
-        // be 動詞與助動詞
-        "are", "was", "were", "been", "being", "has", "had", "have", "does",
-        "did", "doing", "will", "would", "can", "could", "shall", "should",
-        "may", "might", "must", "ought",
-        // 介系詞、連接詞
-        "for", "not", "but", "out", "into", "onto", "over", "under", "about",
-        "with", "from", "off", "per", "via", "nor", "because", "while", "when",
-        "where", "what", "which", "how", "why", "there", "here", "then", "now",
-        "once", "upon", "among", "between", "through", "during", "before",
-        "after", "above", "below", "again", "further", "any", "each",
-    )
-
-    /**
-     * 這個字值不值得挖空。
-     *
-     * 目前的策略：長度 >= [BLANK_MIN_WORD_LENGTH] 且不是常見虛詞。
-     *
-     * **之後會改成依 CEFR 分級篩選**——這是唯一需要改動的地方。
-     * 屆時把這裡換成查 ECDICT 的詞頻／CEFR 標籤即可。
+     * **之前的做法**是一份幾十個字的靜態虛詞表，只擋得掉 the/and/you 這類虛詞；
+     * love、hope、night 這些高頻實詞仍會被挖，使用者就得一直回答早就會的字。
      */
     fun isWorthDrilling(word: String): Boolean {
-        if (word.length < BLANK_MIN_WORD_LENGTH) return false
-        return word.lowercase() !in STOP_WORDS
+        if (word.trim().length < BLANK_MIN_WORD_LENGTH) return false
+        return !CommonWordFilter.isCommon(word)
     }
 
     /**
@@ -88,27 +62,76 @@ object FillChoiceBuilder {
     data class BlankCandidate(val word: String, val start: Int, val end: Int)
 
     /**
-     * 找出可挖空的候選單字。
+     * 一行的掃描結果。
      *
-     * 條件：長度 >= [minWordLength] **且**值得挖（見 [isWorthDrilling]，
-     * 會排除 the / and / you 這類虛詞）。
+     * @property candidates 通過過濾、可挖空的位置
+     * @property rejected 被等級表擋掉的候選（含等級來源），供偵錯輸出
      */
-    fun findBlankCandidates(
+    data class LineScan(
+        val candidates: List<BlankCandidate>,
+        val rejected: List<RejectedCandidate>,
+    )
+
+    /**
+     * 切成「單字」的樣式。
+     *
+     * **含撇號**——`don't` 必須是**一個** token，否則會被切成 `don` + `t`，
+     * 就無法展開成 `do` 而讓它溜過過濾（這正是先前的 bug，見 `FillChoiceBuilderTest`）。
+     *
+     * 只吃英文字母，因此數字與標點天然被排除。
+     */
+    private val TOKEN_PATTERN = Regex("""[A-Za-z]+(?:['’][A-Za-z]+)*""")
+
+    /**
+     * 掃描一行：分出可挖空的候選與被過濾掉的字。
+     *
+     * 過濾順序（擁有者指定）：**命中等級表 → 挖空前先過濾**。
+     */
+    fun scanLine(
         text: String,
         minWordLength: Int = BLANK_MIN_WORD_LENGTH,
-    ): List<BlankCandidate> {
-        val pattern = Regex("""\b[A-Za-z]{$minWordLength,}\b""")
-        return pattern.findAll(text)
-            .filter { isWorthDrilling(it.value) }
-            .map { match ->
-                BlankCandidate(
-                    word = match.value,
+    ): LineScan {
+        val candidates = mutableListOf<BlankCandidate>()
+        val rejected = mutableListOf<RejectedCandidate>()
+
+        TOKEN_PATTERN.findAll(text).forEach { match ->
+            val token = match.value
+
+            // 太短的字連等級都不用查（a / am / oh）
+            if (token.length < minWordLength) return@forEach
+
+            val level = CommonWordFilter.classify(token)
+            if (level.isCommon) {
+                rejected += RejectedCandidate(
+                    word = token,
+                    levelSource = if (level.matchedForm != null) {
+                        "${level.sourceLabel}（${level.token}→${level.matchedForm}）"
+                    } else {
+                        level.sourceLabel
+                    },
+                )
+            } else {
+                candidates += BlankCandidate(
+                    word = token,
                     start = match.range.first,
                     end = match.range.last + 1,
                 )
             }
-            .toList()
+        }
+
+        return LineScan(candidates = candidates, rejected = rejected)
     }
+
+    /**
+     * 找出可挖空的候選單字。
+     *
+     * 條件：長度 >= [minWordLength] **且**通過 [CommonWordFilter] 的等級過濾
+     * （Top 1000 高頻詞、代名詞、be/do/have、冠詞、介系詞、助動詞都會被排除）。
+     */
+    fun findBlankCandidates(
+        text: String,
+        minWordLength: Int = BLANK_MIN_WORD_LENGTH,
+    ): List<BlankCandidate> = scanLine(text, minWordLength).candidates
 
     /**
      * 把整首歌詞轉成題目集。
@@ -127,13 +150,32 @@ object FillChoiceBuilder {
         minWordLength: Int = BLANK_MIN_WORD_LENGTH,
     ): FillChoiceDataset {
         val questions = mutableListOf<FillChoiceQuestion>()
+        val decisions = mutableListOf<BlankDecision>()
 
         // 把挖空結果**同時**套回每一行——這樣整首歌一開始就都是挖好的
         val blankedLines = lines.map { line ->
-            val candidates = findBlankCandidates(line.text, minWordLength)
-            if (candidates.isEmpty()) return@map line
+            val scan = scanLine(line.text, minWordLength)
+            if (scan.candidates.isEmpty()) {
+                // 過濾後沒有可挖的字：記錄下來，讓偵錯輸出能說明為什麼這行沒有題目
+                decisions += BlankDecision(
+                    lineIndex = line.index,
+                    chosenWord = null,
+                    chosenLevelSource = null,
+                    rejected = scan.rejected,
+                )
+                return@map line
+            }
 
-            val picked = candidates[random.nextInt(candidates.size)]
+            val picked = scan.candidates[random.nextInt(scan.candidates.size)]
+
+            decisions += BlankDecision(
+                lineIndex = line.index,
+                chosenWord = picked.word,
+                // 被選中的字必然「非常見詞」，這裡記錄它的等級來源以便驗證
+                chosenLevelSource = CommonWordFilter.classify(picked.word).sourceLabel,
+                rejected = scan.rejected,
+            )
+
             questions += FillChoiceQuestion(
                 blankIndex = questions.size,
                 lineIndex = line.index,
@@ -151,7 +193,11 @@ object FillChoiceBuilder {
             )
         }
 
-        return FillChoiceDataset(lines = blankedLines, questions = questions)
+        return FillChoiceDataset(
+            lines = blankedLines,
+            questions = questions,
+            debug = decisions,
+        )
     }
 
     /**
