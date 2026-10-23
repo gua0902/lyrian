@@ -1,4 +1,4 @@
-﻿package com.antigravity.lyrian.data.remote
+package com.antigravity.lyrian.data.remote
 
 import com.antigravity.lyrian.data.lang.WordLevelSource
 import com.antigravity.lyrian.data.lyrics.LyricsParser
@@ -49,11 +49,37 @@ class SongSearchRepository @Inject constructor(
 ) {
 
     companion object {
-        /**
-         * LRCLIB 要求可識別的 User-Agent。
-         * 沒有帶的話可能被擋（實測需帶）。
-         */
-        const val LRCLIB_USER_AGENT = "LyrianApp/1.0.0 (https://github.com/antigravity/lyrian)"
+        /** 重試前的等待。一次搜尋對使用者是可感知的等待，不宜太久。 */
+        private const val RETRY_DELAY_MS = 700L
+    }
+
+    /**
+     * 暫時性失敗（5xx／連線中斷）重試**一次**。
+     *
+     * 為什麼要重試：LRCLIB 前面是 Cloudflare，實際遇過「同一組標頭、
+     * 同一台機器，某些查詢回 503、再打一次就 200」。多打一次的成本很低，
+     * 卻能省掉使用者手動再按一次搜尋。
+     *
+     * 為什麼只重試一次：真的被擋就是被擋，密集重試只會讓對方更確定
+     * 我們是機器人。超過一次就讓錯誤往上冒，由 UI 說明。
+     */
+    private suspend fun <T> retryOnceOnTransient(block: suspend () -> T): T {
+        try {
+            return block()
+        } catch (cancelled: kotlinx.coroutines.CancellationException) {
+            throw cancelled
+        } catch (error: Throwable) {
+            if (!error.isTransient()) throw error
+            kotlinx.coroutines.delay(RETRY_DELAY_MS)
+            return block()
+        }
+    }
+
+    /** 這個錯誤值不值得再試一次。 */
+    private fun Throwable.isTransient(): Boolean = when (this) {
+        is retrofit2.HttpException -> code() in 500..599 || code() == 429
+        is java.io.IOException -> true
+        else -> false
     }
 
     /**
@@ -71,16 +97,17 @@ class SongSearchRepository @Inject constructor(
         maxBlanks: Int = FillChoiceBuilder.DEFAULT_MAX_BLANKS,
         levelSource: WordLevelSource = WordLevelSource.None,
     ): List<SongSearchResult> {
-        val entries = lrclibApi.search(
-            userAgent = LRCLIB_USER_AGENT,
-            artistName = artist.trim().ifEmpty { null },
-            trackName = track.trim().ifEmpty { null },
-            q = if (artist.isBlank() || track.isBlank()) {
-                (artist + " " + track).trim()
-            } else {
-                null
-            },
-        )
+        val entries = retryOnceOnTransient {
+            lrclibApi.search(
+                artistName = artist.trim().ifEmpty { null },
+                trackName = track.trim().ifEmpty { null },
+                q = if (artist.isBlank() || track.isBlank()) {
+                    (artist + " " + track).trim()
+                } else {
+                    null
+                },
+            )
+        }
 
         if (entries.isEmpty()) return emptyList()
 
@@ -136,7 +163,7 @@ class SongSearchRepository @Inject constructor(
             genre = NameMatcher.translateGenre(match?.primaryGenreName),
             blankCount = FillChoiceBuilder.countBlankableLines(
                 lines,
-                difficulty = difficulty,
+                difficulty = difficulty,
                 maxBlanks = maxBlanks,
                 levelSource = levelSource,
             ),

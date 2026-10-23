@@ -145,6 +145,23 @@ class CommonWordFilterTest {
         assertEquals(CommonWordFilter.Category.PRONOUN, CommonWordFilter.classify("you").category)
     }
 
+    @Test
+    fun `感嘆詞與擬聲詞不算詞彙`() {
+        // 擁有者回報「blah 被分到 C2」。blah 不在 CEFR-J／Octanove，
+        // 它的等級是詞頻推估出來的——真正的問題是這種字根本不該被挖空。
+        listOf("blah", "ooh", "whoa", "haha", "ouch").forEach { word ->
+            val level = CommonWordFilter.classify(word)
+            assertEquals(
+                "$word 該被歸類為感嘆詞",
+                CommonWordFilter.Category.INTERJECTION,
+                level.category,
+            )
+            assertTrue("$word 應該被排除", level.category!!.isFunctionWord())
+        }
+
+        assertEquals("感嘆詞／擬聲詞", CommonWordFilter.classify("blah").sourceLabel)
+    }
+
     // ---------- 大小寫與空白 ----------
 
     @Test

@@ -1,4 +1,4 @@
-﻿package com.antigravity.lyrian.ui.screens.search
+package com.antigravity.lyrian.ui.screens.search
 
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
@@ -85,10 +85,31 @@ class SearchViewModel @Inject constructor(
                             isLoading = false,
                             hasSearched = true,
                             results = emptyList(),
-                            errorMessage = error.message ?: "搜尋失敗，請稍後再試",
+                            errorMessage = error.userMessage(),
                         )
                     }
                 }
         }
     }
+}
+
+/**
+ * 把例外翻成使用者看得懂的一句話。
+ *
+ * 「HTTP 503 Service Unavailable」對使用者沒有意義，而且會讓人以為是
+ * App 壞了。真正發生的事是：歌詞庫（LRCLIB）前面那層 Cloudflare 暫時
+ * 擋掉了請求——重試已經在 `SongSearchRepository` 做過一次，所以這裡
+ * 只需要告訴使用者「再按一次」。
+ */
+private fun Throwable.userMessage(): String = when {
+    this is retrofit2.HttpException && code() == 503 ->
+        "歌詞庫暫時忙線（503），已自動重試過一次。請再按一次搜尋。"
+
+    this is retrofit2.HttpException && code() == 429 ->
+        "搜尋太頻繁（429），請等幾秒再試。"
+
+    this is java.io.IOException ->
+        "連線失敗，請檢查網路後再試。"
+
+    else -> message ?: "搜尋失敗，請稍後再試"
 }

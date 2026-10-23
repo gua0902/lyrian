@@ -62,18 +62,27 @@ class YouTubeWebSearch @Inject constructor(
             val url = "https://www.youtube.com/results?search_query=" +
                 java.net.URLEncoder.encode(query, "UTF-8") + "&hl=en&gl=US"
 
-            // ⚠️ 只指定 Accept（HTML）。
-            // User-Agent 一律由全域的 BrowserHeadersInterceptor 決定，
-            // 免得這裡與攔截器各有一份、未來改了一邊忘了另一邊。
+            // ⚠️ Accept 與 User-Agent 都在這裡**明確指定**（攔截器只負責其餘標頭）。
+            //
+            // User-Agent 必須是**桌機版**：手機 UA 會讓 www.youtube.com 回 302
+            // 導到 m.youtube.com，那一頁的 ytInitialData 沒有 `videoRenderer`，
+            // 解析結果會是 0 筆 → 每一首歌都變成「找不到錄音版本」。
             val request = Request.Builder()
                 .url(url)
+                .header("User-Agent", NetworkHeaders.DESKTOP_USER_AGENT)
                 .header("Accept", NetworkHeaders.HTML_ACCEPT)
                 .build()
 
+            var finalHost = ""
             val html = runCatching {
                 client.newCall(request).execute().use { response ->
+                    // 轉址之後的實際主機（OkHttp 預設會跟隨 302）
+                    finalHost = response.request.url.host
                     if (!response.isSuccessful) {
-                        android.util.Log.w(TAG, "YouTube 搜尋回應 ${response.code}")
+                        android.util.Log.w(
+                            TAG,
+                            "YouTube 搜尋回應 ${response.code}（$finalHost）",
+                        )
                         return@withContext emptyList()
                     }
                     response.body?.string().orEmpty()
@@ -83,10 +92,19 @@ class YouTubeWebSearch @Inject constructor(
                 return@withContext emptyList()
             }
 
+            if (finalHost != "www.youtube.com") {
+                android.util.Log.w(
+                    TAG,
+                    "YouTube 搜尋被導向 $finalHost（預期 www.youtube.com）——" +
+                        "多半是 UA 被當成手機，解析器可能抓不到任何影片",
+                )
+            }
+
             parseSearchResults(html, json, limit).also { videos ->
                 android.util.Log.d(
                     TAG,
                     "搜尋「$query」解析出 ${videos.size} 個候選" +
+                        "（HTML ${html.length} 字元，實際主機 $finalHost）" +
                         videos.take(3).joinToString(
                             prefix = "：",
                             separator = " | ",
@@ -125,9 +143,10 @@ class YouTubeWebSearch @Inject constructor(
                 val videoId = renderer.string("videoId") ?: continue
                 if (!seen.add(videoId)) continue
 
-                val title = renderer.textOf("title") ?: continue
+                val title = renderer.textOf("title") ?: renderer.textOf("headline") ?: continue
                 val channel = renderer.textOf("ownerText")
                     ?: renderer.textOf("longBylineText")
+                    ?: renderer.textOf("shortBylineText")
                     ?: ""
 
                 videos += YouTubeVideo(
@@ -186,6 +205,10 @@ class YouTubeWebSearch @Inject constructor(
                 is JsonObject -> {
                     element["videoRenderer"]?.let { if (it is JsonObject) out += it }
                     element["compactVideoRenderer"]?.let { if (it is JsonObject) out += it }
+                    // 手機版（`m.youtube.com`）用的是這一個 renderer。正常情況走不到
+                    // （我們送桌機 UA），留著是為了讓「被導向手機版」時還原得出候選，
+                    // 而不是整首歌靜靜變成 0 筆。
+                    element["videoWithContextRenderer"]?.let { if (it is JsonObject) out += it }
                     element.values.forEach { collectRenderers(it, out) }
                 }
 

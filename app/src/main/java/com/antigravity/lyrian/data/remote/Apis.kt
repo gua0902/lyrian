@@ -1,7 +1,6 @@
 package com.antigravity.lyrian.data.remote
 
 import retrofit2.http.GET
-import retrofit2.http.Header
 import retrofit2.http.Query
 
 /**
@@ -15,7 +14,10 @@ interface LrclibApi {
      * 搜尋歌曲。
      *
      * 實測：一次最多回 20 筆，**每筆都含完整歌詞**。
-     * LRCLIB 要求可識別的 User-Agent，否則可能被擋。
+     *
+     * ⚠️ User-Agent **不在這裡指定**——由 `BrowserHeadersInterceptor` 統一處理。
+     * LRCLIB 文件要求可識別的 UA，但 Cloudflare 會把所有非瀏覽器 UA
+     * （包含 `LyrianApp/1.0.0`）當成爬蟲直接回 503，實測只有瀏覽器 UA 穩定。
      *
      * @param artistName 歌手；與 [trackName] 同時提供時為精準查詢
      * @param trackName 歌名
@@ -23,7 +25,6 @@ interface LrclibApi {
      */
     @GET("api/search")
     suspend fun search(
-        @Header("User-Agent") userAgent: String,
         @Query("artist_name") artistName: String? = null,
         @Query("track_name") trackName: String? = null,
         @Query("q") q: String? = null,

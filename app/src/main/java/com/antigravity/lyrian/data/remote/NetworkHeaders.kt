@@ -19,14 +19,33 @@ import okhttp3.Response
 object NetworkHeaders {
 
     /**
-     * 一般 Android Chrome 的 UA。
+     * 一般 Android Chrome 的 UA（**手機版**）。
      *
      * 刻意不含 `okhttp`、`wv`、`Version/4.0`——這三個字串都會被判定為
      * 「非瀏覽器」或「受限的 WebView」。
+     *
+     * ⚠️ **只用在 JSON API**（LRCLIB、iTunes）。Google 的網頁服務看到手機 UA
+     * 會把 `www.youtube.com` **302 導到 `m.youtube.com`**，而那頁的
+     * `ytInitialData` 結構完全不同、沒有 `videoRenderer`——解析結果會是 0 筆，
+     * 每一首歌都會變成「找不到錄音版本」。抓 HTML 的請求請改用
+     * [DESKTOP_USER_AGENT]。
      */
     const val BROWSER_USER_AGENT =
         "Mozilla/5.0 (Linux; Android 14; Pixel 8) AppleWebKit/537.36 " +
             "(KHTML, like Gecko) Chrome/126.0.0.0 Mobile Safari/537.36"
+
+    /**
+     * 桌機版 Chrome 的 UA（Windows）。
+     *
+     * **只給「抓 HTML 頁面」的請求用**（YouTube 搜尋結果）。理由見上：
+     * 手機 UA 會被導到 `m.youtube.com`，拿不到 `videoRenderer`。
+     *
+     * 其餘 API 請求仍用手機 UA——那才是這個 App 真實的執行環境，
+     * 而且 Cloudflare（lrclib）兩種都放行，沒有必要假裝是桌機。
+     */
+    const val DESKTOP_USER_AGENT =
+        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 " +
+            "(KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36"
 
     /** JSON API（LRCLIB、iTunes）用的 Accept。 */
     const val JSON_ACCEPT = "application/json, text/plain, */*"
@@ -54,8 +73,9 @@ object NetworkHeaders {
 /**
  * 把瀏覽器標頭套到**每一個**請求上。
  *
- * - `User-Agent`：一律覆寫（這是 503 的根因）
- * - `Accept`：請求自己指定過就尊重它（抓 HTML 的請求要用 [NetworkHeaders.HTML_ACCEPT]）
+ * - `User-Agent`：請求自己指定過就尊重它（抓 HTML 的請求要用
+ *   [NetworkHeaders.DESKTOP_USER_AGENT]；其餘一律套 [NetworkHeaders.BROWSER_USER_AGENT]）
+ * - `Accept`：同上，請求自己指定過就尊重它（抓 HTML 的請求要用 [NetworkHeaders.HTML_ACCEPT]）
  * - `Accept-Language`：固定 en-US（上游會依此回英文內容）
  * - `Connection: keep-alive`：與瀏覽器一致
  */
@@ -65,9 +85,17 @@ class BrowserHeadersInterceptor : Interceptor {
         val original = chain.request()
 
         val accept = original.header("Accept") ?: NetworkHeaders.JSON_ACCEPT
+        // 只有「看起來像瀏覽器」的 UA 才放行（抓 YouTube 搜尋頁要用桌機 UA）。
+        //
+        // 其餘一律換成瀏覽器 UA——這正是 503 的根因：改動前 LRCLIB 走的是
+        // `LyrianApp/1.0.0 (...)`，Cloudflare 直接當爬蟲回 503。
+        // 這道守門員讓「某個呼叫端自己塞了 UA」不會把 503 帶回來。
+        val requested = original.header("User-Agent")
+        val userAgent = requested?.takeIf { it.startsWith("Mozilla/5.0") }
+            ?: NetworkHeaders.BROWSER_USER_AGENT
 
         val request = original.newBuilder()
-            .header("User-Agent", NetworkHeaders.BROWSER_USER_AGENT)
+            .header("User-Agent", userAgent)
             .header("Accept", accept)
             .header("Accept-Language", NetworkHeaders.ACCEPT_LANGUAGE)
             .header("Connection", "keep-alive")

@@ -1,4 +1,4 @@
-﻿package com.antigravity.lyrian.domain.practice
+package com.antigravity.lyrian.domain.practice
 
 /**
  * 常見詞「等級表」。
@@ -42,6 +42,7 @@ object CommonWordFilter {
         PREPOSITION("介系詞"),
         CONJUNCTION("連接詞"),
         NUMERAL("數詞"),
+        INTERJECTION("感嘆詞／擬聲詞"),
         TOP_1000("Top 1000 高頻詞"),
     }
 
@@ -158,6 +159,29 @@ object CommonWordFilter {
     )
 
     /**
+     * 感嘆詞／擬聲詞。
+     *
+     * ## 為什麼要獨立一類
+     *
+     * 擁有者回報：「`blah` 被分到 C2」。查下來的結果是——
+     * `blah` **不在 CEFR-J、也不在 Octanove**，它的 C2 是 App 自己用 BNC 詞頻
+     * （排名 10,986）推估出來的。等級其實沒有算錯（推估規則就寫在那裡），
+     * 真正的問題是：**這種字根本不該被挖空**。
+     *
+     * 感嘆詞沒有可學的詞義、沒有詞形變化、也不會出現在正式句子裡，
+     * 把它當成「C2 高階詞」考使用者、還自動收進字庫，只會讓字庫變髒。
+     * 因此與功能詞走同一條排除路徑。
+     */
+    private val INTERJECTIONS: Set<String> = setOf(
+        "ah", "aha", "ahem", "alas", "amen", "argh", "aw", "aww",
+        "blah", "boo", "bravo", "darn", "duh", "eh", "gee", "gosh",
+        "ha", "haha", "heh", "hey", "hi", "hmm", "ho", "huh", "hum", "hooray", "hurray",
+        "la", "meh", "mm", "mmm", "na", "nah", "oh", "ooh", "oops", "ouch", "ow",
+        "phew", "psst", "sh", "shh", "tsk", "tut", "uh", "um", "welp",
+        "whoa", "woah", "wow", "yay", "yeah", "yep", "yikes", "yo", "yuck", "zzz",
+    )
+
+    /**
      * Top 1000 高頻詞。
      *
      * **刻意包含常見的實詞**（love / hope / night / heart…）——擁有者指定的規則
@@ -265,6 +289,7 @@ object CommonWordFilter {
         form in PREPOSITIONS -> Category.PREPOSITION
         form in CONJUNCTIONS -> Category.CONJUNCTION
         form in NUMERALS -> Category.NUMERAL
+        form in INTERJECTIONS -> Category.INTERJECTION
         form in TOP_1000 -> Category.TOP_1000
         else -> null
     }
@@ -331,9 +356,12 @@ worry would write writer wrong yard yeah year yes yet you young your yourself
 }
 
 /**
- * 這個分類算不算「功能詞」。
+ * 這個分類算不算「不該挖空的字」。
  *
- * 模組 C 的硬性排除只包含功能詞（冠詞／介系詞／代名詞／連接詞／助動詞／數詞），
+ * 模組 C 的硬性排除包含功能詞（冠詞／介系詞／代名詞／連接詞／助動詞／數詞），
+ * 以及**感嘆詞／擬聲詞**——後者沒有詞義可學，詞頻推估出來的等級也不該
+ * 成為挖空它的理由（`blah` 就是這樣被當成 C2 的）。
+ *
  * **不包含** TOP_1000——高頻詞在新規則裡改成「降權」，
  * 只有前 500 名才是硬性排除（那由 LanguageData 的詞頻排名決定）。
  */
@@ -345,6 +373,7 @@ fun CommonWordFilter.Category.isFunctionWord(): Boolean = when (this) {
     CommonWordFilter.Category.PREPOSITION,
     CommonWordFilter.Category.CONJUNCTION,
     CommonWordFilter.Category.NUMERAL,
+    CommonWordFilter.Category.INTERJECTION,
     -> true
 
     CommonWordFilter.Category.TOP_1000 -> false

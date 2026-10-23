@@ -16,7 +16,6 @@ class SongSearchRepositoryTest {
     private val repository = SongSearchRepository(
         lrclibApi = object : LrclibApi {
             override suspend fun search(
-                userAgent: String,
                 artistName: String?,
                 trackName: String?,
                 q: String?,

@@ -1,11 +1,10 @@
-﻿package com.antigravity.lyrian.ui.screens.practice
+package com.antigravity.lyrian.ui.screens.practice
 
 import androidx.compose.animation.animateColorAsState
 import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
 import androidx.compose.foundation.gestures.detectTapGestures
-import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
@@ -42,10 +41,7 @@ import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Scaffold
-import androidx.compose.material3.Slider
-import androidx.compose.material3.SliderDefaults
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
@@ -65,7 +61,6 @@ import androidx.compose.ui.unit.IntOffset
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
-import kotlin.math.abs
 import kotlin.math.roundToInt
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.graphicsLayer
@@ -222,24 +217,12 @@ fun PracticeScreen(
                 modifier = Modifier.padding(innerPadding),
             )
 
-            // 手動兜底：只有 YouTube 連結、沒有歌詞時，至少把歌播出來
-            state.playerOnly -> PlayerOnlyContent(
-                state = state,
-                player = viewModel.player,
-                onBack = onBack,
-                onTogglePlayPause = viewModel::onTogglePlayPause,
-                onSeekPlayback = viewModel::onSeekPlayback,
-                onSeekFinished = viewModel::onTimelineSeekFinished,
-                modifier = Modifier.padding(innerPadding),
-            )
-
             else -> PracticeContent(
                 state = state,
                 player = viewModel.player,
                 onBack = onBack,
                 onSelectOption = viewModel::onSelectOption,
                 onNext = viewModel::onNext,
-                onSeek = viewModel::onSeekTo,
                 onTogglePlayPause = viewModel::onTogglePlayPause,
                 onSeekPlayback = viewModel::onSeekPlayback,
                 onTimelineSeekFinished = viewModel::onTimelineSeekFinished,
@@ -259,7 +242,6 @@ private fun PracticeContent(
     onBack: () -> Unit,
     onSelectOption: (String) -> Unit,
     onNext: () -> Unit,
-    onSeek: (Int) -> Unit,
     onTogglePlayPause: () -> Unit,
     onSeekPlayback: (Long) -> Unit,
     onTimelineSeekFinished: () -> Unit,
@@ -319,17 +301,13 @@ private fun PracticeContent(
                 ),
             )
 
-            // 模組 H：全曲只有**一條**進度條（時間軸）。
-            // 舊版還有一條「作答進度」滑桿，兩條對得上但不成比例，會誤導使用者。
+            // 模組 H：全曲只有**一條**進度條（時間軸），且不畫刻度。
             TimelineScrubber(
                 positionMs = state.playbackPositionMs,
                 durationMs = state.playbackDurationMs
                     ?: state.lines.lastOrNull()?.startMs,
-                questions = state.questions,
-                answered = state.selections.keys,
                 onSeek = onSeekPlayback,
                 onSeekFinished = onTimelineSeekFinished,
-                onTapQuestion = onSeek,
             )
 
             Box(modifier = Modifier.weight(1f).fillMaxWidth()) {
@@ -542,236 +520,80 @@ private fun PlayerHeader(
  * 兩條**對得上但不成比例**——第 3 題可能在 12 秒，第 4 題在 3 分半，
  * 下面的滑桿卻把兩者畫成等距。使用者看到的「進度」是假的。
  *
- * 現在以**時間**為軸：拖曳即 seek，題目位置只是這條軸上的刻度。
+ * 現在以**時間**為軸：點一下就 seek 到那裡。
  *
- * ## 刻度（B-6 的補答入口）
+ * ## 為什麼沒有刻度（擁有者要求拿掉）
  *
- *  - **空心圓**＝還沒答，點一下就跳到該題並暫停
- *  - **實心圓**＝已答，點一下只是跳時間
- *  - 當前位置有一條白色指示線
- *
- * 用 `pointerInput` 直接量座標：`Slider` 不能同時畫刻度與點擊，
- * 而「未答刻度可點」正是擁有者要的補答入口。
+ * 上一版在長條上畫了「每題一個小圓點」（未答空心、已答實心）。
+ * 48 句的歌會在 4dp 的長條上擠出幾十個點，看起來像雜訊，
+ * 也把進度條本身壓得看不清——**視覺上就是醜**。點擊 seek 的功能保留。
  */
 @Composable
 private fun TimelineScrubber(
     positionMs: Long,
     durationMs: Long?,
-    questions: List<com.antigravity.lyrian.domain.model.FillChoiceQuestion>,
-    answered: Set<Int>,
     onSeek: (Long) -> Unit,
     onSeekFinished: () -> Unit,
-    onTapQuestion: (Int) -> Unit,
 ) {
     val duration = durationMs?.takeIf { it > 0 } ?: return
     var widthPx by remember { mutableStateOf(0) }
     val density = LocalDensity.current
+    val progress = fractionOf(positionMs, duration)
 
-    Column(
+    Box(
         modifier = Modifier
             .fillMaxWidth()
-            .padding(horizontal = 16.dp),
+            .padding(horizontal = 16.dp)
+            // 40dp 是**觸控高度**，不是視覺高度：長條本身只有 4dp。
+            .height(40.dp)
+            .onSizeChanged { widthPx = it.width }
+            .pointerInput(duration, widthPx) {
+                detectTapGestures { offset ->
+                    if (widthPx > 0) {
+                        onSeek((offset.x / widthPx * duration).toLong())
+                        onSeekFinished()
+                    }
+                }
+            },
+        contentAlignment = Alignment.CenterStart,
     ) {
+        // 底軌
         Box(
             modifier = Modifier
                 .fillMaxWidth()
-                .height(40.dp)
-                .onSizeChanged { widthPx = it.width }
-                .pointerInput(duration, widthPx, questions, answered) {
-                    detectTapGestures { offset ->
-                        // 先看有沒有點在未答的刻度上（容許 12dp 的誤差）
-                        val tolerance = with(density) { 12.dp.toPx() }
-                        val hit = questions
-                            .filterNot { answered.contains(it.blankIndex) }
-                            .minByOrNull { abs(offset.x - fractionOf(it.startMs, duration) * widthPx) }
-                            ?.takeIf { abs(offset.x - fractionOf(it.startMs, duration) * widthPx) <= tolerance }
+                .height(4.dp)
+                .clip(RoundedCornerShape(2.dp))
+                .background(Color.White.copy(alpha = 0.24f)),
+        )
 
-                        if (hit != null) {
-                            onTapQuestion(hit.blankIndex)
-                        } else if (widthPx > 0) {
-                            onSeek((offset.x / widthPx * duration).toLong())
-                            onSeekFinished()
-                        }
-                    }
-                },
-            contentAlignment = Alignment.CenterStart,
-        ) {
-            // 底軌
-            Box(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .height(4.dp)
-                    .clip(RoundedCornerShape(2.dp))
-                    .background(Color.White.copy(alpha = 0.24f)),
-            )
+        // 已播放
+        Box(
+            modifier = Modifier
+                .fillMaxWidth(progress)
+                .height(4.dp)
+                .clip(RoundedCornerShape(2.dp))
+                .background(MaterialTheme.colorScheme.primary),
+        )
 
-            // 已播放
-            val progress = fractionOf(positionMs, duration)
-            Box(
-                modifier = Modifier
-                    .fillMaxWidth(progress)
-                    .height(4.dp)
-                    .clip(RoundedCornerShape(2.dp))
-                    .background(MaterialTheme.colorScheme.primary),
-            )
-
-            // 題目刻度
-            if (widthPx > 0) {
-                questions.forEach { question ->
-                    val isAnswered = answered.contains(question.blankIndex)
-                    Box(
-                        modifier = Modifier
-                            .offset { IntOffset((fractionOf(question.startMs, duration) * widthPx).roundToInt() - with(density) { 4.dp.roundToPx() }, 0) }
-                            .size(8.dp)
-                            .clip(CircleShape)
-                            .background(
-                                if (isAnswered) {
-                                    MaterialTheme.colorScheme.primary
-                                } else {
-                                    Color.White
-                                },
-                            )
-                            .then(
-                                if (isAnswered) {
-                                    Modifier
-                                } else {
-                                    Modifier.border(1.dp, Color.Black.copy(alpha = 0.5f), CircleShape)
-                                },
-                            ),
+        // 目前位置
+        Box(
+            modifier = Modifier
+                .offset {
+                    IntOffset(
+                        (progress * widthPx).roundToInt() - with(density) { 1.dp.roundToPx() },
+                        0,
                     )
                 }
-            }
-
-            // 目前位置
-            Box(
-                modifier = Modifier
-                    .offset { IntOffset((progress * widthPx).roundToInt() - with(density) { 1.dp.roundToPx() }, 0) }
-                    .width(2.dp)
-                    .height(16.dp)
-                    .background(Color.White),
-            )
-        }
+                .width(2.dp)
+                .height(16.dp)
+                .background(Color.White),
+        )
     }
 }
 
 /** 位置 → 0..1。 */
 private fun fractionOf(ms: Long, duration: Long): Float =
     if (duration <= 0) 0f else (ms.toFloat() / duration).coerceIn(0f, 1f)
-
-/**
- * 只有播放器的練習頁（模組 A 的手動兜底）。
- *
- * 使用者貼上 YouTube 連結、但沒有歌詞時走這條——外呼被擋（503）或斷網時，
- * 至少還能把歌播出來，不會整個 App 卡死。
- *
- * 播放器**放大到畫面寬度**（依影片比例），因為這裡沒有歌詞要留空間。
- */
-@Composable
-private fun PlayerOnlyContent(
-    state: PracticeUiState,
-    player: com.antigravity.lyrian.data.audio.YouTubePlayerController,
-    onBack: () -> Unit,
-    onTogglePlayPause: () -> Unit,
-    onSeekPlayback: (Long) -> Unit,
-    onSeekFinished: () -> Unit,
-    modifier: Modifier = Modifier,
-) {
-    Box(modifier = modifier.fillMaxSize()) {
-        AlbumBackdrop(coverUrl = state.coverUrl)
-
-        Column(
-            modifier = Modifier
-                .fillMaxSize()
-                .windowInsetsPadding(WindowInsets.statusBars)
-                .windowInsetsPadding(WindowInsets.navigationBars)
-                .padding(16.dp),
-            verticalArrangement = Arrangement.spacedBy(16.dp),
-        ) {
-            Row(verticalAlignment = Alignment.CenterVertically) {
-                IconButton(onClick = onBack) {
-                    Icon(
-                        imageVector = Icons.AutoMirrored.Filled.ArrowBack,
-                        contentDescription = stringResource(R.string.action_back),
-                        tint = ON_IMAGE_PRIMARY,
-                    )
-                }
-                Column(modifier = Modifier.weight(1f)) {
-                    Text(
-                        text = state.songTitle,
-                        style = MaterialTheme.typography.titleLarge,
-                        color = ON_IMAGE_PRIMARY,
-                        maxLines = 1,
-                        overflow = TextOverflow.Ellipsis,
-                    )
-                    Text(
-                        text = state.artist.ifBlank { stringResource(R.string.manual_player_artist) },
-                        style = MaterialTheme.typography.bodyMedium,
-                        color = ON_IMAGE_SECONDARY,
-                        maxLines = 1,
-                    )
-                }
-                PlayPauseButton(
-                    audio = AudioControls(
-                        isReady = state.isAudioReady,
-                        isLoading = state.isAudioLoading,
-                        isPlaying = state.isPlaying,
-                        isBuffering = state.isBuffering,
-                        positionMs = state.playbackPositionMs,
-                        durationMs = state.playbackDurationMs,
-                        notice = null,
-                        lyricOffsetMs = state.lyricOffsetMs,
-                        versionIndex = state.playerVersionIndex,
-                        versionCount = state.playerVersionCount,
-                        videoAspectRatio = state.videoAspectRatio,
-                        onTogglePlayPause = onTogglePlayPause,
-                        onSeekPlayback = onSeekPlayback,
-                        onSwitchVersion = {},
-                        onAdjustOffset = {},
-                        onResetOffset = {},
-                    ),
-                )
-            }
-
-            // 播放器：寬度撐滿、高度依影片比例
-            val aspect = state.videoAspectRatio?.takeIf { it > 0.1f && it < 10f } ?: (16f / 9f)
-            androidx.compose.ui.viewinterop.AndroidView(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .aspectRatio(aspect)
-                    .clip(RoundedCornerShape(16.dp)),
-                factory = { context -> WebView(context).also { player.attach(it) } },
-            )
-
-            Text(
-                text = stringResource(R.string.manual_player_hint),
-                style = MaterialTheme.typography.bodySmall,
-                color = ON_IMAGE_SECONDARY,
-            )
-
-            if (state.audioNotice != null || state.playbackError != null) {
-                Text(
-                    text = state.playbackError ?: state.audioNotice.orEmpty(),
-                    style = MaterialTheme.typography.labelSmall,
-                    color = ON_IMAGE_SECONDARY,
-                )
-            }
-
-            TimelineScrubber(
-                positionMs = state.playbackPositionMs,
-                durationMs = state.playbackDurationMs,
-                questions = emptyList(),
-                answered = emptySet(),
-                onSeek = onSeekPlayback,
-                onSeekFinished = onSeekFinished,
-                onTapQuestion = {},
-            )
-
-            androidx.compose.runtime.DisposableEffect(player) {
-                onDispose { player.detach() }
-            }
-        }
-    }
-}
 
 /**
  * 官方 YouTube 播放器。

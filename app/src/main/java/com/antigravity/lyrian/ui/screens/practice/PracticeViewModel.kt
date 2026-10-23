@@ -1,4 +1,4 @@
-﻿package com.antigravity.lyrian.ui.screens.practice
+package com.antigravity.lyrian.ui.screens.practice
 
 import androidx.lifecycle.SavedStateHandle
 import androidx.lifecycle.ViewModel
@@ -17,6 +17,7 @@ import com.antigravity.lyrian.data.audio.YouTubePlayerController
 import com.antigravity.lyrian.data.audio.YouTubeWebSearch
 import com.antigravity.lyrian.data.dictionary.DictionaryRepository
 import com.antigravity.lyrian.data.dictionary.DictionaryResult
+import com.antigravity.lyrian.data.lang.FREQ_SOURCE_LABEL
 import com.antigravity.lyrian.data.lang.LanguageData
 import com.antigravity.lyrian.data.lang.LanguageDataStore
 import com.antigravity.lyrian.data.lyrics.LyricsParser
@@ -146,8 +147,6 @@ data class PracticeUiState(
      * （擁有者指定的模組 B）。沒有時間軸時才退回「答完自動下一題」。
      */
     val hasTimeline: Boolean = false,
-    /** 只有播放器、沒有歌詞（手動貼 YouTube 連結時的兜底模式）。 */
-    val playerOnly: Boolean = false,
     /**
      * AI 是否已啟用。
      *
@@ -268,13 +267,6 @@ private data class SongHead(
      * （錄音室／現場／MV／remaster）中挑出同一個錄音。見 `AudioTrackMatcher`。
      */
     val durationMs: Long? = null,
-    /**
-     * 手動貼上的 YouTube 影片 id（模組 A 的手動兜底）。
-     *
-     * 非 null 時**跳過 YouTube 搜尋**，直接用這個影片——
-     * 外呼被擋（503）或斷網時，這是唯一能播的路徑。
-     */
-    val manualVideoId: String? = null,
 )
 
 /** 一份完整的練習資料來源：歌曲資訊 + 歌詞行。 */
@@ -496,29 +488,6 @@ class PracticeViewModel @Inject constructor(
             it.copy(isAudioLoading = true, audioNotice = null, playbackError = null)
         }
 
-        // ---- 手動兜底：直接播使用者貼的影片，不搜尋 ----
-        // 503／斷網時這是唯一能播的路徑，所以放在最前面。
-        head.manualVideoId?.let { videoId ->
-            android.util.Log.d(TAG, "手動音源：直接播放 $videoId")
-            candidates = listOf(
-                YouTubeCandidateScorer.Scored(
-                    video = com.antigravity.lyrian.data.audio.YouTubeVideo(
-                        videoId = videoId,
-                        title = head.title,
-                        channel = "手動輸入",
-                        durationMs = head.durationMs,
-                        viewCount = 0,
-                    ),
-                    score = 0.0,
-                    isConfident = true,
-                    durationDeltaMs = 0L,
-                    penaltyKeywords = emptyList(),
-                ),
-            )
-            playCandidate(index = 0)
-            return
-        }
-
         viewModelScope.launch {
             val query = "${head.artist} ${head.title}".trim()
             val videos = youTubeSearch.search(query)
@@ -734,7 +703,6 @@ class PracticeViewModel @Inject constructor(
                         artist = session.artist,
                         coverUrl = session.coverUrl,
                         durationMs = session.durationMs,
-                        manualVideoId = session.manualVideoId,
                     ),
                     lines = LyricsParser.parse(
                         lyricsFile = session.lyricsFile,
@@ -818,15 +786,10 @@ class PracticeViewModel @Inject constructor(
         logBlankDecisions(dataset.debug, difficulty, maxBlanks)
 
         if (dataset.questions.isEmpty()) {
-            // 手動輸入「只有 YouTube 連結、沒有歌詞」時，這不是錯誤——
-            // 它正是外呼被擋（503／斷網）時的兜底路徑：至少要把歌播出來。
-            val playerOnly = source.head.manualVideoId != null
-
             _uiState.update {
                 it.copy(
                     isLoading = false,
-                    errorMessage = if (playerOnly) null else ERROR_NO_BLANKS,
-                    playerOnly = playerOnly,
+                    errorMessage = ERROR_NO_BLANKS,
                     songTitle = source.head.title,
                     artist = source.head.artist,
                     coverUrl = source.head.coverUrl,
@@ -1185,6 +1148,14 @@ class PracticeViewModel @Inject constructor(
                 val lemma = decision?.chosenLemma
                     ?: FillChoiceBuilder.normalizeAnswer(question.answer)
 
+                // 只有**真資料**（CEFR-J／Octanove）才寫進字庫的等級欄位。
+                //
+                // 詞頻推估的等級是 App 自己算的，寫成 C2 等於讓字庫聲稱一個
+                // 官方清單從未做過的判定——擁有者就是這樣看到「blah = C2」的
+                // （blah 在 CEFR-J／Octanove 都沒有收錄）。寧可留空。
+                val cefrLabel = decision?.chosenLevel
+                    ?.takeIf { decision.chosenLevelSource != FREQ_SOURCE_LABEL }
+
                 val shouldAddToWordbank = level >= WORDBANK_MIN_LEVEL
 
                 val vocabId = when {
@@ -1195,7 +1166,7 @@ class PracticeViewModel @Inject constructor(
                         surfaceForm = question.answer,
                         contextLine = question.originalLine,
                         songId = songId,
-                        cefr = level.label,
+                        cefr = cefrLabel,
                         now = System.currentTimeMillis(),
                     )
 
@@ -1204,7 +1175,7 @@ class PracticeViewModel @Inject constructor(
                         surfaceForm = question.answer,
                         contextLine = question.originalLine,
                         songId = songId,
-                        cefr = level.label,
+                        cefr = cefrLabel,
                         now = System.currentTimeMillis(),
                     ).first
                 }

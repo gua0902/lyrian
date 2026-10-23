@@ -204,16 +204,4 @@
     <string name="player_diagnose">播放器診斷</string>
 
     <!-- 模組 A：手動兜底 -->
-    <string name="manual_title">手動輸入（外呼失敗時的備援）</string>
-    <string name="manual_hint">搜尋不到或出現錯誤時，可以直接貼連結播放，或貼歌詞練習。</string>
-    <string name="manual_youtube_label">YouTube 連結或影片 ID</string>
-    <string name="manual_lyrics_label">歌詞（可貼 LRC，含 [00:12.34] 時間標記）</string>
-    <string name="manual_name_label">歌名（選填）</string>
-    <string name="manual_play">用這個連結播放</string>
-    <string name="manual_practice">用這段歌詞練習</string>
-    <string name="manual_error_no_video">連結裡找不到 YouTube 影片 ID</string>
-    <string name="manual_error_no_lyrics">請先貼上歌詞</string>
-    <string name="manual_player_artist">手動輸入</string>
-    <string name="manual_player_hint">這個模式只有播放器，沒有歌詞。想練歌詞請回首頁貼上歌詞。</string>
-    <string name="manual_expand">手動輸入</string>
 </resources>

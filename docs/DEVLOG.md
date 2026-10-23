@@ -1491,9 +1491,100 @@ D/LyrianNet:   UA=Mozilla/5.0 (Linux; Android 14; Pixel 8) ... Chrome/126.0.0.0 
 D/LyrianNet: ← 200 （340 ms，3421 bytes）
 ```
 
+## TASK-18：拿掉手動輸入、修好「每一首都不能播」、進度條回到單純長條
 
+### 1. 手動輸入整個移除
 
+擁有者實測後確認 503 已解，手動兜底不再需要。刪掉 `ManualSongInput`、
+搜尋頁的「手動輸入」卡、`Session.manualVideoId`、`PracticeUiState.playerOnly`、
+`PlayerOnlyContent` 與 12 條 `manual_*` 字串。搜尋頁與練習頁都回到單一路徑。
 
+### 2. 每一首都「找不到錄音版本」——真因是 UA 統一把自己變成了手機
 
+TASK-17 把 UA 統一成**手機版 Chrome**（`Pixel 8 ... Mobile Safari`）。
+Google 看到手機 UA 會把 `www.youtube.com/results` **302 導到 `m.youtube.com`**，
+而那一頁的 `ytInitialData` 沒有 `videoRenderer`：
 
+```
+mobile  UA : 302 -> https://m.youtube.com/results?search_query=...
+              （跟隨後 200，videoRenderer=0  compactVideoRenderer=0）
+desktop UA : 200，videoRenderer=19
+```
 
+解析器抓不到任何 renderer → `videos.isEmpty()` → `NO_AUDIO_MATCH`（「找不到這首歌
+對應的錄音版本」）。**每一首**都一樣，與歌曲本身無關。
+
+修法（三層）：
+
+1. `NetworkHeaders.DESKTOP_USER_AGENT`（Windows Chrome）給**抓 HTML** 的請求用；
+   JSON API 仍用手機 UA（那才是真實執行環境，Cloudflare 兩種都放行）。
+2. 攔截器只放行 `Mozilla/5.0` 開頭的 UA，其餘一律換成瀏覽器 UA。
+   這道守門員讓「某個呼叫端自己塞了 UA」不會把 TASK-17 的 503 帶回來。
+3. `YouTubeWebSearch` 明確指定桌機 UA，並在**實際主機不是 `www.youtube.com`**
+   時印警告（`LyrianYouTubeSearch`），log 也帶上 HTML 長度與實際主機。
+
+另外補 `videoWithContextRenderer` 與 `headline` 的解析當保險：真的又被導到手機版時，
+至少還原得出候選，而不是靜靜變成 0 筆。
+
+### 3. TASK-17 的敘述有一處錯，在此更正
+
+當時寫「LRCLIB 送的是 `okhttp/4.12.0`」。實際上那條請求**自己有帶**
+`@Header("User-Agent") LyrianApp/1.0.0 (...)`，送出去的是 `LyrianApp/1.0.0`；
+只有 iTunes 才是 OkHttp 預設值。真正讓 Cloudflare 放行的是「換成瀏覽器 UA」，
+與 `okhttp` 字串無關。
+
+因此 `LrclibApi.search` 的 `userAgent` 參數整條移除——UA 只有一個來源。
+
+### 4. blah 被分成 C2：是推估，不是官方資料
+
+查證 `levels.tsv`：
+
+```
+blah   C2   f   10986   0        # f = 詞頻推估
+```
+
+`blah` 不在 CEFR-J、也不在 Octanove，等級是「BNC 排名 10,986 → 用門檻推出來的」。
+原本的規則是「8,000 名之後一律 C2」，實測把 **18,194 個字塞進 C2**，其中 9,400 個
+落在 8,001–20,000——`blah` 這種口語字與真正罕見的字同級，C2 就失去意義。
+
+三處修正：
+
+- 門檻改為 **8,001–20,000 → C1、20,000 以後才 C2**（`build_assets.py` 與資產同步，
+  `levels.tsv` 變動 9,400 筆；`blah` 現在是 `C1 f 10986`）
+- `CommonWordFilter` 新增 `INTERJECTION`（感嘆詞／擬聲詞）：`blah`、`ooh`、
+  `whoa`、`haha`、`ouch`… 一律不挖。這種字沒有詞義可學，等級推估不該成為挖它的理由
+- 字庫**不再寫入推估等級**：`cefr` 欄位只收 CEFR-J／Octanove 的真資料，
+  推估的一律留空，免得字庫聲稱一個官方清單從沒做過的判定
+
+### 5. 進度條拿掉刻度
+
+上一版在 4dp 長條上畫「每題一個圓點」（未答空心、已答實心）。48 句的歌會在長條上
+擠出幾十個點，看起來像雜訊。現在只有：底軌、已播放段、當前位置指示線。
+點擊 seek 保留（40dp 的觸控高度不變）。連帶移除 `onTapQuestion` 與
+`PracticeContent.onSeek` 參數。
+
+### 6. 503 的韌性
+
+`SongSearchRepository` 對 LRCLIB 搜尋加**一次**重試（5xx／429／連線錯誤，
+間隔 700 ms），並把錯誤翻成人話：
+
+```
+503 -> 「歌詞庫暫時忙線（503），已自動重試過一次。請再按一次搜尋。」
+429 -> 「搜尋太頻繁（429），請等幾秒再試。」
+IOException -> 「連線失敗，請檢查網路後再試。」
+```
+
+### 驗證
+
+- 166 個單元測試全過（手動輸入 4 個測試移除、感嘆詞 1 個新增）
+- `assembleDebug` BUILD SUCCESSFUL，APK **21.47 MB**，assets 4.71 MB
+
+### 尚未驗證
+
+無裝置。**播放是否恢復需要實機確認**：按播放後看 `LyrianYouTubeSearch` 這一行——
+
+```
+D/LyrianYouTubeSearch: 搜尋「Adele Hello」解析出 12 個候選（HTML 1346574 字元，實際主機 www.youtube.com）
+```
+
+`實際主機` 必須是 `www.youtube.com`、候選數必須大於 0。

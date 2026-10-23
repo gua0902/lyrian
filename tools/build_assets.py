@@ -344,11 +344,17 @@ def main() -> int:
             freq_rows[word] = rank
 
     # ---------- frequency-derived C1/C2 for words CEFR-J never listed ----------
+    #
+    # The cut used to be 8,000: everything past it became C2. Measured on the real
+    # asset that dumped 18,194 words into C2, 9,400 of them between BNC 8,001 and
+    # 20,000 -- i.e. ordinary colloquial words like `blah` (10,986) sat in the same
+    # bucket as words nobody has ever said. C2 is the *rarest* band, so it should
+    # only hold the rarest tail; 8k-20k is "uncommon", which is C1.
     derived = 0
     for word, rank in freq_rows.items():
         if word in levels:
             continue
-        level = "C1" if rank <= 8000 else "C2"
+        level = "C1" if rank <= 20_000 else "C2"
         levels[word] = (level, SRC_FREQ)
         derived += 1
 
