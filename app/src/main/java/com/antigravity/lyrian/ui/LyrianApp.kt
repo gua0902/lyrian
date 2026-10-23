@@ -161,6 +161,33 @@ fun LyrianApp(
                             )
                             navController.navigate(Routes.practice(song.lrclibId))
                         },
+                        onManualPractice = { videoId, lyrics, title ->
+                            // 手動兜底：外呼被擋（503）或斷網時，貼連結就播、貼歌詞就練。
+                            val manualId = com.antigravity.lyrian.ui.screens.search.ManualSongInput
+                                .manualSessionId(videoId ?: lyrics.orEmpty().take(200))
+
+                            val isLrc = com.antigravity.lyrian.ui.screens.search.ManualSongInput
+                                .looksLikeLrc(lyrics.orEmpty())
+
+                            sessionStore.put(
+                                PracticeSessionStore.Session(
+                                    songId = manualId,
+                                    title = title.ifBlank { "手動輸入" },
+                                    artist = "",
+                                    album = null,
+                                    durationMs = null,
+                                    coverUrl = null,
+                                    genre = null,
+                                    lyricsFile = null,
+                                    // LRC 才放 syncedLyrics（有時間軸），
+                                    // 純文字歌詞放 plainLyrics（LyricsParser 會補間隔）
+                                    syncedLyrics = lyrics.takeIf { isLrc },
+                                    plainLyrics = lyrics.takeIf { !isLrc },
+                                    manualVideoId = videoId,
+                                ),
+                            )
+                            navController.navigate(Routes.practice(manualId))
+                        },
                     )
                 }
 

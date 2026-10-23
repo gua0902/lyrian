@@ -48,6 +48,10 @@ object NetworkModule {
             .readTimeout(20, TimeUnit.SECONDS)
             .callTimeout(30, TimeUnit.SECONDS)
             .retryOnConnectionFailure(true)
+            // ⚠️ 順序很重要：先套瀏覽器標頭，再記 log。
+            // 反過來的話 log 會印出「還沒有 UA」的請求，看到的是假象。
+            .addInterceptor(BrowserHeadersInterceptor())
+            .addInterceptor(LyrianNetLoggingInterceptor())
 
         // 只在 debug build 印出網路日誌，避免 release 洩漏資訊
         if (BuildConfig.DEBUG) {

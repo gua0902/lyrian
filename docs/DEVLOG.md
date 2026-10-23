@@ -1426,6 +1426,71 @@ D 已完成，維持不變。E 的對照表已與實際 ECDICT 資料一致（`p
 4. A-3 的「上下分別對齊歌名與歌手」是相對版面要求：播放器在封面框內等比縮放，
    框與文字欄仍是水平並排（不是上下堆疊）。
 
+---
+
+## TASK-17：【緊急】503 修復 + 手動兜底
+
+### 真因：OkHttp 的預設 UA
+
+現象是「App 內 503、瀏覽器同網址正常」。查證：
+
+```
+OkHttp 預設送  User-Agent: okhttp/4.12.0
+```
+
+`lrclib.net` 前面掛著 Cloudflare、`youtube.com` 是 Google，兩邊都會把 `okhttp/x`
+判定為爬蟲直接回 503。而 `YouTubeWebSearch` 之前**自己**帶了 Chrome UA，
+所以真正被擋的是走 Retrofit 的兩條：**LRCLIB（搜尋＋歌詞）與 iTunes**。
+
+範圍確認：全專案只有**一個** `OkHttpClient` 實例（`NetworkModule.provideOkHttpClient`），
+Retrofit 與 `YouTubeWebSearch` 共用它 → 攔截器掛一處就全部生效。
+
+### 修法
+
+新增 `data/remote/NetworkHeaders.kt`：
+
+```
+BrowserHeadersInterceptor   User-Agent / Accept / Accept-Language / Connection
+LyrianNetLoggingInterceptor tag=LyrianNet：URL、實際 UA、status、前 200 字元
+```
+
+`User-Agent` 一律覆寫成 Android Chrome 的 UA（不含 `okhttp`/`wv`/`Version/4.0`）；
+`Accept` 尊重請求自己的設定（抓 HTML 的 YouTube 搜尋用 `text/html,...`，
+其餘用 `application/json, text/plain, */*`）。
+
+**⚠️ 刻意不覆寫 `Accept-Encoding`**：任務書要求 `gzip, deflate, br`，但 OkHttp
+只在自己加上這個 header 時才會**透明解壓 gzip**。一旦手動寫死，`body.string()`
+會拿到壓縮位元組，所有 JSON 都會解析失敗——而且錯誤看起來完全不像編碼問題。
+因此交給 OkHttp 送 `gzip`（同樣是瀏覽器行為），log 會印出實際送出的值供核對。
+
+### 手動兜底
+
+搜尋頁新增「手動輸入」卡（搜尋失敗時自動展開）：
+
+- **貼 YouTube 連結** → 進「只有播放器」模式（`playerOnly`），跳過 YouTube 搜尋，
+  直接播那個影片
+- **貼歌詞（LRC 或純文字）** → 進一般填空練習；有時間標記就當 `syncedLyrics`，
+  沒有就當 `plainLyrics`
+- 兩者都填 → 兩者都用
+
+`ManualSongInput` 負責解析：接受 `watch?v=`、`youtu.be/`、`embed/`、`shorts/`、
+`live/` 與純 11 字元 id；手動 session 的 id 用**負數**，與 LRCLIB 的正整數區隔。
+
+### 驗證
+
+- 169 個單元測試全過（新增 `ManualSongInputTest` 4 個）
+- APK 21.47 → **21.48 MB**
+
+### 尚未驗證
+
+**503 是否真的修好，需要實機確認**（本機沒有裝置）。驗收用的三行 log：
+
+```
+D/LyrianNet: → GET https://lrclib.net/api/search?artist_name=Adele&track_name=Hello
+D/LyrianNet:   UA=Mozilla/5.0 (Linux; Android 14; Pixel 8) ... Chrome/126.0.0.0 Mobile Safari/537.36 | Accept=application/json, text/plain, */* | Accept-Encoding=gzip
+D/LyrianNet: ← 200 （340 ms，3421 bytes）
+```
+
 
 
 

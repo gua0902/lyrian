@@ -1,4 +1,4 @@
-package com.antigravity.lyrian.ui.screens.practice
+﻿package com.antigravity.lyrian.ui.screens.practice
 
 import androidx.compose.animation.animateColorAsState
 import androidx.compose.animation.core.animateFloatAsState
@@ -16,6 +16,7 @@ import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.WindowInsets
+import androidx.compose.foundation.layout.aspectRatio
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
@@ -218,6 +219,17 @@ fun PracticeScreen(
                 onOpenWordbank = onOpenWordbank,
                 onOpenWord = onOpenWord,
                 onAddToWordbank = { word -> viewModel.onAddToWordbank(word.word, word.lemma, null) },
+                modifier = Modifier.padding(innerPadding),
+            )
+
+            // 手動兜底：只有 YouTube 連結、沒有歌詞時，至少把歌播出來
+            state.playerOnly -> PlayerOnlyContent(
+                state = state,
+                player = viewModel.player,
+                onBack = onBack,
+                onTogglePlayPause = viewModel::onTogglePlayPause,
+                onSeekPlayback = viewModel::onSeekPlayback,
+                onSeekFinished = viewModel::onTimelineSeekFinished,
                 modifier = Modifier.padding(innerPadding),
             )
 
@@ -645,6 +657,121 @@ private fun TimelineScrubber(
 /** 位置 → 0..1。 */
 private fun fractionOf(ms: Long, duration: Long): Float =
     if (duration <= 0) 0f else (ms.toFloat() / duration).coerceIn(0f, 1f)
+
+/**
+ * 只有播放器的練習頁（模組 A 的手動兜底）。
+ *
+ * 使用者貼上 YouTube 連結、但沒有歌詞時走這條——外呼被擋（503）或斷網時，
+ * 至少還能把歌播出來，不會整個 App 卡死。
+ *
+ * 播放器**放大到畫面寬度**（依影片比例），因為這裡沒有歌詞要留空間。
+ */
+@Composable
+private fun PlayerOnlyContent(
+    state: PracticeUiState,
+    player: com.antigravity.lyrian.data.audio.YouTubePlayerController,
+    onBack: () -> Unit,
+    onTogglePlayPause: () -> Unit,
+    onSeekPlayback: (Long) -> Unit,
+    onSeekFinished: () -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    Box(modifier = modifier.fillMaxSize()) {
+        AlbumBackdrop(coverUrl = state.coverUrl)
+
+        Column(
+            modifier = Modifier
+                .fillMaxSize()
+                .windowInsetsPadding(WindowInsets.statusBars)
+                .windowInsetsPadding(WindowInsets.navigationBars)
+                .padding(16.dp),
+            verticalArrangement = Arrangement.spacedBy(16.dp),
+        ) {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                IconButton(onClick = onBack) {
+                    Icon(
+                        imageVector = Icons.AutoMirrored.Filled.ArrowBack,
+                        contentDescription = stringResource(R.string.action_back),
+                        tint = ON_IMAGE_PRIMARY,
+                    )
+                }
+                Column(modifier = Modifier.weight(1f)) {
+                    Text(
+                        text = state.songTitle,
+                        style = MaterialTheme.typography.titleLarge,
+                        color = ON_IMAGE_PRIMARY,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                    )
+                    Text(
+                        text = state.artist.ifBlank { stringResource(R.string.manual_player_artist) },
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = ON_IMAGE_SECONDARY,
+                        maxLines = 1,
+                    )
+                }
+                PlayPauseButton(
+                    audio = AudioControls(
+                        isReady = state.isAudioReady,
+                        isLoading = state.isAudioLoading,
+                        isPlaying = state.isPlaying,
+                        isBuffering = state.isBuffering,
+                        positionMs = state.playbackPositionMs,
+                        durationMs = state.playbackDurationMs,
+                        notice = null,
+                        lyricOffsetMs = state.lyricOffsetMs,
+                        versionIndex = state.playerVersionIndex,
+                        versionCount = state.playerVersionCount,
+                        videoAspectRatio = state.videoAspectRatio,
+                        onTogglePlayPause = onTogglePlayPause,
+                        onSeekPlayback = onSeekPlayback,
+                        onSwitchVersion = {},
+                        onAdjustOffset = {},
+                        onResetOffset = {},
+                    ),
+                )
+            }
+
+            // 播放器：寬度撐滿、高度依影片比例
+            val aspect = state.videoAspectRatio?.takeIf { it > 0.1f && it < 10f } ?: (16f / 9f)
+            androidx.compose.ui.viewinterop.AndroidView(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .aspectRatio(aspect)
+                    .clip(RoundedCornerShape(16.dp)),
+                factory = { context -> WebView(context).also { player.attach(it) } },
+            )
+
+            Text(
+                text = stringResource(R.string.manual_player_hint),
+                style = MaterialTheme.typography.bodySmall,
+                color = ON_IMAGE_SECONDARY,
+            )
+
+            if (state.audioNotice != null || state.playbackError != null) {
+                Text(
+                    text = state.playbackError ?: state.audioNotice.orEmpty(),
+                    style = MaterialTheme.typography.labelSmall,
+                    color = ON_IMAGE_SECONDARY,
+                )
+            }
+
+            TimelineScrubber(
+                positionMs = state.playbackPositionMs,
+                durationMs = state.playbackDurationMs,
+                questions = emptyList(),
+                answered = emptySet(),
+                onSeek = onSeekPlayback,
+                onSeekFinished = onSeekFinished,
+                onTapQuestion = {},
+            )
+
+            androidx.compose.runtime.DisposableEffect(player) {
+                onDispose { player.detach() }
+            }
+        }
+    }
+}
 
 /**
  * 官方 YouTube 播放器。

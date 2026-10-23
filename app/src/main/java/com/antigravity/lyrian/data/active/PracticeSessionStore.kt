@@ -38,6 +38,13 @@ class PracticeSessionStore @Inject constructor() {
         val lyricsFile: String?,
         val syncedLyrics: String?,
         val plainLyrics: String?,
+        /**
+         * 手動輸入的 YouTube 影片 id。
+         *
+         * 非 null 時練習頁**跳過 YouTube 搜尋**直接用這個影片，
+         * 這是外呼被擋（503／斷網）時的兜底路徑。
+         */
+        val manualVideoId: String? = null,
     )
 
     /**

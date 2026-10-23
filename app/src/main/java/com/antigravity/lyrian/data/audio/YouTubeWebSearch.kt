@@ -1,5 +1,6 @@
 package com.antigravity.lyrian.data.audio
 
+import com.antigravity.lyrian.data.remote.NetworkHeaders
 import javax.inject.Inject
 import javax.inject.Singleton
 import kotlinx.coroutines.Dispatchers
@@ -61,10 +62,12 @@ class YouTubeWebSearch @Inject constructor(
             val url = "https://www.youtube.com/results?search_query=" +
                 java.net.URLEncoder.encode(query, "UTF-8") + "&hl=en&gl=US"
 
+            // ⚠️ 只指定 Accept（HTML）。
+            // User-Agent 一律由全域的 BrowserHeadersInterceptor 決定，
+            // 免得這裡與攔截器各有一份、未來改了一邊忘了另一邊。
             val request = Request.Builder()
                 .url(url)
-                .header("User-Agent", DESKTOP_USER_AGENT)
-                .header("Accept-Language", "en-US,en;q=0.9")
+                .header("Accept", NetworkHeaders.HTML_ACCEPT)
                 .build()
 
             val html = runCatching {
@@ -95,15 +98,6 @@ class YouTubeWebSearch @Inject constructor(
     companion object {
         private const val TAG = "LyrianYouTubeSearch"
 
-        /**
-         * 用桌機版 User-Agent。
-         *
-         * 行動版搜尋頁會回傳完全不同的版面（`ytInitialData` 結構不同），
-         * 桌機版是最穩定的形狀。WebView 那一層另外自己帶自己的 UA。
-         */
-        private const val DESKTOP_USER_AGENT =
-            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 " +
-                "(KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36"
 
         /**
          * 從搜尋頁的 HTML 取出影片清單。
