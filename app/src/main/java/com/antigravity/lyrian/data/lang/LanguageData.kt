@@ -149,8 +149,14 @@ class LanguageData internal constructor(
          * @suppress 呼叫端負責確保在 IO 執行緒呼叫（見 [LanguageDataStore]）
          */
         fun load(read: (String) -> String): LanguageData {
+            // `trimEnd('\r')` 不是多餘的：這些是逐行解析的 TSV，若檔案在 checkout 時
+            // 被換成 CRLF（Windows 上的 core.autocrlf），每行最後一個欄位都會多一個
+            // `\r`——等級來源會變成 "j\r"、原形會變成 "year\r"，而且在本機永遠看不出來。
+            // `.gitattributes` 已經把資料檔標成 binary，這裡是第二道保險。
+            fun lines(text: String) = text.lineSequence().map { it.trimEnd('\r') }
+
             val levels = HashMap<String, Pair<CefrLevel, String>>(32_000)
-            read("$ASSET_DIR/levels.tsv").lineSequence().forEach { line ->
+            lines(read("$ASSET_DIR/levels.tsv")).forEach { line ->
                 if (line.isEmpty()) return@forEach
                 val first = line.indexOf('\t')
                 val second = line.indexOf('\t', first + 1)
@@ -161,7 +167,7 @@ class LanguageData internal constructor(
             }
 
             val lemmas = HashMap<String, String>(36_000)
-            read("$ASSET_DIR/lemma.tsv").lineSequence().forEach { line ->
+            lines(read("$ASSET_DIR/lemma.tsv")).forEach { line ->
                 if (line.isEmpty()) return@forEach
                 val tab = line.indexOf('\t')
                 if (tab <= 0 || tab == line.length - 1) return@forEach
@@ -169,7 +175,7 @@ class LanguageData internal constructor(
             }
 
             val frequent = HashSet<String>(4_000)
-            read("$ASSET_DIR/freq.tsv").lineSequence().forEach { line ->
+            lines(read("$ASSET_DIR/freq.tsv")).forEach { line ->
                 if (line.isNotEmpty()) frequent += line
             }
 

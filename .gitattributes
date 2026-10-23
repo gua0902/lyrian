@@ -1,0 +1,8 @@
+# 資料資產一律當成二進位處理，**不可以**做換行轉換。
+#
+# `assets/data/*.tsv` 是逐行解析的資料檔：若 git 在 checkout 時把 LF 換成 CRLF，
+# 每一行最後一個欄位都會多一個 `\r`，等級來源與詞形還原就會全部失效
+# （而且在 Windows 上開發時完全看不出來——本機的檔案一直是 LF）。
+* text=auto
+*.tsv -text
+app/src/main/assets/** -text
