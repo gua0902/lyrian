@@ -35,6 +35,7 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.antigravity.lyrian.R
 import com.antigravity.lyrian.data.settings.UserSettings
 import com.antigravity.lyrian.domain.model.CefrLevel
+import com.antigravity.lyrian.domain.practice.BlankCoverage
 import dagger.hilt.android.lifecycle.HiltViewModel
 import javax.inject.Inject
 import kotlinx.coroutines.flow.StateFlow
@@ -55,6 +56,7 @@ fun LearningSettingsScreen(
     viewModel: LearningSettingsViewModel = hiltViewModel(),
 ) {
     val current by viewModel.minLevel.collectAsStateWithLifecycle()
+    val coverage by viewModel.coverage.collectAsStateWithLifecycle()
 
     Scaffold(
         topBar = {
@@ -93,6 +95,63 @@ fun LearningSettingsScreen(
                     onSelect = { viewModel.setMinLevel(level) },
                 )
             }
+
+            Text(
+                text = stringResource(R.string.settings_blank_level_note),
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                modifier = Modifier.padding(top = 4.dp),
+            )
+
+            // ---- 每首要挖幾句（5 / 10 / 全部）----
+            Text(
+                text = stringResource(R.string.settings_blank_coverage),
+                style = MaterialTheme.typography.titleMedium,
+                modifier = Modifier.padding(top = 16.dp),
+            )
+            Text(
+                text = stringResource(R.string.settings_blank_coverage_hint),
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+
+            BlankCoverage.entries.forEach { option ->
+                CoverageOption(
+                    label = option.label,
+                    selected = option == coverage,
+                    onSelect = { viewModel.setCoverage(option) },
+                )
+            }
+        }
+    }
+}
+
+@Composable
+private fun CoverageOption(label: String, selected: Boolean, onSelect: () -> Unit) {
+    Card(
+        modifier = Modifier
+            .fillMaxWidth()
+            .selectable(selected = selected, role = Role.RadioButton, onClick = onSelect),
+        colors = CardDefaults.cardColors(
+            containerColor = if (selected) {
+                MaterialTheme.colorScheme.secondaryContainer
+            } else {
+                MaterialTheme.colorScheme.surfaceContainerHigh
+            },
+        ),
+    ) {
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(horizontal = 12.dp, vertical = 10.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            RadioButton(selected = selected, onClick = null)
+            Text(
+                text = label,
+                style = MaterialTheme.typography.bodyLarge,
+                modifier = Modifier.padding(start = 8.dp),
+            )
         }
     }
 }
@@ -131,7 +190,7 @@ private fun LevelOption(level: CefrLevel, selected: Boolean, onSelect: () -> Uni
     }
 }
 
-/** 這一頁只有一個設定值，用最薄的 ViewModel 把 [UserSettings] 接出來。 */
+/** 這一頁只有兩個設定值，用最薄的 ViewModel 把 [UserSettings] 接出來。 */
 @HiltViewModel
 class LearningSettingsViewModel @Inject constructor(
     private val settings: UserSettings,
@@ -139,5 +198,9 @@ class LearningSettingsViewModel @Inject constructor(
 
     val minLevel: StateFlow<CefrLevel> = settings.minLevel
 
+    val coverage: StateFlow<BlankCoverage> = settings.coverage
+
     fun setMinLevel(level: CefrLevel) = settings.setMinLevel(level)
+
+    fun setCoverage(value: BlankCoverage) = settings.setCoverage(value)
 }

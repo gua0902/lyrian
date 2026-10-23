@@ -1,53 +1,53 @@
 package com.antigravity.lyrian.ui.screens.wordbank
 
-import androidx.compose.foundation.layout.Arrangement
-import androidx.compose.foundation.layout.Box
-import androidx.compose.foundation.layout.Column
-import androidx.compose.foundation.layout.Row
-import androidx.compose.foundation.layout.fillMaxSize
-import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
-import androidx.compose.foundation.rememberScrollState
-import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
-import androidx.compose.material3.Card
-import androidx.compose.material3.CardDefaults
-import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
-import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
 import androidx.compose.material3.TopAppBar
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
-import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.res.stringResource
-import androidx.compose.ui.text.font.FontWeight
-import androidx.compose.ui.unit.dp
 import androidx.hilt.navigation.compose.hiltViewModel
+import androidx.lifecycle.SavedStateHandle
+import androidx.lifecycle.ViewModel
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import androidx.lifecycle.viewModelScope
 import com.antigravity.lyrian.R
-import com.antigravity.lyrian.data.local.VocabEntity
+import com.antigravity.lyrian.data.dictionary.DictionaryRepository
+import com.antigravity.lyrian.data.dictionary.DictionaryResult
+import com.antigravity.lyrian.data.local.SongDao
+import com.antigravity.lyrian.data.local.VocabDao
+import com.antigravity.lyrian.data.tts.Speaker
+import dagger.hilt.android.lifecycle.HiltViewModel
+import javax.inject.Inject
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.launch
 
 /**
- * 單字詳情頁。
+ * 字庫的單字詳情（`vocab/{id}`）。
  *
- * 顯示該字的完整字典資訊：單字、詞性縮寫、音標（英式或美式）、字義、
- * 以及它在歌詞中出現的語境。
+ * 版面與 `word/{word}` **完全共用**（[WordDetailBody]），只差在資料來源：
+ * 這裡的字一定有語境與來源歌曲，而且會補查字典後寫回 Room。
  *
- * 字典資料在進入時補查（若尚未查過），之後不再連外。
+ * 擁有者要求「字庫詳情頁接上手機的 TTS，與其他頁面共用同一實作」——
+ * 所以朗讀走同一個 [Speaker] 單例。
  */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun VocabDetailScreen(
     onBack: () -> Unit,
+    onOpenSong: (Long) -> Unit,
     viewModel: VocabDetailViewModel = hiltViewModel(),
 ) {
-    val entry by viewModel.entry.collectAsStateWithLifecycle()
+    val state by viewModel.uiState.collectAsStateWithLifecycle()
 
     Scaffold(
         topBar = {
@@ -64,125 +64,86 @@ fun VocabDetailScreen(
             )
         },
     ) { innerPadding ->
-        val vocab = entry
-        if (vocab == null) {
-            Box(
-                modifier = Modifier
-                    .fillMaxSize()
-                    .padding(innerPadding),
-                contentAlignment = Alignment.Center,
-            ) {
-                CircularProgressIndicator()
-            }
-            return@Scaffold
-        }
-
-        Column(
-            modifier = Modifier
-                .fillMaxSize()
-                .padding(innerPadding)
-                .verticalScroll(rememberScrollState())
-                .padding(16.dp),
-            verticalArrangement = Arrangement.spacedBy(16.dp),
-        ) {
-            HeadlineCard(vocab)
-
-            vocab.translation?.let { meaning ->
-                InfoSection(
-                    title = stringResource(R.string.wordbank_detail_meaning),
-                    body = meaning,
-                )
-            }
-
-            if (vocab.phonetic == null && vocab.translation == null) {
-                Text(
-                    text = stringResource(R.string.wordbank_detail_no_data),
-                    style = MaterialTheme.typography.bodyMedium,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                )
-            }
-
-            vocab.contextLine?.let { context ->
-                InfoSection(
-                    title = stringResource(R.string.wordbank_detail_context),
-                    body = context,
-                )
-            }
-        }
+        WordDetailBody(
+            state = state,
+            onSpeak = viewModel::speak,
+            onOpenSong = onOpenSong,
+            modifier = Modifier.padding(innerPadding),
+        )
     }
 }
 
-/** 頂部大字卡：單字 + 詞性 + 音標。 */
-@Composable
-private fun HeadlineCard(vocab: VocabEntity) {
-    Card(
-        modifier = Modifier.fillMaxWidth(),
-        colors = CardDefaults.cardColors(
-            containerColor = MaterialTheme.colorScheme.primaryContainer,
-        ),
-    ) {
-        Column(modifier = Modifier.padding(20.dp)) {
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.SpaceBetween,
-                verticalAlignment = Alignment.Bottom,
-            ) {
-                Text(
-                    text = vocab.surfaceForm ?: vocab.lemma,
-                    style = MaterialTheme.typography.displaySmall,
-                    fontWeight = FontWeight.Bold,
-                    color = MaterialTheme.colorScheme.onPrimaryContainer,
-                )
-                vocab.partOfSpeech?.let { pos ->
-                    Text(
-                        text = pos,
-                        style = MaterialTheme.typography.titleMedium,
-                        color = MaterialTheme.colorScheme.onPrimaryContainer,
+@HiltViewModel
+class VocabDetailViewModel @Inject constructor(
+    private val vocabDao: VocabDao,
+    private val songDao: SongDao,
+    private val dictionary: DictionaryRepository,
+    private val speaker: Speaker,
+    savedStateHandle: SavedStateHandle,
+) : ViewModel() {
+
+    private val vocabId: Long =
+        savedStateHandle.get<String>(VocabDetailRoute.ARG)?.toLongOrNull() ?: -1L
+
+    private val _uiState = MutableStateFlow(WordDetailUiState())
+    val uiState: StateFlow<WordDetailUiState> = _uiState.asStateFlow()
+
+    private var lastSpoken: String = ""
+
+    init {
+        viewModelScope.launch {
+            val vocab = vocabDao.findById(vocabId)
+            if (vocab == null) {
+                _uiState.value = WordDetailUiState(isLoading = false, notFound = true)
+                return@launch
+            }
+
+            lastSpoken = vocab.lemma
+
+            val example = runCatching {
+                val line = vocab.contextLine
+                val song = vocab.firstSongId?.let { songDao.findById(it) }
+                if (line.isNullOrBlank()) {
+                    null
+                } else {
+                    WordExample(
+                        line = line,
+                        songTitle = song?.title.orEmpty(),
+                        songLrclibId = song?.lrclibId,
                     )
                 }
-            }
+            }.getOrNull()
 
-            val pronunciation = buildString {
-                vocab.phonetic?.let { append(it) }
-                vocab.phoneticAccent?.let {
-                    if (isNotEmpty()) append("  ")
-                    append("(").append(it).append(")")
-                }
-            }
-
-            if (pronunciation.isNotBlank()) {
-                Text(
-                    text = pronunciation,
-                    style = MaterialTheme.typography.bodyLarge,
-                    color = MaterialTheme.colorScheme.onPrimaryContainer,
-                    modifier = Modifier.padding(top = 8.dp),
+            // 字典資料優先從離線分片取；拿到就順手寫回 Room，之後不必再解析分片
+            val hit = dictionary.lookup(vocab.lemma)
+            val entry = (hit as? DictionaryResult.Found)?.entry
+            if (entry != null && !vocab.dictionaryFetched) {
+                vocabDao.updateDictionary(
+                    id = vocabId,
+                    translation = entry.translation,
+                    phonetic = entry.phonetic,
+                    accent = null,
+                    partOfSpeech = entry.partOfSpeech,
+                    cefr = entry.level?.label,
+                    now = System.currentTimeMillis(),
+                    markFetched = true,
                 )
             }
-        }
-    }
-}
 
-@Composable
-private fun InfoSection(title: String, body: String) {
-    Column {
-        Text(
-            text = title,
-            style = MaterialTheme.typography.labelLarge,
-            color = MaterialTheme.colorScheme.onSurfaceVariant,
-        )
-        Card(
-            modifier = Modifier
-                .fillMaxWidth()
-                .padding(top = 6.dp),
-            colors = CardDefaults.cardColors(
-                containerColor = MaterialTheme.colorScheme.surfaceContainerLow,
-            ),
-        ) {
-            Text(
-                text = body,
-                style = MaterialTheme.typography.bodyLarge,
-                modifier = Modifier.padding(16.dp),
+            _uiState.value = WordDetailUiState(
+                word = vocab.surfaceForm ?: vocab.lemma,
+                isLoading = false,
+                entry = entry,
+                example = example,
+                notFound = entry == null,
             )
         }
     }
+
+    fun speak() = speaker.speak(lastSpoken)
+}
+
+/** 詳情頁的路由參數名稱。 */
+object VocabDetailRoute {
+    const val ARG = "vocabId"
 }

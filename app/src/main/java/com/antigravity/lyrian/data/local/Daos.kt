@@ -14,6 +14,10 @@ interface SongDao {
     @Query("SELECT * FROM song WHERE lrclibId = :lrclibId LIMIT 1")
     suspend fun findByLrclibId(lrclibId: Long): SongEntity?
 
+    /** 以本地 id 取歌（字庫詳情頁要顯示「出自哪首歌」）。 */
+    @Query("SELECT * FROM song WHERE id = :songId LIMIT 1")
+    suspend fun findById(songId: Long): SongEntity?
+
     @Query("SELECT * FROM song ORDER BY createdAt DESC LIMIT :limit")
     fun observeRecent(limit: Int = 20): Flow<List<SongEntity>>
 
@@ -142,6 +146,7 @@ interface VocabDao {
      * 已存在時：`errorCount` +1、更新語境、狀態由 `mastered` 退回 `learning`
      * （答錯代表還沒真的學會），但**保留最初的 `firstSongId` 與 `createdAt`**。
      *
+     * @param cefr 這個字的 CEFR 等級（模組 D 之後字庫會用到）
      * @return `Pair<vocabId, isNew>`；`isNew` 供每日「新單字」統計使用
      */
     @Transaction
@@ -151,6 +156,7 @@ interface VocabDao {
         contextLine: String?,
         songId: Long?,
         now: Long,
+        cefr: String? = null,
     ): Pair<Long, Boolean> {
         val existing = findByLemma(lemma)
         if (existing == null) {
@@ -160,6 +166,7 @@ interface VocabDao {
                     surfaceForm = surfaceForm,
                     firstSongId = songId,
                     contextLine = contextLine,
+                    cefr = cefr,
                     errorCount = 1,
                     createdAt = now,
                     updatedAt = now,
@@ -173,6 +180,7 @@ interface VocabDao {
                 errorCount = existing.errorCount + 1,
                 surfaceForm = surfaceForm ?: existing.surfaceForm,
                 contextLine = contextLine ?: existing.contextLine,
+                cefr = existing.cefr ?: cefr,
                 firstSongId = existing.firstSongId ?: songId,
                 status = if (existing.status == VocabEntity.STATUS_MASTERED) {
                     VocabEntity.STATUS_LEARNING
@@ -183,6 +191,53 @@ interface VocabDao {
             ),
         )
         return existing.id to false
+    }
+
+    /**
+     * 把一個字收進字庫，**已存在時完全不動它**（模組 D）。
+     *
+     * 與 [addFromError] 的差別：
+     *  - 不做 `errorCount + 1`（答對也算學習，不是錯誤）
+     *  - 不改 `status`（不把已掌握的字打回學習中）
+     *  - 只補上還缺的欄位（CEFR、語境）
+     *
+     * 這是「B1 以上不論對錯都入庫」與「結果頁手動加入」共用的入口，
+     * 因此同一首歌重練幾次都不會把字庫灌爆。
+     *
+     * @return 該字的 `vocabId`
+     */
+    @Transaction
+    suspend fun ensureInWordbank(
+        lemma: String,
+        surfaceForm: String?,
+        contextLine: String?,
+        songId: Long?,
+        cefr: String?,
+        now: Long,
+    ): Long {
+        val existing = findByLemma(lemma)
+        if (existing != null) {
+            if (existing.cefr == null && cefr != null) {
+                update(existing.copy(cefr = cefr, updatedAt = now))
+            }
+            return existing.id
+        }
+
+        val id = insert(
+            VocabEntity(
+                lemma = lemma,
+                surfaceForm = surfaceForm,
+                firstSongId = songId,
+                contextLine = contextLine,
+                cefr = cefr,
+                createdAt = now,
+                updatedAt = now,
+            ),
+        )
+        if (id > 0) return id
+
+        // 併發寫入時 insert 會被 IGNORE 掉，改回查一次
+        return findByLemma(lemma)?.id ?: id
     }
 }
 

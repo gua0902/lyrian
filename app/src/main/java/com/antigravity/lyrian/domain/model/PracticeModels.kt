@@ -85,11 +85,13 @@ data class FillChoiceDataset(
 /**
  * 一行的挖空決策。
  *
- * @property chosenWord 選中的字；null 表示這行過濾後沒有可挖的字
- * @property chosenLemma 選中字的原形（`abandoned` → `abandon`）；沒有詞形變化時等於 [chosenWord]
- * @property chosenLevel 選中字的 CEFR 等級；未收錄時為 null
- * @property chosenLevelSource 選中字的等級**來源**，例如 `CEFR-J`、`詞頻推估`
- * @property rejected 被過濾掉的候選字與各自的排除原因
+ * @property chosenWord 選中的字；null 表示這句不挖
+ * @property chosenLemma 選中字的原形（`abandoned` → `abandon`）
+ * @property chosenLevel 選中字的 CEFR 等級；未收錄時為 C2（視為高階）
+ * @property chosenLevelSource 選中字的等級**來源**
+ * @property frequencyRank BNC 詞頻排名（1 = 最常見）；null 表示沒有排名
+ * @property basis 為什麼選這個字（排序依據），例如 `等級優先（B2 > B1）`
+ * @property rejected 這句被排除的字與各自的原因
  */
 data class BlankDecision(
     val lineIndex: Int,
@@ -97,6 +99,8 @@ data class BlankDecision(
     val chosenLemma: String? = null,
     val chosenLevel: String? = null,
     val chosenLevelSource: String? = null,
+    val frequencyRank: Int? = null,
+    val basis: String? = null,
     val rejected: List<RejectedCandidate> = emptyList(),
 )
 
@@ -152,11 +156,17 @@ data class ChoiceRecord(
  * @property word 顯示的形（錯題是正解，延伸詞彙是原形）
  * @property partOfSpeech 詞性縮寫，例如 `n.`
  * @property meaning 繁體中文釋義
+ * @property lemma 去重鍵（入庫時用）
+ * @property level CEFR 等級（決定要不要自動入庫，畫面上不顯示）
  */
 data class ResultWord(
     val word: String,
     val partOfSpeech: String? = null,
     val meaning: String? = null,
+    val lemma: String = word.lowercase(),
+    val level: CefrLevel? = null,
+    /** 已經被使用者手動加入字庫 */
+    val addedToWordbank: Boolean = false,
 )
 
 /**

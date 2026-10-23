@@ -187,6 +187,10 @@ def read_ecdict(path: str):
 
 POS_PREFIX_RE = re.compile(r"^([a-z]+\.)\s*(.*)$", re.S)
 
+# 每個字最多保留幾個詞性、每行最長幾個字。放寬會讓分片體積翻倍。
+MAX_SENSE_LINES = 4
+MAX_SENSE_CHARS = 64
+
 
 def split_pos_and_gloss(word: str, translation: str) -> tuple[str, str, list[str]]:
     """Return ``(pos abbreviation, gloss, all pos abbreviations seen)``.
@@ -195,31 +199,22 @@ def split_pos_and_gloss(word: str, translation: str) -> tuple[str, str, list[str
     speech (``n. 撣?, ??``). The first line gives the headline pos + gloss;
     a second sense is appended because one line is often too narrow.
     """
-    lines = [BR_RE.sub("\n", translation)]
-    parts: list[str] = []
-    for raw in lines[0].split("\n"):
-        raw = raw.strip()
-        if raw:
-            parts.append(raw)
-    if not parts:
-        return "", "", []
+    text = BR_RE.sub("\n", translation)
+    lines = [p.strip() for p in text.split("\n") if p.strip()]
 
     pos_items: list[str] = []
-    glosses: list[str] = []
-    for part in parts[:3]:
-        m = POS_PREFIX_RE.match(part)
-        if m:
-            pos_items.append(m.group(1))
-            glosses.append(m.group(2).strip())
-        else:
-            glosses.append(part)
+    kept: list[str] = []
 
-    pos = pos_items[0] if pos_items else ""
-    gloss = "；".join(g for g in glosses[:2] if g)
-    gloss = re.sub(r"\s+", " ", gloss).strip(" ;,，")
-    if len(gloss) > 48:
-        gloss = gloss[:48].rstrip(" ;,，") + "…"
-    return pos, gloss, pos_items
+    for line in lines[:MAX_SENSE_LINES]:
+        match = POS_PREFIX_RE.match(line)
+        if match:
+            pos_items.append(match.group(1))
+        normalized = re.sub(r"\s+", " ", line).strip()
+        if len(normalized) > MAX_SENSE_CHARS:
+            normalized = normalized[:MAX_SENSE_CHARS].rstrip(" ;,，") + "…"
+        kept.append(normalized)
+
+    return (pos_items[0] if pos_items else ""), "\n".join(kept), pos_items
 
 
 # ECDICT transcribes for Chinese learners: the schwa is stored as the *Cyrillic*
@@ -234,6 +229,19 @@ def normalize_phonetic(text: str) -> str:
 
 
 def build_entry(word: str, row: dict, translation: str, level: str, to_trad) -> dict:
+    """組一筆字典條目。
+
+    欄位刻意壓到一個字母：這些字會重複 29,000 次，鍵名長度直接吃掉體積。
+
+    | 鍵 | 內容 |
+    |---|---|
+    | `w` | 單字 |
+    | `p` | 詞性縮寫摘要（`n./v.`），列表列用 |
+    | `c` | **完整釋義**，一行一個詞性，保留 `n. `、`[醫]` 這類前綴——分組與領域標註由讀取端處理 |
+    | `i` | IPA |
+    | `l` | CEFR 等級（只有真資料才填，推估的留空）|
+    | `x` | ECDICT 的詞形變化原始字串，例如 `p:passed/d:passed/i:passing/3:passes` |
+    """
     pos, gloss, pos_items = split_pos_and_gloss(word, translation)
     unique_pos = list(dict.fromkeys(pos_items))[:2]
     phonetic = normalize_phonetic((row.get("phonetic") or "").strip())
@@ -243,6 +251,7 @@ def build_entry(word: str, row: dict, translation: str, level: str, to_trad) -> 
         "c": to_trad(gloss),
         "i": f"/{phonetic}/" if phonetic else "",
         "l": level,
+        "x": (row.get("exchange") or "").strip(),
     }
 
 
@@ -343,8 +352,11 @@ def main() -> int:
                 f.write(data)
         return len(data)
 
+    # 第四欄是 BNC 詞頻排名（0 = 未知）。挖空要用它排序：
+    # 「同級取詞頻更低者」需要一個可比較的數字，不能只有「是否前 2000」的布林值。
     level_lines = sorted(
-        f"{w}\t{lv}\t{src}" for w, (lv, src) in levels.items()
+        f"{w}\t{lv}\t{src}\t{freq_rows.get(w, 0)}"
+        for w, (lv, src) in levels.items()
     )
     size_levels = write("levels.tsv", "\n".join(level_lines) + "\n")
 

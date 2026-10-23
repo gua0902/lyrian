@@ -17,23 +17,28 @@ import kotlinx.coroutines.withContext
  * @property lemma 原形（例：`abandon`）；找不到對應時等於 [surface]
  * @property level 等級；null 表示三份資料都沒有這個字
  * @property source 判定來源，直接顯示在偵錯輸出與單字卡上
+ * @property frequencyRank BNC 詞頻排名（1 = 最常見）；0 或 null 表示這份資料沒有排名
  */
 data class WordLevel(
     val surface: String,
     val lemma: String,
     val level: CefrLevel?,
     val source: String,
+    val frequencyRank: Int? = null,
 ) {
     /** 沒有等級資料的字，一律視為比 B2 更難（CEFR-J 只收 6,900 個基本字）。 */
     val treatAsLevel: CefrLevel get() = level ?: CefrLevel.C2
 
     val isUnlisted: Boolean get() = level == null
+
+    /** 詞頻顯示用：沒有排名時回報「未收錄」。 */
+    val frequencyLabel: String get() = frequencyRank?.let { "BNC $it" } ?: "未收錄"
 }
 
 /**
  * 挖空判斷需要的語言資料。
  *
- * 抽成介面是為了讓 `FillChoiceBuilder` 保持純函式、可在 JVM 上測試；
+ * 抽成介面是為了讓挖空邏輯保持純函式、可在 JVM 上測試；
  * 正式執行時由 [LanguageData] 提供，測試可傳自己造的實作。
  */
 interface WordLevelSource {
@@ -67,7 +72,7 @@ const val FREQ_SOURCE_LABEL = "詞頻推估"
  * 這是**唯讀、整份載入、只查不寫**的資料，用 SQLite 只是多一層成本。
  * 三份 TSV 直接解析成 `HashMap` 後，一次查詢就是一次雜湊，沒有 I/O。
  *
- * 體積（由 `tools/build_assets.py` 產生，`--stats` 可重測）：約 0.94 MB。
+ * 體積（由 `tools/build_assets.py` 產生，`--stats` 可重測）：約 1.09 MB。
  *
  * ## 載入時機
  *
@@ -75,10 +80,13 @@ const val FREQ_SOURCE_LABEL = "詞頻推估"
  * 因此對外一律透過 [LanguageDataStore.get]（suspend、在 IO 執行緒完成）。
  */
 class LanguageData internal constructor(
-    private val levels: Map<String, Pair<CefrLevel, String>>,
+    private val levels: Map<String, LevelRecord>,
     private val lemmas: Map<String, String>,
     private val frequent: Set<String>,
 ) : WordLevelSource {
+
+    /** 一筆等級資料：等級 + 來源 + BNC 排名。 */
+    internal data class LevelRecord(val level: CefrLevel, val source: String, val rank: Int)
 
     override fun lookup(word: String): WordLevel {
         val surface = normalize(word)
@@ -95,17 +103,32 @@ class LanguageData internal constructor(
         // 而且錯得很明顯（使用者會看到一個早就會的字被考）。
         // 因此：真資料（CEFR-J／Octanove）優先，推估的等級只在兩邊都沒有真資料時使用。
         val hit = when {
-            direct != null && direct.second != FREQ_SOURCE_LABEL -> direct
-            fromLemma != null && fromLemma.second != FREQ_SOURCE_LABEL -> fromLemma
+            direct != null && direct.source != FREQ_SOURCE_LABEL -> direct
+            fromLemma != null && fromLemma.source != FREQ_SOURCE_LABEL -> fromLemma
             direct != null -> direct
             else -> fromLemma
         }
 
         return if (hit == null) {
-            WordLevel(surface, lemma, null, UNLISTED_SOURCE)
+            WordLevel(surface, lemma, null, UNLISTED_SOURCE, frequencyRankOf(surface))
         } else {
-            WordLevel(surface, lemma, hit.first, hit.second)
+            WordLevel(
+                surface = surface,
+                lemma = lemma,
+                level = hit.level,
+                source = hit.source,
+                frequencyRank = hit.rank.takeIf { it > 0 } ?: frequencyRankOf(surface),
+            )
         }
+    }
+
+    /** 詞頻排名：先看自己，再看原形。 */
+    fun frequencyRankOf(word: String): Int? {
+        val surface = normalize(word)
+        if (surface.isEmpty()) return null
+        levels[surface]?.rank?.takeIf { it > 0 }?.let { return it }
+        val lemma = lemmas[surface] ?: return null
+        return levels[lemma]?.rank?.takeIf { it > 0 }
     }
 
     /**
@@ -145,8 +168,6 @@ class LanguageData internal constructor(
          *
          * 用函式而不是 `AssetManager`，是為了讓同一份邏輯能在 JVM 單元測試裡
          * 直接讀 `app/src/main/assets`——測試與正式執行解析的是**同一份檔案**。
-         *
-         * @suppress 呼叫端負責確保在 IO 執行緒呼叫（見 [LanguageDataStore]）
          */
         fun load(read: (String) -> String): LanguageData {
             // `trimEnd('\r')` 不是多餘的：這些是逐行解析的 TSV，若檔案在 checkout 時
@@ -155,15 +176,17 @@ class LanguageData internal constructor(
             // `.gitattributes` 已經把資料檔標成 binary，這裡是第二道保險。
             fun lines(text: String) = text.lineSequence().map { it.trimEnd('\r') }
 
-            val levels = HashMap<String, Pair<CefrLevel, String>>(32_000)
+            val levels = HashMap<String, LevelRecord>(32_000)
             lines(read("$ASSET_DIR/levels.tsv")).forEach { line ->
                 if (line.isEmpty()) return@forEach
-                val first = line.indexOf('\t')
-                val second = line.indexOf('\t', first + 1)
-                if (first <= 0 || second <= first) return@forEach
-                val word = line.substring(0, first)
-                val level = CefrLevel.fromLabel(line.substring(first + 1, second)) ?: return@forEach
-                levels[word] = level to sourceLabel(line.substring(second + 1))
+                val fields = line.split('\t')
+                if (fields.size < 3) return@forEach
+                val level = CefrLevel.fromLabel(fields[1]) ?: return@forEach
+                levels[fields[0]] = LevelRecord(
+                    level = level,
+                    source = sourceLabel(fields[2]),
+                    rank = fields.getOrNull(3)?.toIntOrNull() ?: 0,
+                )
             }
 
             val lemmas = HashMap<String, String>(36_000)

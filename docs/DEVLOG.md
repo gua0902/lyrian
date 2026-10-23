@@ -1161,6 +1161,167 @@ Yellow L25 bleed     原形 bleed     等級 B1  來源 CEFR-J
    此時 YouTube 版本匹配的準確度較低。
 6. **狀態列**的修改無法在本機驗證（沒有裝置也沒有模擬器）。
 
+---
+
+## TASK-15：修正與補齊（模組 A–G）
+
+擁有者實機測出「播放鏈不可用」，並要求七個模組。以下照模組順序記錄。
+
+### 模組 A：播放鏈（最高優先）
+
+**前一版為什麼沒聲音**：把播放器包在本地 HTML 裡、用 `YT.Player` + `postMessage`。
+`loadDataWithBaseURL` 的頁面裡 IFrame API 常因 origin 不符而**靜默失敗**，
+錯誤完全被吞掉——所以「看起來有載入、實際沒播」。
+
+**改法**（依擁有者指定的路線）：
+
+| 項目 | 之前 | 現在 |
+|---|---|---|
+| 載入方式 | 本地 HTML + iframe_api | `loadUrl("https://www.youtube.com/embed/{id}?autoplay=1&playsinline=1")` **頂層頁面** |
+| 控制方式 | `YT.Player` API | `evaluateJavascript` 直接操作 `document.querySelector('video')` |
+| UA | WebView 預設（含 `Version/4.0`） | 一般 Chrome UA |
+| 錯誤偵測 | `onError` 錯誤碼 | `ytInitialPlayerResponse.playabilityStatus` + `.ytp-error` 文字 |
+| 浮層 | 無處理 | 注入 CSS 隱藏 `ytp-chrome-top` / `ytp-pause-overlay` 等**浮層**（廣告不是浮層，不受影響）|
+
+`mediaPlaybackRequiresUserGesture=false` 保留，並在 `onVideoFound`、`play()` 都
+再呼叫一次 `v.play()`（瀏覽器可能擋自動播放，`p.catch` 會把原因寫進 log）。
+
+**尺寸（A.2 / A.6）**：封面框 48dp → **96dp 正方形**（48dp 的播放器連廣告的
+關閉鈕都點不到）。播放器**依 `videoWidth / videoHeight` 塞進框內**，
+圓角與封面相同（12dp）。若實機上仍不能播，把 `PracticeScreen.DEBUG_LARGE_PLAYER`
+改成 `true` 會放大成 240×135dp，用來排除「尺寸太小」這個變因。
+
+**全部候選都 101/150** → `onUnavailable` 標記 `embedBlocked`，ViewModel 自動換下一個；
+換完一輪就顯示「這些版本都不允許嵌入播放，換一首歌試試」。
+
+**Log（`adb logcat -s LyrianPlayer LyrianYouTubeSearch LyrianPractice`）**：
+
+```
+D/LyrianYouTubeSearch: 搜尋「Adele Hello」解析出 9 個候選："Adele - Hello"... 
+D/LyrianPractice:      音源排序：xxxx score=57.3 delta=1200ms conf=true penalty=[] Adele - Topic
+D/LyrianPlayer:        load：https://www.youtube.com/embed/xxxx?autoplay=1&playsinline=1
+D/LyrianPlayer:        頁面載入完成：https://www.youtube.com/embed/xxxx...
+D/LyrianPlayer:        注入監測腳本：injected
+D/LyrianPlayer:        找到 <video>：640x360
+D/LyrianPlayer:        指令 unmute → ready state=4 muted=false paused=false
+D/LyrianPlayer:        tick #1：getCurrentTime=1.20s duration=295.0s state=1
+```
+
+> ⚠️ **本機沒有裝置也沒有模擬器，這一串 Log 是設計目標，不是我實測的輸出。**
+> 程式在每個關鍵點都會印（搜尋數、排序、注入結果、`<video>` 尺寸、
+> 每個指令的 JS 回傳值、前 5 次 tick），實機跑一次就能定位斷在哪一環。
+
+### 模組 B：歌詞推進
+
+問題出在**作答路徑**：`onNext()` 原本只擋 `isSongDriven`，但在音源還沒載入的那幾秒
+`isSongDriven` 還是 `false`，於是答完就往前跳。
+
+改成用 `hasTimeline`（歌詞只要有任一行 `startMs > 0` 就成立）當守門員：
+
+```
+作答完成 → 只做兩件事：解除暫停、0.3 秒淡入恢復播放
+歌詞換行 → 唯一條件 currentTime + offset ≥ 下一行 startMs
+           （lineIndexAt 取「最後一個 startMs ≤ 位置」的行，一次跳到定位，不逐行補）
+```
+
+### 模組 C：挖空改成逐句選詞（邏輯完全重寫）
+
+`BlankPolicy`（舊的全域門檻）刪除，改成 `BlankSelector`：
+
+| | 舊 | 新 |
+|---|---|---|
+| 篩選 | 低於門檻的字一律不挖 | 每句挑一個最好的字 |
+| 等級 | 硬性門檻 | **排序起點**（低於門檻的字只在該句沒別的候選時才用）|
+| 重複 | 同字可跨句重複 | **跨句 lemma 去重** |
+| 選句 | 全部 | 均勻抽樣 5 / 10 / 全部 |
+
+排序鍵：`(是否達標, 等級高→低, 詞頻罕見→常見, 長度長→短)`。
+
+**三首歌重跑**（`BlankReportTest`，可重現）：
+
+| 歌 | 起點 A1 | A2 | B1 | B2 | 選 5 句 | 選 10 句 | 全部 |
+|---|---|---|---|---|---|---|---|
+| Hello（48 句）| 6 | 6 | **6** | 6 | 3 | 4 | **6** |
+| expectations（48 句）| 16 | 16 | **16** | 16 | 5 | 10 | **16** |
+| Yellow（37 句）| 4 | 4 | **4** | 4 | 3 | 3 | **4** |
+
+B1 的挖空明細（節錄）：
+
+```
+Hello L0  Hello      原形 hello      等級 A1  BNC 2319   該句唯一合格候選
+      L3  healing    原形 healing    等級 B1  BNC 6591   同級取罕見
+      L5  California 原形 california 等級 C1  BNC 3311   該句唯一合格候選
+expectations L10 stipulations 原形 stipulation 等級 C2 BNC 14812 等級優先（C2 > C1）
+Yellow L25 bleed 原形 bleed 等級 B1 BNC 6460 該句唯一合格候選
+```
+
+**⚠️ 兩個必須讓擁有者看到的結果**
+
+1. **等級對題數幾乎沒有影響**（A1 與 B2 的題數完全一樣）。這是規格 C.1「不再全域
+   按等級篩選」的直接後果：等級只影響「同句內先挑哪個字」，不影響「這句挖不挖」。
+   若希望等級能改變題數，就得讓它重新變成門檻——與 C.1 衝突。
+2. **題數遠低於「目標 20–40 句」**（Hello 6、Yellow 4）。原因不是等級，是
+   **C.3 的高頻詞排除**：42/48 句（Hello）的每一個字都在 BNC 前 2000 名內，
+   整句沒有候選。要拉高題數只能放寬高頻詞表（例如 2000 → 1000），
+   但那就不是擁有者寫的規則了。
+
+### 模組 D：字庫入庫
+
+`B1 以上不論對錯一律入庫；A1/A2 一律不入庫`。新增 `VocabDao.ensureInWordbank`
+（冪等、不累加 `errorCount`、不改狀態），答錯仍走 `addFromError`（累加錯誤次數）。
+結果頁兩份字表都加「＋」按鈕手動加入，不受等級限制。
+
+### 模組 E：字典資產加 exchange
+
+分片每個條目多一個 `x` 欄位（原始字串），釋義也從「兩條摘要」改成
+**完整分行釋義**（模組 F 要按詞性分組）。
+
+**⚠️ 任務書的鍵位對照與 ECDICT 實際資料不符**——我照**實際資料**實作：
+
+| 任務書寫的 | ECDICT 實際 | 證據 |
+|---|---|---|
+| `p` = 複數 | `p` = **過去式** | `be → p:was`、`go → p:went` |
+| `d` = 過去式 | `d` = **過去分詞** | `be → d:been`、`go → d:gone` |
+| `i` = 過去分詞 | `i` = **現在分詞** | `be → i:being`、`go → i:going` |
+| `g` = 現在分詞 | 沒有 `g` 這個鍵 | `pass → d:passed/p:passed/i:passing/3:passes` |
+| `s` = 比較級 | `s` = **複數** | `child → s:children` |
+| `r` = 最高級 | `r` = **比較級** | `good → r:better`、`happy → r:happier` |
+| （未提） | `t` = **最高級** | `good → t:best`、`happy → t:happiest` |
+
+若照任務書的對照，`passed` 會被標成「複數」——使用者一眼就會看到錯。
+`0:`（原形）與 `1:`（變化類型）不是詞形，也一併跳過。
+
+### 模組 F：單字詳情頁
+
+`WordDetailBody` 一份實作、兩個入口（`word/{word}` 與字庫 `vocab/{id}`）：
+單詞大字 + CEFR 徽章 + 音標 + TTS → 釋義**按詞性分組**（詞性左側徽章、
+`[醫]` 抽成灰色小標）→ 詞形變化（`過去式 passed / 現在分詞 passing`）→
+歌詞例句（原句 + 出自哪首歌，可點回那首歌）。沒有熟練度、複習次數、星級、考試標籤。
+
+### 模組 G
+
+整個 App 鎖 `portrait`（`MainActivity` 的 `screenOrientation`）；
+字庫詳情與其他頁面共用同一個 `Speaker`（系統 TTS）。
+
+### 體積
+
+| | 之前 | 現在 |
+|---|---|---|
+| 字典分片 `dict/*.json` | 2.81 MB | **3.68 MB** |
+| 等級表 `levels.tsv` | 0.38 MB | **0.55 MB**（多一欄詞頻排名）|
+| 全部 assets | 3.70 MB | **4.65 MB** |
+| debug APK | 20.77 MB | **21.24 MB** |
+
+最大的分片：`s.json` 410 KB、`c.json` 346 KB、`p.json` 290 KB、`a.json` 228 KB。
+
+### 尚未解決
+
+1. **播放鏈仍未在實機驗證**（沒有裝置）。上面的 Log 是設計目標。
+2. **題數不足 20–40 句**（模組 C 的表格）——與高頻詞排除規則衝突，需要擁有者決定。
+3. **等級設定對題數沒有影響**——同上，是 C.1 的直接後果。
+4. 專有名詞（`California`、`Vegas`）仍會被挖，因為等級表沒有「詞性」可判斷。
+5. 旋轉螢幕會重建 WebView（音樂中斷一下）；現在整個 App 鎖直向，實務上不會發生。
+
 
 
 

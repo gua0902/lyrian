@@ -1,4 +1,4 @@
-package com.antigravity.lyrian.tools.report
+﻿package com.antigravity.lyrian.tools.report
 
 import com.antigravity.lyrian.data.lang.LanguageData
 import com.antigravity.lyrian.data.lyrics.LyricsParser
@@ -6,7 +6,7 @@ import com.antigravity.lyrian.data.remote.LrclibTrackDto
 import com.antigravity.lyrian.domain.model.CefrLevel
 import com.antigravity.lyrian.domain.practice.FillChoiceBuilder
 import java.io.File
-import kotlin.random.Random
+import com.antigravity.lyrian.domain.practice.BlankCoverage
 import kotlinx.serialization.json.Json
 import org.junit.Assume.assumeTrue
 import org.junit.Test
@@ -61,33 +61,45 @@ class BlankReportTest {
             CefrLevel.SELECTABLE.forEach { level ->
                 val dataset = FillChoiceBuilder.buildDataset(
                     lines = lines,
-                    random = Random(7),
                     minLevel = level,
+                    coverage = BlankCoverage.ALL,
                     levelSource = language,
                 )
-                println("  門檻 ${level.label}: ${dataset.questions.size} 題 / ${lines.size} 行")
+                println("  起點 ${level.label}: ${dataset.questions.size} 題 / ${lines.size} 句")
+            }
+
+            BlankCoverage.entries.forEach { coverage ->
+                val dataset = FillChoiceBuilder.buildDataset(
+                    lines = lines,
+                    minLevel = CefrLevel.DEFAULT,
+                    coverage = coverage,
+                    levelSource = language,
+                )
+                println("  選句 ${coverage.label}: ${dataset.questions.size} 題")
             }
 
             val dataset = FillChoiceBuilder.buildDataset(
                 lines = lines,
-                random = Random(7),
                 minLevel = CefrLevel.DEFAULT,
+                coverage = BlankCoverage.ALL,
                 levelSource = language,
             )
-            println("  ── 門檻 ${CefrLevel.DEFAULT.label} 的挖空明細 ──")
-            dataset.debug.filter { it.chosenWord != null }.take(24).forEach { d ->
+            println("  ── 起點 ${CefrLevel.DEFAULT.label}、全部選句的挖空明細 ──")
+            dataset.debug.filter { it.chosenWord != null }.take(28).forEach { d ->
                 println(
-                    "  L%-3d %-18s 原形 %-18s 等級 %-4s 來源 %s".format(
+                    "  L%-3d %-16s 原形 %-16s 等級 %-3s 詞頻 %-9s %s".format(
                         d.lineIndex,
                         d.chosenWord,
                         d.chosenLemma ?: d.chosenWord,
                         d.chosenLevel ?: "—",
-                        d.chosenLevelSource,
+                        d.frequencyRank?.let { "BNC $it" } ?: "未收錄",
+                        d.basis ?: "",
                     ),
                 )
             }
             val noBlank = dataset.debug.count { it.chosenWord == null }
-            println("  沒有可挖字的行：$noBlank")
+            val filler = dataset.debug.count { it.chosenWord == null && it.rejected.isEmpty() }
+            println("  沒有可挖字的句子：$noBlank（其中無實詞 $filler）")
             dataset.debug.firstOrNull { it.chosenWord == null && it.rejected.isNotEmpty() }?.let { d ->
                 println("  例：L${d.lineIndex} 全被過濾 → " +
                     d.rejected.joinToString { "${it.word}(${it.levelSource})" })

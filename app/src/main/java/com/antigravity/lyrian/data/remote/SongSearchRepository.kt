@@ -3,6 +3,7 @@ package com.antigravity.lyrian.data.remote
 import com.antigravity.lyrian.data.lang.WordLevelSource
 import com.antigravity.lyrian.data.lyrics.LyricsParser
 import com.antigravity.lyrian.domain.model.CefrLevel
+import com.antigravity.lyrian.domain.practice.BlankCoverage
 import com.antigravity.lyrian.domain.practice.FillChoiceBuilder
 import javax.inject.Inject
 import javax.inject.Singleton
@@ -67,6 +68,7 @@ class SongSearchRepository @Inject constructor(
         artist: String,
         track: String,
         minLevel: CefrLevel = CefrLevel.DEFAULT,
+        coverage: BlankCoverage = BlankCoverage.DEFAULT,
         levelSource: WordLevelSource = WordLevelSource.None,
     ): List<SongSearchResult> {
         val entries = lrclibApi.search(
@@ -86,7 +88,7 @@ class SongSearchRepository @Inject constructor(
         val itunesTracks = fetchItunesTracks("$artist $track")
 
         return dedupe(
-            entries.map { toSearchResult(it, itunesTracks, minLevel, levelSource) },
+            entries.map { toSearchResult(it, itunesTracks, minLevel, coverage, levelSource) },
         ).filter { it.blankCount > 0 }
     }
 
@@ -106,6 +108,7 @@ class SongSearchRepository @Inject constructor(
         entry: LrclibTrackDto,
         itunesTracks: List<ItunesTrackDto>,
         minLevel: CefrLevel = CefrLevel.DEFAULT,
+        coverage: BlankCoverage = BlankCoverage.DEFAULT,
         levelSource: WordLevelSource = WordLevelSource.None,
     ): SongSearchResult {
         val artist = NameMatcher.normalizeArtist(entry.artistName)
@@ -134,6 +137,7 @@ class SongSearchRepository @Inject constructor(
             blankCount = FillChoiceBuilder.countBlankableLines(
                 lines,
                 minLevel = minLevel,
+                coverage = coverage,
                 levelSource = levelSource,
             ),
             lyricsFile = entry.lyricsfile,

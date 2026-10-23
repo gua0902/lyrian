@@ -16,6 +16,8 @@ import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
+import androidx.compose.material.icons.filled.Add
+import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.ExpandLess
 import androidx.compose.material.icons.filled.ExpandMore
 import androidx.compose.material.icons.filled.MusicNote
@@ -69,6 +71,7 @@ fun PracticeResultScreen(
     onChangeSong: () -> Unit,
     onOpenWordbank: () -> Unit,
     onOpenWord: (String) -> Unit,
+    onAddToWordbank: (ResultWord) -> Unit,
     modifier: Modifier = Modifier,
 ) {
     var extensionExpanded by remember { mutableStateOf(false) }
@@ -147,7 +150,11 @@ fun PracticeResultScreen(
                 }
             } else {
                 items(items = state.wrongWords, key = { "wrong-${it.word}" }) { word ->
-                    WordRow(word = word, onClick = { onOpenWord(word.word) })
+                    WordRow(
+                        word = word,
+                        onClick = { onOpenWord(word.word) },
+                        onAdd = { onAddToWordbank(word) },
+                    )
                 }
             }
 
@@ -173,7 +180,11 @@ fun PracticeResultScreen(
                     state.extensionWords.take(EXTENSION_PREVIEW_COUNT)
                 }
                 items(items = visible, key = { "ext-${it.word}" }) { word ->
-                    WordRow(word = word, onClick = { onOpenWord(word.word) })
+                    WordRow(
+                        word = word,
+                        onClick = { onOpenWord(word.word) },
+                        onAdd = { onAddToWordbank(word) },
+                    )
                 }
 
                 if (state.extensionWords.size > EXTENSION_PREVIEW_COUNT) {
@@ -336,16 +347,17 @@ private fun PlaceholderCard(text: String) {
 /**
  * 一份字表的單列：**只有 eng、詞性、中文釋義**（擁有者指定的三項）。
  *
- * 點擊進入單字詳情（[onClick]）。整列可點，最小高度 48dp 以符合觸控規範。
+ * 點擊進入單字詳情（[onClick]）。右側的「＋」是模組 D.3 的手動加入——
+ * A1/A2 的字不會自動入庫，使用者要就得自己按。整列可點，最小高度 48dp。
  */
 @Composable
-private fun WordRow(word: ResultWord, onClick: () -> Unit) {
+private fun WordRow(word: ResultWord, onClick: () -> Unit, onAdd: () -> Unit) {
     Row(
         modifier = Modifier
             .fillMaxWidth()
             .clip(RoundedCornerShape(12.dp))
             .clickable(onClick = onClick)
-            .padding(horizontal = 8.dp, vertical = 10.dp),
+            .padding(start = 8.dp, top = 4.dp, bottom = 4.dp, end = 0.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
         Text(
@@ -371,6 +383,25 @@ private fun WordRow(word: ResultWord, onClick: () -> Unit) {
                 .weight(1f)
                 .padding(start = 12.dp),
         )
+
+        if (word.addedToWordbank) {
+            Icon(
+                imageVector = Icons.Filled.Check,
+                contentDescription = stringResource(R.string.result_added_to_wordbank),
+                tint = MaterialTheme.colorScheme.primary,
+                modifier = Modifier
+                    .padding(horizontal = 12.dp)
+                    .size(20.dp),
+            )
+        } else {
+            IconButton(onClick = onAdd, modifier = Modifier.size(48.dp)) {
+                Icon(
+                    imageVector = Icons.Filled.Add,
+                    contentDescription = stringResource(R.string.result_add_to_wordbank),
+                    tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
+        }
     }
 }
 

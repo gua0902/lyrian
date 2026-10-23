@@ -2,6 +2,7 @@ package com.antigravity.lyrian.data.settings
 
 import android.content.Context
 import com.antigravity.lyrian.domain.model.CefrLevel
+import com.antigravity.lyrian.domain.practice.BlankCoverage
 import dagger.hilt.android.qualifiers.ApplicationContext
 import javax.inject.Inject
 import javax.inject.Singleton
@@ -44,8 +45,24 @@ class UserSettings @Inject constructor(
         prefs.edit().putString(KEY_MIN_LEVEL, level.label).apply()
     }
 
+    private val _coverage = MutableStateFlow(
+        BlankCoverage.fromName(prefs.getString(KEY_COVERAGE, null)),
+    )
+
+    /** 每首歌要挖幾句（5 / 10 / 全部）。 */
+    val coverage: StateFlow<BlankCoverage> = _coverage.asStateFlow()
+
+    val coverageValue: BlankCoverage get() = _coverage.value
+
+    fun setCoverage(value: BlankCoverage) {
+        if (value == _coverage.value) return
+        _coverage.value = value
+        prefs.edit().putString(KEY_COVERAGE, value.name).apply()
+    }
+
     private companion object {
         const val PREFS_NAME = "lyrian_prefs"
         const val KEY_MIN_LEVEL = "min_cefr_level"
+        const val KEY_COVERAGE = "blank_coverage"
     }
 }

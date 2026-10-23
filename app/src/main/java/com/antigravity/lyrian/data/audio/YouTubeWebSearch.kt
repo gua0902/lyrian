@@ -80,7 +80,16 @@ class YouTubeWebSearch @Inject constructor(
                 return@withContext emptyList()
             }
 
-            parseSearchResults(html, json, limit)
+            parseSearchResults(html, json, limit).also { videos ->
+                android.util.Log.d(
+                    TAG,
+                    "搜尋「$query」解析出 ${videos.size} 個候選" +
+                        videos.take(3).joinToString(
+                            prefix = "：",
+                            separator = " | ",
+                        ) { "\"${it.title}\" @${it.channel} ${it.durationMs?.div(1000)}s" },
+                )
+            }
         }
 
     companion object {

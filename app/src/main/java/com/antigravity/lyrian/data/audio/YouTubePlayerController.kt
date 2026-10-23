@@ -1,12 +1,14 @@
 package com.antigravity.lyrian.data.audio
 
 import android.annotation.SuppressLint
+import android.graphics.Color
 import android.os.Looper
+import android.webkit.ConsoleMessage
 import android.webkit.JavascriptInterface
+import android.webkit.WebChromeClient
 import android.webkit.WebSettings
 import android.webkit.WebView
 import android.webkit.WebViewClient
-import android.graphics.Color
 import javax.inject.Inject
 import javax.inject.Singleton
 import kotlinx.coroutines.delay
@@ -23,33 +25,39 @@ data class PlayerState(
     val positionMs: Long = 0L,
     val durationMs: Long? = null,
     val error: String? = null,
+    /** 這個版本被版權方禁止嵌入（YouTube 的 101 / 150）。 */
+    val embedBlocked: Boolean = false,
+    /** 影片的長寬比（寬 / 高）；還沒拿到時為 null。 */
+    val videoAspectRatio: Float? = null,
 )
 
 /**
- * YouTube 播放器：用**官方 IFrame Player API** 播放，嵌在畫面裡。
+ * YouTube 播放器：**直接載入 embed 頁**，再用 JS 操作底層的 `<video>` 元素。
  *
- * ## 為什麼是 IFrame 而不是自己抓串流
+ * ## 為什麼不再用本地 HTML + iframe_api
  *
- * 擁有者要求「播放器需內嵌在練習頁封面區域且保持可見，不可縮成 1x1 隱藏」，
- * 並且明訂「不加入任何廣告攔截、去廣告或串流抓取邏輯」。
- * IFrame Player 正好是唯一同時滿足這兩條的作法：它是官方播放器、廣告自然播放，
- * 我們只讀 `getCurrentTime()` 當時間軸。
+ * 前一版把播放器包在本地 HTML 裡、用 `YT.Player` + `postMessage` 控制。
+ * 實機測試的結果是**完全沒聲音**：`loadDataWithBaseURL` 的頁面裡，
+ * IFrame API 常因 origin 不符而拒絕初始化，而且錯誤完全被吞掉。
  *
- * （另一條路 NewPipe Extractor 需要自己抓串流並實作 `Downloader`，
- * 會踩到簽章與 PoToken，而且**繞過廣告**——與擁有者的要求相反。）
+ * 現在改成把 `https://www.youtube.com/embed/{id}` 當成**頂層頁面**載入：
+ *  - origin 就是 youtube.com，沒有跨來源問題
+ *  - 不需要 iframe_api 腳本
+ *  - 直接操作真正的 `<video>` 元素：`currentTime` / `play()` / `pause()` / `volume`
  *
- * ## 時間軸為什麼會被凍結
+ * 代價是拿不到 `YT.Player` 的錯誤碼，所以改用 `ytInitialPlayerResponse` 的
+ * `playabilityStatus`（頁面自己會把播放器設定放在那裡）判斷「不能嵌入」。
  *
- * 廣告期間 IFrame 回報的時間會**倒退**（廣告自己從 0 開始，或停在 0）。
- * [onTick] 因此做單調遞增的夾制：位置突然倒退就忽略這次回報。
- * 這就是「廣告期間歌詞自然凍結」，不需要偵測廣告。
+ * ## 廣告與時間軸
  *
- * ## WebView 的生命週期
+ * 廣告期間 `<video>.currentTime` 會**倒退**（廣告自己從 0 開始）。
+ * [onTick] 因此做單調夾制：倒退超過 1.5 秒就忽略該次回報，
+ * 歌詞時間軸自然凍結——不需要偵測廣告，也沒有任何攔截邏輯。
  *
- * WebView **不放在單例裡**（那會洩漏 Activity）。由 `AndroidView` 建立後
- * 透過 [attach] 交給這個控制器，[detach] 時放掉。旋轉螢幕時 WebView 會重建，
- * 控制器會用 [pendingLoad] 把**同一個影片載回來並回到原本的位置**——
- * 聲音會中斷一下，但歌詞與進度不會跑掉。
+ * ## 尺寸
+ *
+ * 擁有者要求播放器「內嵌在封面區域、保持可見、不可縮成 1x1」。
+ * 這裡只負責回報 `videoWidth / videoHeight`，實際尺寸由 Compose 依封面框決定。
  */
 @Singleton
 class YouTubePlayerController @Inject constructor() {
@@ -59,7 +67,7 @@ class YouTubePlayerController @Inject constructor() {
 
     private var webView: WebView? = null
 
-    /** 最近一次載入要求；WebView 重建後用它恢復。 */
+    /** 目前要載入的影片；WebView 重建（旋轉）後用它恢復。 */
     private var pendingLoad: LoadRequest? = null
 
     private var lastPositionMs = 0L
@@ -70,36 +78,71 @@ class YouTubePlayerController @Inject constructor() {
     /** 使用者剛剛拖過進度條：下一次回報的倒退是合理的。 */
     private var seekPending = false
 
+    /** 已經注入過腳本（每次換頁都要重新注入）。 */
+    private var injected = false
+
+    /** 已回報過幾次 tick（只印前幾筆，避免 log 被灌爆）。 */
+    private var tickLogs = 0
+
+    /** 靜音自救只做一次，避免每 200ms 重送同一道指令。 */
+    private var triedUnmute = false
+
     private data class LoadRequest(val videoId: String, val startAtMs: Long, val autoPlay: Boolean)
 
+    // ---------- 生命週期 ----------
+
     /**
-     * 綁定一個 WebView 並載入播放器頁。
+     * 綁定 WebView 並載入播放器頁。
      *
-     * 由 `AndroidView` 的 `factory` 呼叫。同一個 WebView 重複呼叫不會重載。
+     * 由 `AndroidView` 的 factory 呼叫。同一個 WebView 重複呼叫不會重載。
      */
     @SuppressLint("SetJavaScriptEnabled")
     fun attach(view: WebView) {
         if (webView === view) return
         webView = view
+        injected = false
 
         view.setBackgroundColor(Color.BLACK)
         view.settings.apply {
             javaScriptEnabled = true
-            // 使用者按了播放，之後由 `Lyrian.play()` 觸發，不需要點擊手勢
-            mediaPlaybackRequiresUserGesture = false
             domStorageEnabled = true
+            // 使用者已經按了播放鍵；之後由 JS 的 video.play() 接手，
+            // 若沿用預設值，Chrome 會以「沒有手勢」為由拒絕播放。
+            mediaPlaybackRequiresUserGesture = false
             cacheMode = WebSettings.LOAD_DEFAULT
             mixedContentMode = WebSettings.MIXED_CONTENT_NEVER_ALLOW
+            // 預設的 WebView UA 帶著 "Version/4.0"，YouTube 會當成舊版瀏覽器
+            // 而回一個功能受限的播放器。改成一般 Chrome 的 UA。
+            userAgentString = DESKTOP_UA
         }
-        view.webViewClient = WebViewClient()
+
+        view.webViewClient = object : WebViewClient() {
+            override fun onPageStarted(view: WebView?, url: String?, favicon: android.graphics.Bitmap?) {
+                injected = false
+                log("頁面開始載入：$url")
+            }
+
+            override fun onPageFinished(view: WebView?, url: String?) {
+                log("頁面載入完成：$url")
+                injectBridgeScript(view)
+            }
+        }
+
+        view.webChromeClient = object : WebChromeClient() {
+            override fun onConsoleMessage(message: ConsoleMessage): Boolean {
+                // YouTube 自己的訊息很多，只在 debug 等級轉發
+                log("JS console[${message.messageLevel()}] ${message.message()}")
+                return true
+            }
+        }
+
         view.addJavascriptInterface(Bridge(), "Bridge")
-        view.loadDataWithBaseURL(BASE_URL, PLAYER_HTML, "text/html", "utf-8", null)
 
         pendingLoad?.let { request ->
-            _state.value = PlayerState()
-            view.post {
-                load(request.videoId, request.startAtMs, request.autoPlay)
-            }
+            log("attach：恢復播放 ${request.videoId} @${request.startAtMs}ms")
+            view.post { load(request.videoId, request.startAtMs, request.autoPlay) }
+        } ?: run {
+            log("attach：尚無影片，等待 prepareAudio()")
         }
     }
 
@@ -107,7 +150,10 @@ class YouTubePlayerController @Inject constructor() {
     fun detach() {
         webView?.removeJavascriptInterface("Bridge")
         webView = null
+        injected = false
     }
+
+    // ---------- 指令 ----------
 
     /**
      * 載入（或換成）一個影片。
@@ -119,16 +165,47 @@ class YouTubePlayerController @Inject constructor() {
         pendingLoad = LoadRequest(videoId, startAtMs, autoPlay)
         lastPositionMs = startAtMs
         seekPending = true
+        tickLogs = 0
         _state.value = PlayerState(positionMs = startAtMs)
-        evaluate(js("Lyrian.load(%s, %.2f, %s)", videoId.jsString(), startAtMs / 1000.0, autoPlay))
+
+        val start = if (startAtMs > 0) "&start=${startAtMs / 1000}" else ""
+        val url = "https://www.youtube.com/embed/$videoId" +
+            "?autoplay=${if (autoPlay) 1 else 0}&playsinline=1$start"
+
+        val view = webView
+        if (view == null) {
+            log("load：WebView 還沒建立，先記住 $videoId，attach 後再載入")
+            return
+        }
+
+        log("load：$url")
+        view.post { view.loadUrl(url) }
     }
 
     fun play() {
-        evaluate("Lyrian.play()")
+        evaluateCommand("play") { """
+            (function(){
+              var v = document.querySelector('video');
+              if (!v) return 'no-video';
+              v.muted = false;
+              if (v.paused) {
+                var p = v.play();
+                if (p && p.catch) { p.catch(function(e){ Bridge.onLog('play rejected: ' + e); }); }
+              }
+              return 'playing@' + (v.currentTime||0);
+            })()
+        """ }
     }
 
     fun pause() {
-        evaluate("Lyrian.pause()")
+        evaluateCommand("pause") { """
+            (function(){
+              var v = document.querySelector('video');
+              if (!v) return 'no-video';
+              v.pause();
+              return 'paused@' + (v.currentTime||0);
+            })()
+        """ }
     }
 
     fun togglePlayPause() {
@@ -139,12 +216,20 @@ class YouTubePlayerController @Inject constructor() {
         lastPositionMs = positionMs.coerceAtLeast(0L)
         seekPending = true
         _state.value = _state.value.copy(positionMs = lastPositionMs)
-        evaluate(js("Lyrian.seek(%.2f)", lastPositionMs / 1000.0))
+        val seconds = js("%.2f", lastPositionMs / 1000.0)
+        evaluateCommand("seek") { """
+            (function(){
+              var v = document.querySelector('video');
+              if (!v) return 'no-video';
+              v.currentTime = $seconds;
+              return 'seek@' + v.currentTime;
+            })()
+        """ }
     }
 
     fun currentPositionMs(): Long = lastPositionMs
 
-    /** 音量淡出（0–100）。IFrame 的 `setVolume` 是唯一的音量控制方式。 */
+    /** 音量淡出（0–100）。 */
     suspend fun fadeOut(durationMs: Long = FADE_MS) = rampVolume(from = null, to = 0, durationMs)
 
     /** 音量淡入，回到滿音量。 */
@@ -155,10 +240,24 @@ class YouTubePlayerController @Inject constructor() {
         for (step in 0..FADE_STEPS) {
             val fraction = step.toFloat() / FADE_STEPS
             currentVolume = start + ((to - start) * fraction).toInt()
-            evaluate("Lyrian.volume($currentVolume)")
+            setVolume(currentVolume)
             delay((durationMs / FADE_STEPS).coerceAtLeast(1L))
         }
         currentVolume = to
+        setVolume(to)
+    }
+
+    private fun setVolume(percent: Int) {
+        val value = js("%.2f", percent.coerceIn(0, 100) / 100.0)
+        evaluateCommand("volume") { """
+            (function(){
+              var v = document.querySelector('video');
+              if (!v) return 'no-video';
+              v.volume = $value;
+              v.muted = false;
+              return 'vol=' + v.volume;
+            })()
+        """ }
     }
 
     /** 停止並清掉目前影片。 */
@@ -166,7 +265,13 @@ class YouTubePlayerController @Inject constructor() {
         pendingLoad = null
         lastPositionMs = 0L
         _state.value = PlayerState()
-        evaluate("Lyrian.pause()")
+        evaluateCommand("stop") { """
+            (function(){
+              var v = document.querySelector('video');
+              if (v) { v.pause(); }
+              return 'stopped';
+            })()
+        """ }
     }
 
     fun release() {
@@ -174,52 +279,118 @@ class YouTubePlayerController @Inject constructor() {
         detach()
     }
 
-    private fun evaluate(script: String) {
-        val view = webView ?: return
-        // 頁面可能還沒載入完（`Lyrian` 尚未定義）。先把指令排進 JS 端的佇列，
-        // 由播放器頁面在初始化完成後自己排空——這樣就不必猜「等多久才安全」。
-        val wrapped = "(function(){ if (window.Lyrian) { $script; } else { " +
-            "(window.__lyrianQueue = window.__lyrianQueue || []).push(function(){ $script; }); } })()"
-        val run = { view.evaluateJavascript(wrapped, null) }
-        if (Looper.myLooper() == Looper.getMainLooper()) {
-            run()
-        } else {
-            view.post(run)
-        }
-    }
+    // ---------- JS 注入 ----------
 
     /**
-     * 用 **Locale.US** 格式化小數。
+     * 注入監測腳本。
      *
-     * `String.format` 預設用系統語系——在德文/法文環境會產生 `12,50`，
-     * 送進 JS 會變成語法錯誤。這種錯只會在某些語系的手機上出現，
-     * 本地測試永遠看不到。
+     * 每 200ms 回報一次 `<video>` 的狀態；找不到 `<video>` 時改查
+     * `ytInitialPlayerResponse` 的 `playabilityStatus`，用來判斷「不能嵌入」。
      */
-    private fun js(template: String, vararg args: Any?): String =
-        java.lang.String.format(java.util.Locale.US, template, *args)
+    private fun injectBridgeScript(view: WebView?) {
+        view ?: return
+        if (injected) return
+        injected = true
+
+        val script = """
+            (function(){
+              if (window.__lyrian) return 'already';
+              window.__lyrian = true;
+
+              // 隱藏「在 YouTube 中開啟」與其他蓋在影片上的提示／遮罩。
+              // 這只是把 YouTube 自己畫在影片上的浮層收起來，**不影響廣告**：
+              // 廣告是播放器內容的一部分，不是 DOM 浮層。
+              var css = '.ytp-chrome-top,.ytp-gradient-top,.ytp-pause-overlay,' +
+                        '.ytp-cards-teaser,.ytp-ce-element,.ytp-endscreen-content,' +
+                        '.ytp-show-cards-title,.ytp-title,.ytp-watermark,' +
+                        '.ytp-persistent-progress-bar-container{display:none!important}' +
+                        ' html,body{margin:0;padding:0;background:#000;overflow:hidden}' +
+                        ' video{object-fit:contain}';
+              var st = document.createElement('style');
+              st.textContent = css;
+              (document.head || document.documentElement).appendChild(st);
+
+              var reported = false;
+              function reportUnavailable(){
+                var pr = window.ytInitialPlayerResponse;
+                if (pr && pr.playabilityStatus && pr.playabilityStatus.status &&
+                    pr.playabilityStatus.status !== 'OK') {
+                  Bridge.onUnavailable(
+                    String(pr.playabilityStatus.status),
+                    String(pr.playabilityStatus.reason || ''),
+                    JSON.stringify(pr.playabilityStatus.errorScreen || {})
+                  );
+                  return true;
+                }
+                var e = document.querySelector('.ytp-error-content-wrap,.ytp-error');
+                if (e && e.innerText) {
+                  Bridge.onUnavailable('ERROR_PAGE', e.innerText.slice(0, 160), '');
+                  return true;
+                }
+                return false;
+              }
+
+              setInterval(function(){
+                var v = document.querySelector('video');
+                if (!v) {
+                  if (!reported) { reported = reportUnavailable(); }
+                  return;
+                }
+                if (!window.__lyrianVideo) {
+                  window.__lyrianVideo = true;
+                  Bridge.onVideoFound(v.videoWidth || 0, v.videoHeight || 0);
+                }
+                Bridge.onTick(
+                  v.currentTime || 0,
+                  v.duration || 0,
+                  v.paused ? 2 : 1,
+                  v.volume,
+                  v.muted ? 1 : 0,
+                  v.readyState
+                );
+              }, 200);
+
+              return 'injected';
+            })()
+        """.trimIndent()
+
+        view.evaluateJavascript(script) { result -> log("注入監測腳本：$result") }
+    }
+
+    /** 執行一段 JS 並把回傳值寫進 log；這是「播放不動」時最重要的線索。 */
+    private fun evaluateCommand(name: String, script: () -> String) {
+        val view = webView ?: run {
+            log("指令 $name 略過：WebView 尚未建立")
+            return
+        }
+        val body = script()
+        val run = {
+            view.evaluateJavascript(body) { result -> log("指令 $name → $result") }
+        }
+        if (Looper.myLooper() == Looper.getMainLooper()) run() else view.post(run)
+    }
 
     // ---------- JS 回呼 ----------
 
     /**
-     * JS 每 100ms 回報一次位置。
+     * JS 每 200ms 回報一次位置。
      *
      * **單調夾制**：位置突然倒退（廣告開始、或播放器重置）時忽略，
      * 讓歌詞時間軸停在原處。使用者自己拖曳時 [seekPending] 會放行。
      */
-    private fun onTick(positionMs: Long, durationMs: Long?, state: Int) {
+    private fun handleTick(positionMs: Long, durationMs: Long?, state: Int) {
         val sanitized = positionMs.coerceAtLeast(0L)
 
         if (!seekPending && sanitized < lastPositionMs - REWIND_TOLERANCE_MS) {
             // 廣告把時間拉回 0 → 凍結歌詞；只更新播放狀態
             _state.value = _state.value.copy(
-                isPlaying = state == YT_STATE_PLAYING,
-                isBuffering = state == YT_STATE_BUFFERING,
+                isPlaying = state == STATE_PLAYING,
+                isBuffering = state == STATE_BUFFERING,
             )
             return
         }
 
         if (seekPending && kotlin.math.abs(sanitized - lastPositionMs) > REWIND_TOLERANCE_MS) {
-            // 還在等播放器追上剛剛拖到的位置
             return
         }
         seekPending = false
@@ -227,69 +398,117 @@ class YouTubePlayerController @Inject constructor() {
         lastPositionMs = sanitized
         _state.value = _state.value.copy(
             isReady = true,
-            isPlaying = state == YT_STATE_PLAYING,
-            isBuffering = state == YT_STATE_BUFFERING,
+            isPlaying = state == STATE_PLAYING,
+            isBuffering = state == STATE_BUFFERING,
             positionMs = sanitized,
             durationMs = durationMs?.takeIf { it > 0 } ?: _state.value.durationMs,
             error = null,
         )
-    }
 
-    private fun MutableStateFlow<PlayerState>.updatePosition(positionMs: Long) {
-        value = value.copy(positionMs = positionMs)
+        if (tickLogs < MAX_TICK_LOGS) {
+            tickLogs++
+            log("tick #$tickLogs：getCurrentTime=${js("%.2f", sanitized / 1000.0)}s " +
+                "duration=${js("%.1f", (durationMs ?: 0) / 1000.0)}s state=$state")
+        }
     }
 
     private inner class Bridge {
 
+        /** 找到 `<video>` 了：回報尺寸（給 Compose 算長寬比）並確保解除靜音。 */
         @JavascriptInterface
-        fun onTick(positionSeconds: Double, durationSeconds: Double, state: Int) {
-            onTick(
+        fun onVideoFound(width: Int, height: Int) {
+            log("找到 <video>：${width}x$height")
+            _state.value = _state.value.copy(
+                isReady = true,
+                videoAspectRatio = if (width > 0 && height > 0) {
+                    width.toFloat() / height.toFloat()
+                } else {
+                    null
+                },
+            )
+            val shouldPlay = pendingLoad?.autoPlay == true
+            evaluateCommand("unmute") { """
+                (function(){
+                  var v = document.querySelector('video');
+                  if (!v) return 'no-video';
+                  v.muted = false;
+                  if ($shouldPlay && v.paused) {
+                    var p = v.play();
+                    if (p && p.catch) { p.catch(function(e){ Bridge.onLog('autoplay rejected: ' + e); }); }
+                  }
+                  return 'ready state=' + v.readyState + ' muted=' + v.muted + ' paused=' + v.paused;
+                })()
+            """ }
+        }
+
+        @JavascriptInterface
+        fun onTick(
+            positionSeconds: Double,
+            durationSeconds: Double,
+            state: Int,
+            volume: Double,
+            muted: Int,
+            readyState: Int,
+        ) {
+            if (muted == 1 && !triedUnmute) {
+                triedUnmute = true
+                android.util.Log.w(TAG, "影片是靜音的（muted=1），嘗試解除靜音")
+                evaluateCommand("unmute") { """
+                    (function(){ var v = document.querySelector('video');
+                      if (!v) return 'no-video'; v.muted = false; return 'muted=' + v.muted; })()
+                """ }
+            }
+            handleTick(
                 positionMs = (positionSeconds * 1000).toLong(),
                 durationMs = if (durationSeconds > 0) (durationSeconds * 1000).toLong() else null,
                 state = state,
             )
         }
 
+        /** YouTube 不讓我們播：記下狀態與原因，讓上層決定換版本或放棄。 */
         @JavascriptInterface
-        fun onState(state: Int) {
-            _state.value = _state.value.copy(
-                isPlaying = state == YT_STATE_PLAYING,
-                isBuffering = state == YT_STATE_BUFFERING,
-                isReady = _state.value.isReady || state == YT_STATE_CUED,
-            )
-        }
+        fun onUnavailable(status: String, reason: String, screen: String) {
+            val blocked = status == "UNPLAYABLE" || status == "LOGIN_REQUIRED" ||
+                status == "ERROR" || status == "ERROR_PAGE" ||
+                reason.contains("embed", ignoreCase = true) ||
+                screen.contains("embed", ignoreCase = true)
 
-        @JavascriptInterface
-        fun onReady() {
-            _state.value = _state.value.copy(isReady = true, isBuffering = false)
-        }
+            log("播放器回報不可用：status=$status reason=$reason blocked=$blocked")
 
-        /**
-         * IFrame 的錯誤碼。
-         *
-         * `101`／`150` 是「擁有者不允許嵌入」，這是最常見的失敗——通常換一個
-         * 候選就會好，所以 UI 要能據此自動換版本。
-         */
-        @JavascriptInterface
-        fun onError(code: Int) {
-            val message = when (code) {
-                2 -> "影片 id 無效"
-                5 -> "HTML5 播放器錯誤"
-                100 -> "影片已移除或設為私人"
-                101, 150 -> "這個版本不允許嵌入播放"
-                else -> "播放錯誤（$code）"
-            }
             _state.value = _state.value.copy(
                 isPlaying = false,
                 isBuffering = false,
-                error = message,
+                embedBlocked = blocked,
+                error = if (blocked) "此版本不允許嵌入" else "無法播放（$status）",
             )
+        }
+
+        @JavascriptInterface
+        fun onLog(message: String) {
+            log("JS: $message")
         }
     }
 
+    private fun log(message: String) {
+        android.util.Log.d(TAG, message)
+    }
+
+    /**
+     * 用 **Locale.US** 格式化小數。
+     *
+     * `String.format` 預設用系統語系——在德文/法文環境會產生 `12,50`，
+     * 送進 JS 會變成語法錯誤。這種錯只會在某些語系的手機上出現。
+     */
+    private fun js(template: String, vararg args: Any?): String =
+        java.lang.String.format(java.util.Locale.US, template, *args)
+
     private companion object {
-        /** 給 IFrame API 一個正常的 origin，否則會拒絕初始化。 */
-        const val BASE_URL = "https://www.youtube.com/"
+        const val TAG = "LyrianPlayer"
+
+        /** 一般 Chrome 的 UA。刻意不含 `Version/4.0`（那是 WebView 的預設值）。 */
+        const val DESKTOP_UA =
+            "Mozilla/5.0 (Linux; Android 14) AppleWebKit/537.36 (KHTML, like Gecko) " +
+                "Chrome/126.0.0.0 Mobile Safari/537.36"
 
         /** 淡入淡出的總時長（擁有者指定 0.3 秒）。 */
         const val FADE_MS = 300L
@@ -299,109 +518,11 @@ class YouTubePlayerController @Inject constructor() {
         /** 位置「倒退」多少毫秒以上才視為異常（廣告／重置）。 */
         const val REWIND_TOLERANCE_MS = 1_500L
 
-        // YT.PlayerState
-        const val YT_STATE_PLAYING = 1
-        const val YT_STATE_BUFFERING = 3
-        const val YT_STATE_CUED = 5
+        /** 位置回報只印前幾筆，避免 log 被灌爆。 */
+        const val MAX_TICK_LOGS = 5
 
-        /**
-         * 播放器頁面。
-         *
-         * 這個 HTML 是**唯一的**播放實作：官方 IFrame API + 100ms 的位置回報。
-         * `controls: 0` 是因為練習頁有自己的播放鍵，兩個播放鍵會互相打架。
-         */
-        val PLAYER_HTML: String = """
-            <!DOCTYPE html>
-            <html>
-            <head>
-              <meta name="viewport" content="width=device-width,initial-scale=1,user-scalable=no">
-              <style>
-                html,body{margin:0;padding:0;height:100%;background:#000;overflow:hidden}
-                #p{width:100%;height:100%}
-                iframe{width:100%;height:100%;border:0}
-              </style>
-            </head>
-            <body>
-              <div id="p"></div>
-              <script>
-                var player = null, apiReady = false, wanted = null, timer = null;
-
-                function onYouTubeIframeAPIReady() {
-                  apiReady = true;
-                  if (wanted) { var cfg = wanted; wanted = null; start(cfg); }
-                }
-
-                function start(cfg) {
-                  player = new YT.Player('p', {
-                    videoId: cfg.videoId,
-                    playerVars: {
-                      autoplay: cfg.autoPlay ? 1 : 0,
-                      controls: 0,
-                      disablekb: 1,
-                      playsinline: 1,
-                      rel: 0,
-                      modestbranding: 1,
-                      iv_load_policy: 3,
-                      fs: 0,
-                      origin: 'https://www.youtube.com'
-                    },
-                    events: {
-                      onReady: function () {
-                        Bridge.onReady();
-                        if (cfg.startSec > 0) { player.seekTo(cfg.startSec, true); }
-                        if (cfg.autoPlay) { player.playVideo(); }
-                        tick();
-                      },
-                      onStateChange: function (e) { Bridge.onState(e.data); },
-                      onError: function (e) { Bridge.onError(e.data); }
-                    }
-                  });
-                }
-
-                function tick() {
-                  if (timer) return;
-                  timer = setInterval(function () {
-                    if (!player || !player.getCurrentTime) return;
-                    try {
-                      Bridge.onTick(
-                        player.getCurrentTime() || 0,
-                        player.getDuration() || 0,
-                        player.getPlayerState()
-                      );
-                    } catch (e) { }
-                  }, 100);
-                }
-
-                var Lyrian = {
-                  load: function (videoId, startSec, autoPlay) {
-                    var cfg = { videoId: videoId, startSec: startSec, autoPlay: autoPlay };
-                    if (!apiReady) { wanted = cfg; return; }
-                    if (player && player.loadVideoById) {
-                      player.loadVideoById({ videoId: videoId, startSeconds: startSec });
-                      if (autoPlay) { player.playVideo(); }
-                      return;
-                    }
-                    start(cfg);
-                  },
-                  play: function () { if (player) { player.playVideo(); } },
-                  pause: function () { if (player) { player.pauseVideo(); } },
-                  seek: function (sec) { if (player) { player.seekTo(sec, true); } },
-                  volume: function (v) { if (player) { player.setVolume(v); } }
-                };
-
-                // 頁面載入前 Kotlin 送來的指令，現在可以執行了
-                if (window.__lyrianQueue) {
-                  var queued = window.__lyrianQueue;
-                  window.__lyrianQueue = [];
-                  for (var i = 0; i < queued.length; i++) { try { queued[i](); } catch (e) { } }
-                }
-              </script>
-              <script src="https://www.youtube.com/iframe_api"></script>
-            </body>
-            </html>
-        """.trimIndent()
+        // HTMLMediaElement 狀態（= 舊 IFrame API 的 YT.PlayerState）
+        const val STATE_PLAYING = 1
+        const val STATE_BUFFERING = 3
     }
 }
-
-/** 把字串包成 JS 字面值；影片 id 只含 `[A-Za-z0-9_-]`，仍保險轉義一次。 */
-private fun String.jsString(): String = "'" + replace("\\", "\\\\").replace("'", "\\'") + "'"

@@ -29,6 +29,7 @@ import com.antigravity.lyrian.domain.model.FillChoiceQuestion
 import com.antigravity.lyrian.domain.model.LyricLine
 import com.antigravity.lyrian.domain.model.PracticeModeId
 import com.antigravity.lyrian.domain.model.ResultWord
+import com.antigravity.lyrian.domain.practice.CommonWordFilter
 import com.antigravity.lyrian.domain.practice.FillChoiceBuilder
 import com.antigravity.lyrian.ui.navigation.Routes
 import com.antigravity.lyrian.util.toDayKey
@@ -112,6 +113,8 @@ data class PracticeUiState(
     val playerVersionIndex: Int = 0,
     /** 候選版本總數；<= 1 時不顯示「換版本」。 */
     val playerVersionCount: Int = 0,
+    /** 影片長寬比（寬/高）；用來把播放器塞進封面框。 */
+    val videoAspectRatio: Float? = null,
 
     // ---------- 結果頁（模組 2）----------
 
@@ -129,8 +132,20 @@ data class PracticeUiState(
     val extensionWords: List<ResultWord> = emptyList(),
     /** 原始（未查字典）的延伸詞彙，字典查完後才填 [extensionWords]。 */
     val extensionCandidates: List<String> = emptyList(),
+    /** 每一句的挖空決策；作答落庫時要靠它知道「這題挖的是哪個原形、什麼等級」。 */
+    val blankDecisions: List<BlankDecision> = emptyList(),
     /** 這一輪使用的挖空等級門檻（結果頁要顯示「高於 B1」這種說明）。 */
     val minLevel: CefrLevel = CefrLevel.DEFAULT,
+    /** 這一輪的選句數（5 / 10 / 全部）。 */
+    val coverage: com.antigravity.lyrian.domain.practice.BlankCoverage =
+        com.antigravity.lyrian.domain.practice.BlankCoverage.DEFAULT,
+    /**
+     * 歌詞是否有時間軸。
+     *
+     * 有的話**歌詞行只能由 `currentTime` 推進**，作答不能讓行號前進
+     * （擁有者指定的模組 B）。沒有時間軸時才退回「答完自動下一題」。
+     */
+    val hasTimeline: Boolean = false,
     /**
      * AI 是否已啟用。
      *
@@ -209,8 +224,18 @@ private const val FADE_OUT_MS = 300L
 /** 因為等作答而暫停時顯示的提示。 */
 private const val WAITING_FOR_ANSWER = "已暫停，補上這句的填空就會繼續播放。"
 
+/** 所有候選版本都不允許嵌入時顯示的提示（模組 A.5）。 */
+private const val EMBED_BLOCKED = "這些版本都不允許嵌入播放，換一首歌試試。"
+
 /** 結果頁的延伸詞彙上限（擁有者指定最多 20 條）。 */
 private const val EXTENSION_LIMIT = 20
+
+/**
+ * 自動入庫的最低等級（模組 D）。
+ *
+ * B1 以上不論對錯一律入庫；A1/A2 一律不入庫。
+ */
+private val WORDBANK_MIN_LEVEL = CefrLevel.B1
 
 private const val TAG = "LyrianPractice"
 
@@ -315,12 +340,13 @@ class PracticeViewModel @Inject constructor(
                         playbackPositionMs = playback.positionMs,
                         playbackDurationMs = playback.durationMs,
                         playbackError = playback.error,
+                        videoAspectRatio = playback.videoAspectRatio,
                     )
                 }
 
-                // 不允許嵌入是最常見的失敗（版權方關掉了嵌入）。
-                // 這時自動換下一個候選，而不是叫使用者自己想辦法。
-                if (playback.error != null && playback.error.contains("嵌入")) {
+                // 版權方關掉嵌入（101/150 → playabilityStatus UNPLAYABLE）是最常見的失敗。
+                // 自動換下一個候選；全部用完才告訴使用者「此版本不允許嵌入」。
+                if (playback.embedBlocked) {
                     onSwitchVersion(auto = true)
                 }
             }
@@ -459,6 +485,15 @@ class PracticeViewModel @Inject constructor(
 
             candidates = ranked
             playCandidate(index = 0)
+
+            android.util.Log.d(
+                TAG,
+                "音源排序（${head.title}）：" + ranked.joinToString(" | ") {
+                    "${it.video.videoId} score=${"%.1f".format(it.score)} " +
+                        "delta=${it.durationDeltaMs}ms conf=${it.isConfident} " +
+                        "penalty=${it.penaltyKeywords} ${it.video.channel}"
+                },
+            )
         }
     }
 
@@ -471,7 +506,8 @@ class PracticeViewModel @Inject constructor(
             return
         }
 
-        player.load(videoId = chosen.video.videoId, startAtMs = 0L, autoPlay = false)
+        // 使用者是「按了播放鍵」才走到這裡的，所以要自動播
+        player.load(videoId = chosen.video.videoId, startAtMs = 0L, autoPlay = true)
 
         _uiState.update {
             it.copy(
@@ -492,11 +528,23 @@ class PracticeViewModel @Inject constructor(
     /**
      * 換下一個候選版本。
      *
-     * @param auto true 表示是「播放器回報不能嵌入」時自動換的，不再顯示提示
+     * @param auto true 表示是「播放器回報不能嵌入」時自動換的
      */
     fun onSwitchVersion(auto: Boolean = false) {
         val list = candidates
-        if (list.size <= 1) return
+        if (list.isEmpty()) return
+
+        // 全部候選都試過了 → 明確告訴使用者，不要讓畫面一直空轉
+        if (auto && _uiState.value.playerVersionIndex >= list.lastIndex) {
+            if (_uiState.value.audioNotice == EMBED_BLOCKED) return
+            _uiState.update {
+                it.copy(
+                    isPlaying = false,
+                    audioNotice = EMBED_BLOCKED,
+                )
+            }
+            return
+        }
 
         val next = (_uiState.value.playerVersionIndex + 1) % list.size
         playCandidate(next)
@@ -596,6 +644,7 @@ class PracticeViewModel @Inject constructor(
         // 因此在 IO 執行緒完成後才組題——否則第一次進練習頁會掉一格畫面。
         val language = languageData.get()
         val minLevel = userSettings.minLevelValue
+        val coverage = userSettings.coverageValue
 
         // 第 1 層：記憶體中的 session（涵蓋設定變更／旋轉螢幕）。
         // 用 get() 而非已移除的 take()——見 PracticeSessionStore 的類別註解。
@@ -617,6 +666,7 @@ class PracticeViewModel @Inject constructor(
                 ),
                 language = language,
                 minLevel = minLevel,
+                coverage = coverage,
             )
             return
         }
@@ -625,7 +675,7 @@ class PracticeViewModel @Inject constructor(
         // 這條路徑需要第 1 次作答時寫入的 song / lyric_line（見 ensureSongPersisted）。
         val restored = restoreFromCache(songId)
         if (restored != null) {
-            applySource(restored, language, minLevel)
+            applySource(restored, language, minLevel, coverage)
         } else {
             failWith(ERROR_NO_SESSION)
         }
@@ -671,6 +721,7 @@ class PracticeViewModel @Inject constructor(
         source: SongSource,
         language: LanguageData,
         minLevel: com.antigravity.lyrian.domain.model.CefrLevel,
+        coverage: com.antigravity.lyrian.domain.practice.BlankCoverage,
     ) {
         songHead = source.head
 
@@ -681,13 +732,13 @@ class PracticeViewModel @Inject constructor(
         candidates = emptyList()
 
         val dataset = FillChoiceBuilder.buildDataset(
-            source.lines,
-            randomFor(source.head.songId),
+            lines = source.lines,
             minLevel = minLevel,
+            coverage = coverage,
             levelSource = language,
         )
 
-        logBlankDecisions(dataset.debug, minLevel)
+        logBlankDecisions(dataset.debug, minLevel, coverage)
 
         if (dataset.questions.isEmpty()) {
             _uiState.update {
@@ -733,6 +784,7 @@ class PracticeViewModel @Inject constructor(
                 lyricOffsetMs = playbackOffsets.offsetMs(source.head.songId),
                 playerVersionIndex = 0,
                 playerVersionCount = 0,
+                videoAspectRatio = null,
                 isAudioReady = false,
                 isAudioLoading = false,
                 // 結果頁的統計只存在這一次的 session，不落庫
@@ -741,6 +793,9 @@ class PracticeViewModel @Inject constructor(
                 wrongWords = emptyList(),
                 extensionWords = emptyList(),
                 minLevel = minLevel,
+                coverage = coverage,
+                hasTimeline = dataset.lines.any { it.startMs > 0L },
+                blankDecisions = dataset.debug,
                 extensionCandidates = computeExtensionCandidates(
                     lines = source.lines,
                     minLevel = minLevel,
@@ -755,8 +810,7 @@ class PracticeViewModel @Inject constructor(
      * 找出「本首歌中沒被挖空、等級高於設定值」的字。
      *
      * 依擁有者指定：**依原形去重、等級高者優先、最多 20 條**。
-     * 「高於設定值」是嚴格大於，所以從下一個等級開始掃——這樣也自然排除了
-     * 已經挖空的字（那些是 >= 門檻）。
+     * 「高於設定值」是嚴格大於，所以從下一個等級開始掃。
      */
     private fun computeExtensionCandidates(
         lines: List<LyricLine>,
@@ -766,25 +820,35 @@ class PracticeViewModel @Inject constructor(
     ): List<String> {
         val floor = CefrLevel.entries.getOrNull(minLevel.ordinal + 1) ?: CefrLevel.C2
 
-        // lemma → 該原形目前為止看到的最高等級（排序用）
-        val byLemma = LinkedHashMap<String, Int>()
+        // lemma → 排序鍵（等級序、詞頻排名），取較難的那一個
+        data class Key(val level: Int, val rank: Int)
+        val byLemma = LinkedHashMap<String, Key>()
 
         lines.forEach { line ->
-            FillChoiceBuilder
-                .scanLine(line.text, minLevel = floor, levelSource = language)
-                .candidates
-                .filterNot { it.word.lowercase() in blanked }
-                .forEach { candidate ->
-                    val lemma = candidate.level.lemma
-                    val rank = candidate.level.treatAsLevel.ordinal
-                    val previous = byLemma[lemma]
-                    if (previous == null || rank > previous) byLemma[lemma] = rank
+            FillChoiceBuilder.TOKEN_PATTERN.findAll(line.text).forEach { match ->
+                val token = match.value
+                if (token.length < FillChoiceBuilder.BLANK_MIN_WORD_LENGTH) return@forEach
+                if (token.lowercase() in blanked) return@forEach
+                if (CommonWordFilter.classify(token).isCommon) return@forEach
+                if (language.isHighFrequency(token)) return@forEach
+
+                val level = language.lookup(token)
+                if (level.treatAsLevel < floor) return@forEach
+
+                val key = Key(level.treatAsLevel.ordinal, level.frequencyRank ?: Int.MAX_VALUE)
+                val previous = byLemma[level.lemma]
+                if (previous == null || key.level > previous.level ||
+                    (key.level == previous.level && key.rank > previous.rank)
+                ) {
+                    byLemma[level.lemma] = key
                 }
+            }
         }
 
         return byLemma.entries
             .sortedWith(
-                compareByDescending<Map.Entry<String, Int>> { it.value }
+                compareByDescending<Map.Entry<String, Key>> { it.value.level }
+                    .thenByDescending { it.value.rank }
                     .thenBy { it.key },
             )
             .map { it.key }
@@ -796,39 +860,47 @@ class PracticeViewModel @Inject constructor(
     }
 
     /**
-     * 印出「挖空的詞 + 原形 + 等級 + 判定來源」，讓擁有者能直接驗證過濾是否有效。
+     * 印出「每句選中的詞、原形、等級、詞頻、排序依據」，讓擁有者能直接驗證選詞。
      *
      * 輸出長這樣（可在 logcat 用 `LyrianPractice` 過濾）：
      * ```
-     * D/LyrianPractice: 挖空統計：42 行 → 18 題（門檻 B1）；過濾掉 96 個字
-     * D/LyrianPractice: 挖空 L3: silhouettes | 原形: silhouette | 等級: C1 | 來源: Octanove C1/C2
-     * D/LyrianPractice:   L3 過濾: love(Top 1000 高頻詞), it's(代名詞（it's→it）), time(CEFR-J A2（低於 B1）)
+     * D/LyrianPractice: 挖空統計：48 句 → 22 題（起點 B1，全部）；過濾 96 個高頻詞
+     * D/LyrianPractice: 挖空 L3: silhouettes | 原形 silhouette | 等級 C1 | 詞頻 BNC 11637 | 同級取罕見（BNC 11637 而非 BNC 6159）
+     * D/LyrianPractice:   L3 過濾: love(Top 1000 高頻詞), the(冠詞)
      * ```
      */
     private fun logBlankDecisions(
         decisions: List<BlankDecision>,
         minLevel: com.antigravity.lyrian.domain.model.CefrLevel,
+        coverage: com.antigravity.lyrian.domain.practice.BlankCoverage,
     ) {
         if (decisions.isEmpty()) return
 
         val blanks = decisions.count { it.chosenWord != null }
         val filtered = decisions.sumOf { it.rejected.size }
+        val filler = decisions.count { it.chosenWord == null && it.rejected.isEmpty() }
 
         android.util.Log.d(
             TAG,
-            "挖空統計：${decisions.size} 行 → $blanks 題（門檻 ${minLevel.label}）；過濾掉 $filtered 個字",
+            "挖空統計：${decisions.size} 句 → $blanks 題（起點 ${minLevel.label}，${coverage.label}）" +
+                "；過濾 $filtered 個高頻詞；無實詞略過 $filler 句",
         )
 
         decisions.forEach { decision ->
             if (decision.chosenWord != null) {
+                val freq = decision.frequencyRank?.let { "BNC $it" } ?: "未收錄"
                 android.util.Log.d(
                     TAG,
-                    "挖空 L${decision.lineIndex}: ${decision.chosenWord} | 原形: " +
-                        "${decision.chosenLemma ?: decision.chosenWord} | 等級: " +
-                        "${decision.chosenLevel ?: "未收錄"} | 來源: ${decision.chosenLevelSource}",
+                    "挖空 L${decision.lineIndex}: ${decision.chosenWord} | 原形 " +
+                        "${decision.chosenLemma ?: decision.chosenWord} | 等級 " +
+                        "${decision.chosenLevel ?: "未收錄"}（${decision.chosenLevelSource}）" +
+                        " | 詞頻 $freq | ${decision.basis ?: "—"}",
                 )
-            } else {
-                android.util.Log.d(TAG, "挖空 L${decision.lineIndex}: （無合格單字）")
+            } else if (decision.rejected.isNotEmpty()) {
+                android.util.Log.d(
+                    TAG,
+                    "挖空 L${decision.lineIndex}: （未選）${decision.basis ?: "非本次選句"}",
+                )
             }
 
             if (decision.rejected.isNotEmpty()) {
@@ -920,15 +992,17 @@ class PracticeViewModel @Inject constructor(
     }
 
     /**
-     * 前進到下一題。
+     * 前進到下一題（**只有「沒有時間軸」時才成立**）。
      *
-     * **歌曲驅動時不作用**——這時題目由播放時間軸決定，
-     * 答完一題就自己跳下一題會跟歌曲打架。沒有音源時才維持舊行為。
+     * 擁有者指定的模組 B：歌詞行只能由 `currentTime` 推進。
+     * 因此只要歌詞有時間戳，作答就**不得**讓行號前進——就算音源還沒載入、
+     * `isSongDriven` 還是 false 也一樣。用 [PracticeUiState.hasTimeline] 當守門員，
+     * 而不是 `isSongDriven`（後者要等第一次輪詢才會變 true，中間那幾秒就會亂跳）。
      */
     fun onNext() {
         val state = _uiState.value
+        if (state.hasTimeline) return
         if (state.currentRecord == null) return
-        if (state.isSongDriven) return
 
         val nextIndex = state.activeBlankIndex + 1
 
@@ -988,7 +1062,20 @@ class PracticeViewModel @Inject constructor(
     }
 
     /**
-     * 把一次作答落庫：作答紀錄 →（答錯時）字庫 → 每日統計。
+     * 把一次作答落庫：作答紀錄 →（依等級）字庫 → 每日統計。
+     *
+     * ## 入庫規則是「依 CEFR 等級」，不是「依對錯」（模組 D）
+     *
+     * ```
+     * B1 以上：不論答對答錯，一律入庫
+     * A1 / A2：一律不入庫（使用者要的話，結果頁有「加入字庫」按鈕）
+     * ```
+     *
+     * 理由：這個 App 的字庫是「學習清單」，不是「錯題本」。B1 的字已經
+     * 超出使用者的舒適區，就算猜對也值得排進複習；A1/A2 的字猜錯只是手滑，
+     * 收進字庫只會把清單灌滿早就會的字。
+     *
+     * 答錯時仍然會記 `errorCount`（供日後排複習順序），但**入不入庫由等級決定**。
      *
      * **失敗不中斷練習**——與「AI 不在關鍵路徑上」同一原則。
      */
@@ -997,17 +1084,36 @@ class PracticeViewModel @Inject constructor(
             runCatching {
                 val songId = ensureSongPersisted()
 
-                val vocabId = if (!isCorrect) {
-                    val (id, _) = vocabDao.addFromError(
-                        lemma = FillChoiceBuilder.normalizeAnswer(question.answer),
+                val decision = _uiState.value.blankDecisions.firstOrNull {
+                    it.lineIndex == question.lineIndex
+                }
+                val level = CefrLevel.fromLabel(decision?.chosenLevel)
+                    ?: CefrLevel.C2 // 未收錄的字視為高階
+                val lemma = decision?.chosenLemma
+                    ?: FillChoiceBuilder.normalizeAnswer(question.answer)
+
+                val shouldAddToWordbank = level >= WORDBANK_MIN_LEVEL
+
+                val vocabId = when {
+                    !shouldAddToWordbank -> null
+
+                    isCorrect -> vocabDao.ensureInWordbank(
+                        lemma = lemma,
                         surfaceForm = question.answer,
                         contextLine = question.originalLine,
                         songId = songId,
+                        cefr = level.label,
                         now = System.currentTimeMillis(),
                     )
-                    id
-                } else {
-                    null
+
+                    else -> vocabDao.addFromError(
+                        lemma = lemma,
+                        surfaceForm = question.answer,
+                        contextLine = question.originalLine,
+                        songId = songId,
+                        cefr = level.label,
+                        now = System.currentTimeMillis(),
+                    ).first
                 }
 
                 attemptDao.insert(
@@ -1033,6 +1139,41 @@ class PracticeViewModel @Inject constructor(
                 )
             }.onFailure { error ->
                 android.util.Log.w(TAG, "記錄作答失敗（不影響練習）", error)
+            }
+        }
+    }
+
+    /**
+     * 結果頁的「加入字庫」（模組 D.3）。
+     *
+     * **手動加入不受等級限制**——這是使用者明確表示「我要這個字」。
+     * 同一個 lemma 已存在時不會重複新增（`ensureInWordbank` 是冪等的）。
+     */
+    fun onAddToWordbank(word: String, lemma: String, contextLine: String?) {
+        viewModelScope.launch {
+            runCatching {
+                val songId = ensureSongPersisted()
+                vocabDao.ensureInWordbank(
+                    lemma = FillChoiceBuilder.normalizeAnswer(lemma),
+                    surfaceForm = word,
+                    contextLine = contextLine,
+                    songId = songId,
+                    cefr = null,
+                    now = System.currentTimeMillis(),
+                )
+            }.onFailure {
+                android.util.Log.w(TAG, "手動加入字庫失敗", it)
+            }
+
+            _uiState.update { state ->
+                state.copy(
+                    wrongWords = state.wrongWords.map {
+                        if (it.word == word) it.copy(addedToWordbank = true) else it
+                    },
+                    extensionWords = state.extensionWords.map {
+                        if (it.word == word) it.copy(addedToWordbank = true) else it
+                    },
+                )
             }
         }
     }

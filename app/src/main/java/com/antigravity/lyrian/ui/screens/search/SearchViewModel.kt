@@ -65,6 +65,7 @@ class SearchViewModel @Inject constructor(
                     artist = state.artist,
                     track = state.track,
                     minLevel = userSettings.minLevelValue,
+                    coverage = userSettings.coverageValue,
                     levelSource = languageData.get(),
                 )
             }

@@ -172,4 +172,26 @@
     <string name="ai_enabled_hint">本輪只儲存設定，App 不會發出任何 AI 請求。</string>
     <string name="ai_saved">已儲存</string>
     <string name="ai_service_disabled">AI 未啟用</string>
+
+    <!-- 模組 C：選句數 -->
+    <string name="settings_blank_coverage">每首要挖幾句</string>
+    <string name="settings_blank_coverage_hint">句子會在整首歌裡均勻分布，不會擠在副歌。等級只決定「先挑哪些字」，不是硬門檻。</string>
+    <string name="settings_blank_coverage_current">目前：%1$s</string>
+    <string name="settings_blank_level_note">等級是排序起點：達標的字優先，該句沒有達標的字時才會往下挑。</string>
+
+    <!-- 模組 D：字庫 -->
+    <string name="result_add_to_wordbank">加入字庫</string>
+    <string name="result_added_to_wordbank">已加入字庫</string>
+    <string name="wordbank_added">已加入字庫</string>
+
+    <!-- 模組 F：單字詳情 -->
+    <string name="word_detail_forms">詞形變化</string>
+    <string name="word_detail_examples">歌詞例句</string>
+    <string name="word_detail_from_song">出自《%1$s》</string>
+    <string name="word_detail_open_song">回到這首歌</string>
+    <string name="word_detail_not_found_hint">離線字典沒有收錄這個字。你仍然可以按朗讀聽它的發音。</string>
+
+    <!-- 模組 A：播放器 -->
+    <string name="player_embed_blocked">這些版本都不允許嵌入播放，換一首歌試試。</string>
+    <string name="player_diagnose">播放器診斷</string>
 </resources>

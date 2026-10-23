@@ -116,6 +116,25 @@ private val LYRIC_LINE_SPACING = 22.dp
  */
 private val PLAYER_WIDTH = 112.dp
 
+/**
+ * 封面框（正方形）。
+ *
+ * 播放器會**依影片長寬比塞進這個框**（模組 A.6）：`600x300` 的影片就變成
+ * `96x48`，`300x600` 的直式影片就變成 `48x96`。框本身不變，影片不出框。
+ */
+private val COVER_FRAME = 96.dp
+
+/** 封面與播放器共用的圓角（擁有者要求「套用與封面相同的圓角」）。 */
+private val COVER_CORNER = 12.dp
+
+/**
+ * 除錯用：把播放器放大成 240×135dp。
+ *
+ * 擁有者指定的測試步驟（模組 A.2）——如果實機上「有聲無影」或根本拒絕播放，
+ * 先把這個改成 true 排除「尺寸太小」這個變因，確認能播再改回來。
+ */
+private const val DEBUG_LARGE_PLAYER = false
+
 /** 非當前句的透明度。 */
 private const val LYRIC_DIM_ALPHA = 0.42f
 
@@ -185,6 +204,7 @@ fun PracticeScreen(
                 onChangeSong = onBack,
                 onOpenWordbank = onOpenWordbank,
                 onOpenWord = onOpenWord,
+                onAddToWordbank = { word -> viewModel.onAddToWordbank(word.word, word.lemma, null) },
                 modifier = Modifier.padding(innerPadding),
             )
 
@@ -270,6 +290,7 @@ private fun PracticeContent(
                     lyricOffsetMs = state.lyricOffsetMs,
                     versionIndex = state.playerVersionIndex,
                     versionCount = state.playerVersionCount,
+                    videoAspectRatio = state.videoAspectRatio,
                     onTogglePlayPause = onTogglePlayPause,
                     onSeekPlayback = onSeekPlayback,
                     onSwitchVersion = onSwitchVersion,
@@ -361,6 +382,7 @@ private data class AudioControls(
     val lyricOffsetMs: Long,
     val versionIndex: Int,
     val versionCount: Int,
+    val videoAspectRatio: Float?,
     val onTogglePlayPause: () -> Unit,
     val onSeekPlayback: (Long) -> Unit,
     val onSwitchVersion: () -> Unit,
@@ -399,7 +421,7 @@ private fun PlayerHeader(
             Row(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .height(76.dp)
+                    .height(if (DEBUG_LARGE_PLAYER) 148.dp else 108.dp)
                     .padding(horizontal = 8.dp),
                 verticalAlignment = Alignment.CenterVertically,
             ) {
@@ -414,35 +436,33 @@ private fun PlayerHeader(
                 // 封面位置 = 播放器位置。
                 // 擁有者要求播放器「內嵌在封面區域且保持可見，不可縮成 1x1 隱藏」，
                 // 所以音源就緒時這裡直接放官方播放器，沒就緒時放封面縮圖。
-                if (audio.isReady) {
-                    YouTubePlayerBox(
-                        player = player,
-                        modifier = Modifier
-                            .size(width = PLAYER_WIDTH, height = PLAYER_WIDTH * (9f / 16f))
-                            .clip(RoundedCornerShape(10.dp)),
-                    )
-                } else {
-                    Box(
-                        modifier = Modifier
-                            .size(48.dp)
-                            .clip(RoundedCornerShape(12.dp))
-                            .background(Color.White.copy(alpha = 0.16f)),
-                        contentAlignment = Alignment.Center,
-                    ) {
-                        if (coverUrl != null) {
-                            AsyncImage(
-                                model = coverUrl,
-                                contentDescription = null,
-                                contentScale = ContentScale.Crop,
-                                modifier = Modifier.fillMaxSize(),
-                            )
-                        } else {
-                            Icon(
-                                imageVector = Icons.Filled.MusicNote,
-                                contentDescription = null,
-                                tint = ON_IMAGE_SECONDARY,
-                            )
-                        }
+                // 播放器依影片長寬比塞進封面框（模組 A.6）。
+                Box(
+                    modifier = Modifier
+                        .size(if (DEBUG_LARGE_PLAYER) 240.dp else COVER_FRAME)
+                        .clip(RoundedCornerShape(COVER_CORNER))
+                        .background(Color.White.copy(alpha = 0.16f)),
+                    contentAlignment = Alignment.Center,
+                ) {
+                    if (audio.isReady) {
+                        YouTubePlayerBox(
+                            player = player,
+                            aspectRatio = audio.videoAspectRatio,
+                            modifier = Modifier.clip(RoundedCornerShape(COVER_CORNER)),
+                        )
+                    } else if (coverUrl != null) {
+                        AsyncImage(
+                            model = coverUrl,
+                            contentDescription = null,
+                            contentScale = ContentScale.Crop,
+                            modifier = Modifier.fillMaxSize(),
+                        )
+                    } else {
+                        Icon(
+                            imageVector = Icons.Filled.MusicNote,
+                            contentDescription = null,
+                            tint = ON_IMAGE_SECONDARY,
+                        )
                     }
                 }
 
@@ -510,23 +530,33 @@ private fun PlayerHeader(
  * 官方 YouTube 播放器。
  *
  * ⚠️ **必須保持可見**：擁有者明訂不可縮成 1x1 隱藏，也不可攔截廣告。
- * 這裡給它 16:9 的真實大小，嵌在封面原本的位置。
+ * 這裡把它塞進封面框，並依影片長寬比置中（模組 A.6）：
+ * 框是 96×96，16:9 的影片就是 96×54，1:1 的影片就是 96×96。
  */
 @Composable
 private fun YouTubePlayerBox(
     player: com.antigravity.lyrian.data.audio.YouTubePlayerController,
+    aspectRatio: Float?,
     modifier: Modifier = Modifier,
 ) {
-    androidx.compose.ui.viewinterop.AndroidView(
-        modifier = modifier,
-        factory = { context ->
-            WebView(context).also { webView ->
-                // WebView 不能放在單例裡（會洩漏 Activity），所以由這裡建立、
-                // 交給控制器驅動；旋轉螢幕重建時控制器會把同一部影片載回來。
-                player.attach(webView)
-            }
-        },
-    )
+    val aspect = aspectRatio?.takeIf { it > 0.1f && it < 10f } ?: (16f / 9f)
+    val frame = if (DEBUG_LARGE_PLAYER) 240.dp else COVER_FRAME
+
+    val width = if (aspect >= 1f) frame else frame * aspect
+    val height = if (aspect >= 1f) frame / aspect else frame
+
+    Box(modifier = Modifier.size(frame), contentAlignment = Alignment.Center) {
+        androidx.compose.ui.viewinterop.AndroidView(
+            modifier = modifier.size(width = width, height = height),
+            factory = { context ->
+                WebView(context).also { webView ->
+                    // WebView 不能放在單例裡（會洩漏 Activity），所以由這裡建立、
+                    // 交給控制器驅動；旋轉螢幕重建時控制器會把同一部影片載回來。
+                    player.attach(webView)
+                }
+            },
+        )
+    }
 
     androidx.compose.runtime.DisposableEffect(player) {
         onDispose { player.detach() }

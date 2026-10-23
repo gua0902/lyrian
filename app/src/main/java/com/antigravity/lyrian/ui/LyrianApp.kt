@@ -180,6 +180,7 @@ fun LyrianApp(
                 ) {
                     com.antigravity.lyrian.ui.screens.wordbank.VocabDetailScreen(
                         onBack = { navController.popBackStack() },
+                        onOpenSong = { songId -> navController.navigate(Routes.practice(songId)) },
                     )
                 }
 
@@ -219,6 +220,7 @@ fun LyrianApp(
                 ) {
                     com.antigravity.lyrian.ui.screens.wordbank.WordDetailScreen(
                         onBack = { navController.popBackStack() },
+                        onOpenSong = { songId -> navController.navigate(Routes.practice(songId)) },
                     )
                 }
 

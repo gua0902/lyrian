@@ -6,7 +6,7 @@
       權限策略：Lyrian 是「無帳號、資料只在本地」的 App。
       只要求真正需要的權限，其餘一律不加。
 
-      INTERNET       — LRCLIB 歌詞、iTunes 封面、BYOK AI、YouTube Music 音源
+      INTERNET       — LRCLIB 歌詞、iTunes 封面、BYOK AI、YouTube 播放器
       VIBRATE        — 答錯時的震動回饋（PRD 指定）
       網路狀態        — 用來顯示離線提示（ACCESS_NETWORK_STATE，非敏感）
     -->
@@ -15,10 +15,8 @@
     <uses-permission android:name="android.permission.VIBRATE" />
 
     <!--
-      音訊播放需要 Media3，而 Media3 會拉進 media3-session
-      （即使我們沒有用 MediaSessionService）。
-      這裡明確移除前景服務權限：Lyrian **不做背景播放**，
-      切到別的 App 就暫停。少一個權限，就少一份被質疑的理由。
+      不做背景播放：切到別的 App 就暫停。少一個權限，就少一份被質疑的理由。
+      （Media3 已移除，這裡是保險：避免日後任何依賴把前景服務權限加回來。）
     -->
     <uses-permission
         android:name="android.permission.FOREGROUND_SERVICE"
@@ -37,10 +35,15 @@
         android:roundIcon="@mipmap/ic_launcher_round"
         android:supportsRtl="true"
         android:theme="@style/Theme.Lyrian">
+        <!--
+          **鎖定直向**（模組 G.1）：練習頁同時有歌詞、選項與內嵌播放器，
+          橫向會把可視高度壓到放不下任何一句歌詞。整個 App 統一鎖 portrait。
+        -->
         <activity
             android:name=".MainActivity"
             android:exported="true"
             android:label="@string/app_name"
+            android:screenOrientation="portrait"
             android:theme="@style/Theme.Lyrian"
             android:windowSoftInputMode="adjustResize">
             <intent-filter>
