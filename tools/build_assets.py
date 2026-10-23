@@ -170,6 +170,31 @@ def read_exchange_lemmas(path: str) -> dict[str, str]:
     return mapping
 
 
+def read_casing(path: str) -> set[str]:
+    """找出「字典裡只有大寫形式」的字（專有名詞的判據之一）。
+
+    回傳小寫字串的集合。判斷方式：
+      - 出現過全小寫的條目 → 不是專有名詞
+      - 只出現過首字母大寫的條目 → 是（`California` 就是這種）
+
+    ⚠️ 必須在**正規化之前**看原始大小寫，所以這是獨立一趟掃描。
+    """
+    lowercase_seen: set[str] = set()
+    capitalized: set[str] = set()
+
+    with open(path, encoding="utf-8", newline="") as f:
+        for row in csv.DictReader(f):
+            raw = (row.get("word") or "").strip()
+            if not WORD_RE.match(raw.lower()):
+                continue
+            if raw == raw.lower():
+                lowercase_seen.add(raw)
+            elif raw[0].isupper():
+                capitalized.add(raw.lower())
+
+    return capitalized - lowercase_seen
+
+
 def read_ecdict(path: str):
     """Stream ECDICT rows that are single words with a Chinese gloss."""
     with open(path, encoding="utf-8", newline="") as f:
@@ -296,6 +321,10 @@ def main() -> int:
         # CEFR-J is authoritative for A1-B2; Octanove only adds C1/C2 words.
         levels.setdefault(word, (lv, SRC_OCTANOVE))
 
+    # 專有名詞：字典裡只有大寫形式（`California`）→ 挖空時永久排除
+    proper_nouns = read_casing(os.path.join(RAW, "ecdict.csv"))
+    print(f"proper-noun-only  : {len(proper_nouns)}")
+
     # ---------- dictionary rows ----------
     #
     # Two passes on purpose: the C1/C2 level of a word can only be derived from
@@ -354,8 +383,9 @@ def main() -> int:
 
     # 第四欄是 BNC 詞頻排名（0 = 未知）。挖空要用它排序：
     # 「同級取詞頻更低者」需要一個可比較的數字，不能只有「是否前 2000」的布林值。
+    # 第五欄標記「字典裡只有大寫形式」的專有名詞（1 = 是）。
     level_lines = sorted(
-        f"{w}\t{lv}\t{src}\t{freq_rows.get(w, 0)}"
+        f"{w}\t{lv}\t{src}\t{freq_rows.get(w, 0)}\t{1 if w in proper_nouns else 0}"
         for w, (lv, src) in levels.items()
     )
     size_levels = write("levels.tsv", "\n".join(level_lines) + "\n")

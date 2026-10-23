@@ -1,10 +1,10 @@
-package com.antigravity.lyrian.domain.practice
+﻿package com.antigravity.lyrian.domain.practice
 
 import com.antigravity.lyrian.data.lang.UNLISTED_SOURCE
 import com.antigravity.lyrian.data.lang.WordLevel
 import com.antigravity.lyrian.data.lang.WordLevelSource
-import com.antigravity.lyrian.domain.model.CefrLevel
 import com.antigravity.lyrian.domain.model.FillChoiceQuestion
+import com.antigravity.lyrian.domain.model.CefrLevel
 import com.antigravity.lyrian.domain.model.LyricLine
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNotNull
@@ -47,8 +47,8 @@ class FillChoiceBuilderTest {
 
     private fun dataset(lines: List<LyricLine> = sampleLines) = FillChoiceBuilder.buildDataset(
         lines = lines,
-        minLevel = CefrLevel.A1,
-        coverage = BlankCoverage.ALL,
+        difficulty = BlankDifficulty.BASIC,
+        maxBlanks = BlankSelector.MAX_BLANKS,
         levelSource = source,
     )
 
@@ -112,8 +112,8 @@ class FillChoiceBuilderTest {
     fun `沒有候選的行會記錄被過濾的字`() {
         val result = FillChoiceBuilder.buildDataset(
             lines = listOf(line(0, "The and you")),
-            minLevel = CefrLevel.A1,
-            coverage = BlankCoverage.ALL,
+            difficulty = BlankDifficulty.BASIC,
+            maxBlanks = BlankSelector.MAX_BLANKS,
             levelSource = source,
         )
 
@@ -175,8 +175,8 @@ class FillChoiceBuilderTest {
     fun `可挖行數與實際題數一致`() {
         val count = FillChoiceBuilder.countBlankableLines(
             lines = sampleLines,
-            minLevel = CefrLevel.A1,
-            coverage = BlankCoverage.ALL,
+            difficulty = BlankDifficulty.BASIC,
+            maxBlanks = BlankSelector.MAX_BLANKS,
             levelSource = source,
         )
         assertEquals(dataset().questions.size, count)
@@ -195,8 +195,8 @@ class FillChoiceBuilderTest {
 
         val result = FillChoiceBuilder.buildDataset(
             lines = many,
-            minLevel = CefrLevel.A1,
-            coverage = BlankCoverage.FIVE,
+            difficulty = BlankDifficulty.BASIC,
+            maxBlanks = 5,
             levelSource = manySource,
         )
         assertEquals(5, result.questions.size)

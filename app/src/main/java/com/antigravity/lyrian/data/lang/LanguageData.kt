@@ -17,7 +17,9 @@ import kotlinx.coroutines.withContext
  * @property lemma 原形（例：`abandon`）；找不到對應時等於 [surface]
  * @property level 等級；null 表示三份資料都沒有這個字
  * @property source 判定來源，直接顯示在偵錯輸出與單字卡上
- * @property frequencyRank BNC 詞頻排名（1 = 最常見）；0 或 null 表示這份資料沒有排名
+ * @property frequencyRank BNC 詞頻排名（1 = 最常見），**取不到就退回原形的排名**；null 表示沒資料
+ * @property surfaceRank **只有這個形本身**的排名；用來做「詞頻前 500 硬性排除」
+ * @property isProperNoun 字典裡只有大寫形式（`California`）→ 永遠不挖
  */
 data class WordLevel(
     val surface: String,
@@ -25,6 +27,8 @@ data class WordLevel(
     val level: CefrLevel?,
     val source: String,
     val frequencyRank: Int? = null,
+    val surfaceRank: Int? = null,
+    val isProperNoun: Boolean = false,
 ) {
     /** 沒有等級資料的字，一律視為比 B2 更難（CEFR-J 只收 6,900 個基本字）。 */
     val treatAsLevel: CefrLevel get() = level ?: CefrLevel.C2
@@ -85,8 +89,13 @@ class LanguageData internal constructor(
     private val frequent: Set<String>,
 ) : WordLevelSource {
 
-    /** 一筆等級資料：等級 + 來源 + BNC 排名。 */
-    internal data class LevelRecord(val level: CefrLevel, val source: String, val rank: Int)
+    /** 一筆等級資料：等級 + 來源 + BNC 排名 + 是否專有名詞。 */
+    internal data class LevelRecord(
+        val level: CefrLevel,
+        val source: String,
+        val rank: Int,
+        val properNoun: Boolean,
+    )
 
     override fun lookup(word: String): WordLevel {
         val surface = normalize(word)
@@ -109,17 +118,18 @@ class LanguageData internal constructor(
             else -> fromLemma
         }
 
-        return if (hit == null) {
-            WordLevel(surface, lemma, null, UNLISTED_SOURCE, frequencyRankOf(surface))
-        } else {
-            WordLevel(
-                surface = surface,
-                lemma = lemma,
-                level = hit.level,
-                source = hit.source,
-                frequencyRank = hit.rank.takeIf { it > 0 } ?: frequencyRankOf(surface),
-            )
-        }
+        val surfaceRank = direct?.rank?.takeIf { it > 0 }
+        val fallbackRank = surfaceRank ?: fromLemma?.rank?.takeIf { it > 0 }
+
+        return WordLevel(
+            surface = surface,
+            lemma = lemma,
+            level = hit?.level,
+            source = hit?.source ?: UNLISTED_SOURCE,
+            frequencyRank = fallbackRank,
+            surfaceRank = surfaceRank,
+            isProperNoun = (direct?.properNoun ?: false) || (fromLemma?.properNoun ?: false),
+        )
     }
 
     /** 詞頻排名：先看自己，再看原形。 */
@@ -186,6 +196,7 @@ class LanguageData internal constructor(
                     level = level,
                     source = sourceLabel(fields[2]),
                     rank = fields.getOrNull(3)?.toIntOrNull() ?: 0,
+                    properNoun = fields.getOrNull(4) == "1",
                 )
             }
 

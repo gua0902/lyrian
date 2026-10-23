@@ -1,4 +1,4 @@
-package com.antigravity.lyrian.domain.practice
+﻿package com.antigravity.lyrian.domain.practice
 
 import com.antigravity.lyrian.data.lang.WordLevel
 import com.antigravity.lyrian.data.lang.WordLevelSource
@@ -6,52 +6,87 @@ import com.antigravity.lyrian.domain.model.CefrLevel
 import com.antigravity.lyrian.domain.model.LyricLine
 import com.antigravity.lyrian.domain.model.RejectedCandidate
 
-/** 一首歌要挖幾句。擁有者指定設定頁提供這三個選項。 */
-enum class BlankCoverage(val label: String, val sentences: Int?) {
-    FIVE("5 句", 5),
-    TEN("10 句", 10),
-    ALL("全部", null),
+/**
+ * 挖空難度（模組 C-4）。
+ *
+ * **只影響選詞優先級，不影響題數。** 題數由設定頁的滑桿決定（上限 40）。
+ */
+enum class BlankDifficulty(
+    val label: String,
+    val description: String,
+) {
+    /** 先挖 A2 及以下（入門者）。 */
+    BASIC("基礎優先", "先挖 A2 及以下"),
+
+    /** 先挖 B1 及以上（預設）。 */
+    ADVANCED("進階優先", "先挖 B1 及以上"),
+
+    /** 先挖 B2 及以上。 */
+    CHALLENGE("挑戰優先", "先挖 B2 及以上"),
     ;
 
-    companion object {
-        val DEFAULT = ALL
+    /** 這個等級是否落在「優先」那一側。 */
+    fun isPreferred(level: CefrLevel): Boolean = when (this) {
+        BASIC -> level <= CefrLevel.A2
+        ADVANCED -> level >= CefrLevel.B1
+        CHALLENGE -> level >= CefrLevel.B2
+    }
 
-        fun fromName(name: String?): BlankCoverage =
+    /** 這個難度「瞄準」的等級，用來算延伸詞彙的門檻。 */
+    val minLevel: CefrLevel
+        get() = when (this) {
+            BASIC -> CefrLevel.A2
+            ADVANCED -> CefrLevel.B1
+            CHALLENGE -> CefrLevel.B2
+        }
+
+    companion object {
+        val DEFAULT = ADVANCED
+
+        fun fromName(name: String?): BlankDifficulty =
             entries.firstOrNull { it.name == name } ?: DEFAULT
     }
 }
 
 /**
- * 逐句選詞的挖空策略（模組 C，**與舊版完全不同**）。
+ * 逐句選詞的挖空策略（模組 C）。
  *
- * ## 舊版 vs 新版
- *
- * | | 舊版 | 新版 |
- * |---|---|---|
- * | 篩選 | 全域：低於等級門檻的字**一律不挖** | 逐句：每句挑一個最好的字，幾乎每句都挖 |
- * | 等級 | **硬性門檻** | **排序起點**（低於門檻的字只在該句沒別的字時才用）|
- * | 重複 | 同一個字可以在不同句被挖 | **跨句依 lemma 去重** |
- * | 選句 | 全部句子 | 均勻抽樣（5 / 10 / 全部）|
- *
- * 舊版對歌詞簡單的歌（Hello、Yellow）會挖不到 3 個字，使用者根本沒得練；
- * 新版的目標是「每句都有得練，而且越難的字越優先」。
- *
- * ## 排序規則（擁有者指定）
+ * ## 規則（擁有者指定，2026-10 重寫）
  *
  * ```
- * 1. 先分兩層：等級 >= 設定值（含未收錄）　→　等級 < 設定值
- * 2. 同層內：CEFR 等級高者優先（B2 → B1 → A2 → A1）
- * 3. 同級：詞頻更低（更罕見）者優先
- * 4. 同頻：長度更長者優先
+ * 1. 以句為單位，每句最多一個空
+ * 2. 候選池 = 該句所有實詞
+ * 3. 硬性排除：功能詞（冠詞/介系詞/代名詞/連接詞/助動詞/數詞）、
+ *              專有名詞、詞頻前 500 名
+ * 4. 排序：難度優先 → CEFR 降序 → 詞頻升序（罕見優先）→ 長度降序
+ * 5. 取排序第一個
+ * 6. 只有「硬性排除後完全沒有候選」才不挖——**不得因為字都很常見就整句跳過**
+ * 7. 跨句 lemma 不重複（同一原形全曲只挖一次）
+ * 8. 純感嘆詞（Oh / Yeah / La la）不挖
  * ```
  *
- * A1 之所以會被排到最後，是因為它在第 1 條就落到第二層；只有在該句
- * 完全沒有達標的字時才會被選中。
+ * ## 與上一版的差別
+ *
+ * 上一版把「高頻詞」當成硬性排除，於是 Hello 有 42/48 句整句被跳過（那些句子的字
+ * 全在前 2000 名內）。現在高頻只影響**排序**（罕見的優先），
+ * 只有前 500 名才是硬性排除——這是擁有者明確的修正。
  */
+internal fun isFunctionWord(category: CommonWordFilter.Category?): Boolean =
+    category?.isFunctionWord() == true
+
 object BlankSelector {
 
+    /** 硬性排除的詞頻界線：前 500 名。 */
+    const val HARD_FREQUENCY_LIMIT = 500
+
     /** 詞頻表的說明文字（顯示在偵錯輸出與過濾清單）。 */
-    const val FREQUENCY_SOURCE = "BNC 前 2000 高頻詞"
+    const val HARD_FREQUENCY_SOURCE = "詞頻前 500"
+
+    /** 每句最多一個空。 */
+    const val MAX_BLANKS_PER_LINE = 1
+
+    /** 題數上限（擁有者指定 40）。 */
+    const val MAX_BLANKS = 40
 
     /** 一個候選字。 */
     data class Candidate(
@@ -59,56 +94,79 @@ object BlankSelector {
         val start: Int,
         val end: Int,
         val level: WordLevel,
-        /** 排序用的詞頻排名；沒有排名時當成「極罕見」。 */
-        val rank: Int,
     )
 
     /** 一句的結果。 */
     data class Selection(
         val line: LyricLine,
-        /** 選中的字；null 表示這句不挖（沒有合格候選，或詞都被前面的句子用掉了） */
         val chosen: Candidate?,
-        /** 這句被排除的字與原因（偵錯用） */
         val rejected: List<RejectedCandidate>,
-        /** 排序依據說明（偵錯用），例如 `等級優先（B2 > B1）` */
         val basis: String? = null,
-        /** 這句是「無實詞」而被明確略過（Oh / Yeah / La la） */
+        /** 這句是完全沒有實詞的感嘆句（Oh / Yeah / La la） */
         val skippedAsFiller: Boolean = false,
     )
 
-    /** 每句最多一個空。 */
-    const val MAX_BLANKS_PER_LINE = 1
+    /**
+     * 歌詞裡的大小寫線索，用來判斷專有名詞（C-2 規則 1）。
+     *
+     * 規則：**每次出現都首字母大寫，而且從來不出現在句首**。
+     * 只看單一 token 看不出來，所以要先把整首歌掃一遍。
+     */
+    private class CasingProfile(lines: List<LyricLine>) {
+        private val total = HashMap<String, Int>()
+        private val capitalized = HashMap<String, Int>()
+        private val atLineStart = HashMap<String, Int>()
+
+        init {
+            lines.forEach { line ->
+                FillChoiceBuilder.TOKEN_PATTERN.findAll(line.text).forEachIndexed { order, match ->
+                    val key = match.value.lowercase().replace('’', '\'')
+                    total[key] = (total[key] ?: 0) + 1
+                    if (match.value.first().isUpperCase()) {
+                        capitalized[key] = (capitalized[key] ?: 0) + 1
+                    }
+                    if (order == 0) {
+                        atLineStart[key] = (atLineStart[key] ?: 0) + 1
+                    }
+                }
+            }
+        }
+
+        /** 永遠大寫、而且從不出現在句首。 */
+        fun looksProper(word: String): Boolean {
+            val key = word.lowercase().replace('’', '\'')
+            val all = total[key] ?: return false
+            val caps = capitalized[key] ?: 0
+            val starts = atLineStart[key] ?: 0
+            return caps == all && starts == 0
+        }
+    }
 
     /**
      * 選詞。
      *
-     * @param lines 全部歌詞行（順序即歌曲順序）
-     * @param minLevel 設定頁的「挖空等級」，作為排序起點
-     * @param coverage 要挖幾句
-     * @param language 等級／詞頻資料
+     * @param difficulty 挖空難度（只影響優先級）
+     * @param maxBlanks 題數上限（均勻分布；擁有者指定上限 40）
      */
-    /** 一句的掃描結果（保留原行，後面要用索引對回來）。 */
-    private data class Scan(
-        val line: LyricLine,
-        val candidates: List<Candidate>,
-        val rejected: List<RejectedCandidate>,
-    )
-
     fun select(
         lines: List<LyricLine>,
-        minLevel: CefrLevel,
-        coverage: BlankCoverage,
+        difficulty: BlankDifficulty,
+        maxBlanks: Int,
         language: WordLevelSource,
     ): List<Selection> {
-        val scanned = lines.map { line -> scanLine(line, minLevel, language) }
+        val casing = CasingProfile(lines)
+        val scanned = lines.map { line -> scanLine(line, difficulty, language, casing) }
         val eligible = scanned.filter { it.candidates.isNotEmpty() }
 
         // 先決定要挖哪幾句（均勻分布），再逐句套用跨句去重。
         // 順序很重要：若先去重再選句，去重會讓後段的歌詞大量落空，
         // 整首歌的空就會全部擠在副歌之前。
-        val chosenIndices = pickEvenly(eligible.map { it.line.index }, coverage)
+        val chosenIndices = pickEvenly(eligible.map { it.line.index }, maxBlanks)
 
         val usedLemmas = HashSet<String>()
+        // member extension 放在這裡，lambda 裡才看得到
+        fun isFunctionWord(category: CommonWordFilter.Category?) =
+            category?.isFunctionWord() == true
         val byIndex = scanned.associateBy { it.line.index }
         val selections = mutableListOf<Selection>()
 
@@ -122,7 +180,7 @@ object BlankSelector {
                     line = line,
                     chosen = null,
                     rejected = rejected,
-                    skippedAsFiller = true,
+                    skippedAsFiller = rejected.isEmpty(),
                 )
                 continue
             }
@@ -150,7 +208,7 @@ object BlankSelector {
                 line = line,
                 chosen = picked,
                 rejected = rejected,
-                basis = describeBasis(picked, available.drop(1)),
+                basis = describeBasis(picked, available.drop(1), difficulty),
             )
         }
 
@@ -162,8 +220,9 @@ object BlankSelector {
      */
     private fun scanLine(
         line: LyricLine,
-        minLevel: CefrLevel,
+        difficulty: BlankDifficulty,
         language: WordLevelSource,
+        casing: CasingProfile,
     ): Scan {
         val candidates = mutableListOf<Candidate>()
         val rejected = mutableListOf<RejectedCandidate>()
@@ -172,54 +231,71 @@ object BlankSelector {
             val token = match.value
             if (token.length < FillChoiceBuilder.BLANK_MIN_WORD_LENGTH) return@forEach
 
+            // 1. 功能詞（冠詞／介系詞／代名詞／連接詞／助動詞／數詞）
             val common = CommonWordFilter.classify(token)
-            if (common.isCommon) {
+            if (isFunctionWord(common.category)) {
                 rejected += RejectedCandidate(token, common.rejectionLabel())
                 return@forEach
             }
 
-            val expanded = CommonWordFilter.expandContraction(token)
-            if (expanded.any { language.isHighFrequency(it) }) {
-                rejected += RejectedCandidate(token, FREQUENCY_SOURCE)
+            // 2. 專有名詞
+            val levelInfo = language.lookup(token)
+            if (casing.looksProper(token) || levelInfo.isProperNoun) {
+                rejected += RejectedCandidate(token, PROPER_NOUN_SOURCE)
                 return@forEach
             }
 
-            val level = language.lookup(token)
+            // 3. 詞頻前 500（只擋詞形本身；`years` 的複數形沒有排名，所以可以挖）
+            val rank = levelInfo.surfaceRank
+            if (rank != null && rank <= HARD_FREQUENCY_LIMIT) {
+                rejected += RejectedCandidate(token, HARD_FREQUENCY_SOURCE)
+                return@forEach
+            }
+
             candidates += Candidate(
                 word = token,
                 start = match.range.first,
                 end = match.range.last + 1,
-                level = level,
-                rank = level.frequencyRank ?: UNRANKED,
+                level = levelInfo,
             )
         }
 
-        candidates.sortWith(comparator(minLevel))
+        candidates.sortWith(comparator(difficulty))
         return Scan(line = line, candidates = candidates, rejected = rejected)
     }
+
+    /** 一句的掃描結果（保留原行，後面要用索引對回來）。 */
+    private data class Scan(
+        val line: LyricLine,
+        val candidates: List<Candidate>,
+        val rejected: List<RejectedCandidate>,
+    )
+
+    private const val PROPER_NOUN_SOURCE = "專有名詞"
 
     /** 沒有詞頻排名的字當成「比任何有排名的字更罕見」。 */
     private const val UNRANKED = Int.MAX_VALUE
 
     /**
-     * 排序：先分「達標 / 未達標」兩層，再比等級、詞頻、長度。
+     * 排序：難度偏好 → 等級高者 → 罕見者 → 較長者。
      *
-     * 用 `sortedWith` 而不是 `sortedBy` 是因為要比三個欄位、其中兩個要反序。
+     * 「難度偏好」只是一個**層**：偏好的那一側全部排在前面，
+     * 但另一側仍然有機會（該句沒有偏好側的字時）。這就是「降權而非排除」。
      */
-    private fun comparator(minLevel: CefrLevel) = Comparator<Candidate> { a, b ->
-        val tierA = if (a.level.treatAsLevel >= minLevel) 0 else 1
-        val tierB = if (b.level.treatAsLevel >= minLevel) 0 else 1
+    private fun comparator(difficulty: BlankDifficulty) = Comparator<Candidate> { a, b ->
+        val tierA = if (difficulty.isPreferred(a.level.treatAsLevel)) 0 else 1
+        val tierB = if (difficulty.isPreferred(b.level.treatAsLevel)) 0 else 1
         if (tierA != tierB) return@Comparator tierA - tierB
 
-        // 等級高者優先
         val byLevel = b.level.treatAsLevel.ordinal - a.level.treatAsLevel.ordinal
         if (byLevel != 0) return@Comparator byLevel
 
-        // 同級：詞頻更低（排名數字更大＝更罕見）者優先
-        val byRank = b.rank.compareTo(a.rank)
+        // 詞頻升序（頻率低＝罕見的優先）：排名數字大代表罕見
+        val rankA = a.level.frequencyRank ?: UNRANKED
+        val rankB = b.level.frequencyRank ?: UNRANKED
+        val byRank = rankB.compareTo(rankA)
         if (byRank != 0) return@Comparator byRank
 
-        // 同頻：長度更長者優先
         val byLength = b.word.length - a.word.length
         if (byLength != 0) return@Comparator byLength
 
@@ -232,37 +308,49 @@ object BlankSelector {
      * 擁有者要求「不得集中在副歌」——歌詞裡副歌往往是連續好幾句，
      * 若直接取前 N 句就會全部落在同一段。因此用**等距抽樣**：
      * 把候選句子當成一條線，均勻取樣點。
+     *
+     * @param maxBlanks 題數上限；實際題數只會更少（eligible 不足時）
      */
-    fun pickEvenly(indices: List<Int>, coverage: BlankCoverage): Set<Int> {
-        val target = coverage.sentences ?: return indices.toSet()
-        if (target <= 0 || indices.isEmpty()) return emptySet()
-        if (target >= indices.size) return indices.toSet()
-        if (target == 1) return setOf(indices[indices.size / 2])
+    fun pickEvenly(indices: List<Int>, maxBlanks: Int): Set<Int> {
+        if (maxBlanks <= 0 || indices.isEmpty()) return emptySet()
+        if (maxBlanks >= indices.size) return indices.toSet()
+        if (maxBlanks == 1) return setOf(indices[indices.size / 2])
 
-        val picked = LinkedHashSet<Int>(target)
-        for (i in 0 until target) {
-            val position = Math.round(i * (indices.size - 1).toFloat() / (target - 1))
+        val picked = LinkedHashSet<Int>(maxBlanks)
+        for (i in 0 until maxBlanks) {
+            val position = Math.round(i * (indices.size - 1).toFloat() / (maxBlanks - 1))
             picked += indices[position]
         }
         return picked
     }
 
     /** 偵錯用的排序依據說明。 */
-    private fun describeBasis(picked: Candidate, runnersUp: List<Candidate>): String {
+    private fun describeBasis(
+        picked: Candidate,
+        runnersUp: List<Candidate>,
+        difficulty: BlankDifficulty,
+    ): String {
         val next = runnersUp.firstOrNull()
-        if (next == null) return "該句唯一合格候選（${picked.level.treatAsLevel.label}）"
+        val prefixed = if (difficulty.isPreferred(picked.level.treatAsLevel)) {
+            "${difficulty.label}命中"
+        } else {
+            "該句無${difficulty.label}的字"
+        }
+        if (next == null) {
+            return "$prefixed；該句唯一合格候選（${picked.level.treatAsLevel.label}）"
+        }
 
         val pickedLevel = picked.level.treatAsLevel
         val nextLevel = next.level.treatAsLevel
         if (pickedLevel != nextLevel) {
-            return "等級優先（${pickedLevel.label} > ${nextLevel.label}）"
+            return "$prefixed；等級優先（${pickedLevel.label} > ${nextLevel.label}）"
         }
-        if (picked.rank != next.rank) {
-            return "同級取罕見（${picked.level.frequencyLabel} 而非 ${next.level.frequencyLabel}）"
+        if (picked.level.frequencyRank != next.level.frequencyRank) {
+            return "$prefixed；同級取罕見（${picked.level.frequencyLabel} 而非 ${next.level.frequencyLabel}）"
         }
         if (picked.word.length != next.word.length) {
-            return "同頻取較長（${picked.word.length} 字 > ${next.word.length} 字）"
+            return "$prefixed；同頻取較長（${picked.word.length} 字 > ${next.word.length} 字）"
         }
-        return "同級同頻，取句中較前面者"
+        return "$prefixed；同級同頻，取句中較前面者"
     }
 }

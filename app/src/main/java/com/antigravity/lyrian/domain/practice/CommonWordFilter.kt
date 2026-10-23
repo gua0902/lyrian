@@ -1,4 +1,4 @@
-package com.antigravity.lyrian.domain.practice
+﻿package com.antigravity.lyrian.domain.practice
 
 /**
  * 常見詞「等級表」。
@@ -40,6 +40,8 @@ object CommonWordFilter {
         BE_DO_HAVE("be/do/have"),
         AUXILIARY("助動詞"),
         PREPOSITION("介系詞"),
+        CONJUNCTION("連接詞"),
+        NUMERAL("數詞"),
         TOP_1000("Top 1000 高頻詞"),
     }
 
@@ -131,6 +133,28 @@ object CommonWordFilter {
         "into", "like", "near", "of", "off", "on", "onto", "out", "outside", "over",
         "past", "per", "since", "through", "throughout", "to", "toward", "towards",
         "under", "until", "up", "upon", "via", "with", "within", "without",
+    )
+
+    /**
+     * 連接詞（含常見的從屬連接詞）。
+     *
+     * 模組 C 的硬性排除清單明確列出「連接詞」，因此獨立一個分類，
+     * 而不是混進介系詞——偵錯輸出要能說清楚是哪一條規則擋掉的。
+     */
+    private val CONJUNCTIONS: Set<String> = setOf(
+        "and", "or", "but", "so", "nor", "yet", "for", "if", "then", "than",
+        "because", "since", "as", "while", "when", "whenever", "where", "whereas",
+        "though", "although", "unless", "until", "whether", "either", "neither",
+        "both", "plus", "however", "therefore", "thus", "otherwise",
+    )
+
+    /** 數詞（含序數與常見的數量詞）。 */
+    private val NUMERALS: Set<String> = setOf(
+        "one", "two", "three", "four", "five", "six", "seven", "eight", "nine", "ten",
+        "eleven", "twelve", "twenty", "thirty", "forty", "fifty", "hundred",
+        "thousand", "million", "billion", "first", "second", "third", "fourth",
+        "fifth", "sixth", "seventh", "eighth", "ninth", "tenth", "half", "quarter",
+        "double", "triple", "dozen", "zero",
     )
 
     /**
@@ -239,9 +263,12 @@ object CommonWordFilter {
         form in BE_DO_HAVE -> Category.BE_DO_HAVE
         form in AUXILIARIES -> Category.AUXILIARY
         form in PREPOSITIONS -> Category.PREPOSITION
+        form in CONJUNCTIONS -> Category.CONJUNCTION
+        form in NUMERALS -> Category.NUMERAL
         form in TOP_1000 -> Category.TOP_1000
         else -> null
     }
+
 
     /**
      * Top 1000 高頻詞（空白分隔，一行一批方便閱讀）。
@@ -301,4 +328,24 @@ walk wall want war watch water way we wear week weight well west what whatever w
 white who whole why wide wife will win wind window wish with within without woman wonder word work worker world
 worry would write writer wrong yard yeah year yes yet you young your yourself
 """
+}
+
+/**
+ * 這個分類算不算「功能詞」。
+ *
+ * 模組 C 的硬性排除只包含功能詞（冠詞／介系詞／代名詞／連接詞／助動詞／數詞），
+ * **不包含** TOP_1000——高頻詞在新規則裡改成「降權」，
+ * 只有前 500 名才是硬性排除（那由 LanguageData 的詞頻排名決定）。
+ */
+fun CommonWordFilter.Category.isFunctionWord(): Boolean = when (this) {
+    CommonWordFilter.Category.ARTICLE,
+    CommonWordFilter.Category.PRONOUN,
+    CommonWordFilter.Category.BE_DO_HAVE,
+    CommonWordFilter.Category.AUXILIARY,
+    CommonWordFilter.Category.PREPOSITION,
+    CommonWordFilter.Category.CONJUNCTION,
+    CommonWordFilter.Category.NUMERAL,
+    -> true
+
+    CommonWordFilter.Category.TOP_1000 -> false
 }

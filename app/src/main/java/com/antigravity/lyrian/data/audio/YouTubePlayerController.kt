@@ -169,8 +169,12 @@ class YouTubePlayerController @Inject constructor() {
         _state.value = PlayerState(positionMs = startAtMs)
 
         val start = if (startAtMs > 0) "&start=${startAtMs / 1000}" else ""
+        // `origin` 必須與 Referer 對應的同一個來源，否則 YouTube 會以「缺少用戶端身分」拒絕
+        // （2025-07 起新增的錯誤 153）。Referer 由 attach() 的
+        // `loadUrl(url, extraHeaders = "Referer: ...")` 帶，兩者都指向本機的 app 來源。
         val url = "https://www.youtube.com/embed/$videoId" +
-            "?autoplay=${if (autoPlay) 1 else 0}&playsinline=1$start"
+            "?autoplay=${if (autoPlay) 1 else 0}&playsinline=1" +
+            "&origin=$APP_ORIGIN&enablejsapi=1&rel=0$start"
 
         val view = webView
         if (view == null) {
@@ -179,7 +183,7 @@ class YouTubePlayerController @Inject constructor() {
         }
 
         log("load：$url")
-        view.post { view.loadUrl(url) }
+        view.post { view.loadUrl(url, mapOf("Referer" to "$APP_ORIGIN/")) }
     }
 
     fun play() {
@@ -282,6 +286,28 @@ class YouTubePlayerController @Inject constructor() {
     // ---------- JS 注入 ----------
 
     /**
+     * 要隱藏的 YouTube 浮層（模組 A-4）。
+     *
+     * ## 只列「不會蓋住影片畫面」的浮層
+     *
+     * 上一版連 `.ytp-gradient-top` 一起藏掉了。那個元素是**影片上緣的黑色漸層**，
+     * 同時也是 Chrome 頂部控制列的背景——藏掉它之後，有些情況下會連帶影響
+     * 播放器的合成層，症狀就是「有聲音但畫面全黑」。**這裡只留明確的浮出面板**，
+     * 不再碰任何與 video 同層的元素。
+     *
+     * 廣告是播放器內容的一部分，不是 DOM 浮層，因此不受這份 CSS 影響。
+     */
+    private val HIDE_OVERLAYS_CSS = listOf(
+        ".ytp-pause-overlay",          // 暫停時蓋在畫面中央的「更多影片」
+        ".ytp-cards-teaser",           // 右上角卡片提示
+        ".ytp-ce-element",             // 資訊卡
+        ".ytp-endscreen-content",      // 結束畫面推薦
+        ".ytp-show-cards-title",
+        ".ytp-title",                  // 左上角「在 YouTube 中開啟」
+        ".ytp-watermark",
+    ).joinToString(",") + "{display:none!important}"
+
+    /**
      * 注入監測腳本。
      *
      * 每 200ms 回報一次 `<video>` 的狀態；找不到 `<video>` 時改查
@@ -297,15 +323,11 @@ class YouTubePlayerController @Inject constructor() {
               if (window.__lyrian) return 'already';
               window.__lyrian = true;
 
-              // 隱藏「在 YouTube 中開啟」與其他蓋在影片上的提示／遮罩。
-              // 這只是把 YouTube 自己畫在影片上的浮層收起來，**不影響廣告**：
-              // 廣告是播放器內容的一部分，不是 DOM 浮層。
-              var css = '.ytp-chrome-top,.ytp-gradient-top,.ytp-pause-overlay,' +
-                        '.ytp-cards-teaser,.ytp-ce-element,.ytp-endscreen-content,' +
-                        '.ytp-show-cards-title,.ytp-title,.ytp-watermark,' +
-                        '.ytp-persistent-progress-bar-container{display:none!important}' +
-                        ' html,body{margin:0;padding:0;background:#000;overflow:hidden}' +
-                        ' video{object-fit:contain}';
+              // 只隱藏浮動面板與提示；**不碰 video 本身、也不碰漸層**（見 Kotlin 端註解）。
+              var css = '$HIDE_OVERLAYS_CSS'
+                + ' html,body{margin:0;padding:0;background:#000;overflow:hidden}'
+                + ' body{height:100%}'
+                + ' video{object-fit:contain;background:#000}';
               var st = document.createElement('style');
               st.textContent = css;
               (document.head || document.documentElement).appendChild(st);
@@ -505,9 +527,22 @@ class YouTubePlayerController @Inject constructor() {
     private companion object {
         const val TAG = "LyrianPlayer"
 
-        /** 一般 Chrome 的 UA。刻意不含 `Version/4.0`（那是 WebView 的預設值）。 */
+        /**
+         * YouTube 需要的「用戶端身分」（app 的 origin）。
+         *
+         * `loadUrl` 會帶 `Referer: https://lyrian.app/`，embed URL 也帶 `origin=`，
+         * **兩者必須一致**——這是錯誤 153 的修法（A-1）。
+         */
+        const val APP_ORIGIN = "https://lyrian.app"
+
+        /**
+         * 一般 Chrome 的 UA。刻意不含 `Version/4.0`（那是 WebView 的預設值）。
+         *
+         * 另外帶上 `wv` 標記會被 YouTube 當成受限的 WebView；
+         * 這裡用一般 Mobile Chrome 的 UA，讓播放器給完整能力（A-3 的黑邊也少）。
+         */
         const val DESKTOP_UA =
-            "Mozilla/5.0 (Linux; Android 14) AppleWebKit/537.36 (KHTML, like Gecko) " +
+            "Mozilla/5.0 (Linux; Android 14; Pixel 7) AppleWebKit/537.36 (KHTML, like Gecko) " +
                 "Chrome/126.0.0.0 Mobile Safari/537.36"
 
         /** 淡入淡出的總時長（擁有者指定 0.3 秒）。 */

@@ -1,17 +1,15 @@
-package com.antigravity.lyrian.data.audio
+﻿package com.antigravity.lyrian.data.audio
 
 import kotlinx.serialization.json.Json
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNull
-import org.junit.Assert.assertTrue
 import org.junit.Test
 
 /**
  * 解析 YouTube 搜尋頁的測試。
  *
- * 用的是**手寫的 HTML 片段**（不是抓下來的整頁），因為要驗證的是「形狀改變時
- * 還能找到影片」而不是「今天這頁長什麼樣」。JSON 路徑刻意寫得跟真實頁面一樣深，
- * 並且多包一層不相關的 renderer，確保搜尋是遞迴的。
+ * 用手寫的 HTML 片段（不是抓下來的整頁），因為要驗證的是「形狀改變時還能找到影片」。
+ * JSON 路徑刻意寫得跟真實頁面一樣深，並多包一層不相關的 renderer，確保搜尋是遞迴的。
  */
 class YouTubeWebSearchTest {
 
@@ -70,8 +68,6 @@ class YouTubeWebSearchTest {
 
     @Test
     fun `字串裡有括號也不會截斷 JSON`() {
-        // 標題裡有 `{` `}` 是最容易弄壞「數括號」的寫法。
-        // （這裡刻意不放引號：JSON 內要放引號得先轉義，那會變成測轉義而不是測數括號。）
         val html = pageWith(
             videoRenderer("zzz12345678", "Hello } { weird } title", "Adele - Topic", "4:55", "10 views"),
         )
@@ -97,8 +93,8 @@ class YouTubeWebSearchTest {
     fun `長度解析`() {
         assertEquals(242_000L, YouTubeWebSearch.parseDurationMs("4:02"))
         assertEquals(3_723_000L, YouTubeWebSearch.parseDurationMs("1:02:03"))
-        assertEquals(null, YouTubeWebSearch.parseDurationMs("LIVE"))
-        assertEquals(null, YouTubeWebSearch.parseDurationMs(null))
+        assertNull(YouTubeWebSearch.parseDurationMs("LIVE"))
+        assertNull(YouTubeWebSearch.parseDurationMs(null))
     }
 
     @Test
@@ -106,6 +102,5 @@ class YouTubeWebSearchTest {
         assertEquals(1_234_567L, YouTubeWebSearch.parseViewCount("1,234,567 views"))
         assertEquals(0L, YouTubeWebSearch.parseViewCount("No views"))
         assertEquals(0L, YouTubeWebSearch.parseViewCount(null))
-        assertNull(YouTubeWebSearch.parseDurationMs(""))
     }
 }

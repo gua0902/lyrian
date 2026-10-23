@@ -1,4 +1,4 @@
-package com.antigravity.lyrian.ui.screens.practice
+﻿package com.antigravity.lyrian.ui.screens.practice
 
 import androidx.lifecycle.SavedStateHandle
 import androidx.lifecycle.ViewModel
@@ -29,6 +29,7 @@ import com.antigravity.lyrian.domain.model.FillChoiceQuestion
 import com.antigravity.lyrian.domain.model.LyricLine
 import com.antigravity.lyrian.domain.model.PracticeModeId
 import com.antigravity.lyrian.domain.model.ResultWord
+import com.antigravity.lyrian.domain.practice.BlankDifficulty
 import com.antigravity.lyrian.domain.practice.CommonWordFilter
 import com.antigravity.lyrian.domain.practice.FillChoiceBuilder
 import com.antigravity.lyrian.ui.navigation.Routes
@@ -134,11 +135,10 @@ data class PracticeUiState(
     val extensionCandidates: List<String> = emptyList(),
     /** 每一句的挖空決策；作答落庫時要靠它知道「這題挖的是哪個原形、什麼等級」。 */
     val blankDecisions: List<BlankDecision> = emptyList(),
-    /** 這一輪使用的挖空等級門檻（結果頁要顯示「高於 B1」這種說明）。 */
-    val minLevel: CefrLevel = CefrLevel.DEFAULT,
-    /** 這一輪的選句數（5 / 10 / 全部）。 */
-    val coverage: com.antigravity.lyrian.domain.practice.BlankCoverage =
-        com.antigravity.lyrian.domain.practice.BlankCoverage.DEFAULT,
+    /** 這一輪的挖空難度（只影響選詞優先級）。 */
+    val difficulty: BlankDifficulty = BlankDifficulty.DEFAULT,
+    /** 這一輪的題數上限。 */
+    val maxBlanks: Int = FillChoiceBuilder.DEFAULT_MAX_BLANKS,
     /**
      * 歌詞是否有時間軸。
      *
@@ -171,6 +171,19 @@ data class PracticeUiState(
         get() = questions.isNotEmpty() && selections.size >= questions.size
 
     val correctCount: Int get() = selections.values.count { it.isCorrect }
+
+    /**
+     * 還沒作答的題目，依歌詞順序。
+     *
+     * 這是模組 B 的單一真相來源：暫停判斷、追回判斷、進度條刻度全都看它。
+     * 已作答的題目**永遠不會**從這裡消失（換行、換版本、暫停都不會清 `selections`）。
+     */
+    val unansweredQuestions: List<FillChoiceQuestion>
+        get() = questions.filterNot { selections.containsKey(it.blankIndex) }
+
+    /** 最早一個尚未作答的題目；全部答完時為 null。 */
+    val earliestUnanswered: FillChoiceQuestion?
+        get() = unansweredQuestions.minByOrNull { it.lineIndex }
 
     /**
      * 已作答的**最後一行**索引；尚未作答任何一題時為 -1。
@@ -216,13 +229,14 @@ private const val POSITION_POLL_MS = 50L
  * 擁有者指定 0.5 秒：畫面捲到下一句後 0.5 秒內補上就不算錯過。
  * 短於此會來不及反應，長於此就失去「跟上歌曲」的壓力。
  */
-private const val ANSWER_GRACE_MS = 500L
 
 /** 音量淡出／淡入的時間。擁有者指定 0.3 秒。 */
 private const val FADE_OUT_MS = 300L
-
 /** 因為等作答而暫停時顯示的提示。 */
 private const val WAITING_FOR_ANSWER = "已暫停，補上這句的填空就會繼續播放。"
+
+/** 拖曳放手時，往前找未答挖空的容許誤差（避免差幾十毫秒就跳過該題）。 */
+private const val SNAP_TOLERANCE_MS = 1_500L
 
 /** 所有候選版本都不允許嵌入時顯示的提示（模組 A.5）。 */
 private const val EMBED_BLOCKED = "這些版本都不允許嵌入播放，換一首歌試試。"
@@ -318,11 +332,11 @@ class PracticeViewModel @Inject constructor(
     private var candidates: List<YouTubeCandidateScorer.Scored> = emptyList()
 
     /**
-     * 「上一句沒作答就暫停」的計時器。
+     * 正在淡出／暫停的旗標。
      *
-     * 擁有者指定 0.5 秒的寬限：進入下一句後 0.5 秒內補上就不算錯過。
+     * 暫停要花 0.3 秒淡出，這段時間輪詢還會繼續跑；沒有這個旗標就會重複觸發暫停。
      */
-    private var autoPauseJob: Job? = null
+    private var pausing = false
 
     /**
      * 把播放器的狀態同步進 UI 狀態。
@@ -354,29 +368,55 @@ class PracticeViewModel @Inject constructor(
 
         // 播放中才輪詢位置。
         //
-        // ⚠️ **暫停時不更新位置**——這正是「暫停期間歌詞時間軸同步凍結」的實作：
-        // 不取樣，`singingLineIndex` 就不會前進。
+        // ⚠️ **暫停時不更新位置**——這正是「暫停期間歌詞時間軸同步凍結」的實作。
+        // ⚠️ 位置要加上使用者微調的 offset 才拿去比對歌詞時間戳（調整立即生效）。
         //
-        // ⚠️ 位置要加上**使用者微調的 offset** 才拿去比對歌詞時間戳；
-        // 這是 offset 唯一的作用點，所以「調整立即生效」。
+        // ## 三條正交的因果（模組 B-1）
+        //
+        // ```
+        // 換行 → 只由播放時間決定（這裡）
+        // 暫停 → 只由「進入一行尚未作答的挖空」決定（enterUnansweredLine）
+        // 作答 → 只解除暫停，不改換行（onSelectOption）
+        // ```
         viewModelScope.launch {
             while (true) {
-                if (_uiState.value.isPlaying) {
+                val state = _uiState.value
+                if (state.isPlaying && !pausing) {
                     val position = player.currentPositionMs()
-                    val lyricPosition = position + _uiState.value.lyricOffsetMs
-                    val lineIndex = lineIndexAt(lyricPosition)
-                    val previousLine = _uiState.value.singingLineIndex
+                    val lyricPosition = position + state.lyricOffsetMs
+                    val currentLine = lineIndexAt(lyricPosition)
 
-                    _uiState.update {
-                        it.copy(
-                            playbackPositionMs = position,
-                            singingLineIndex = lineIndex,
-                            isSongDriven = lineIndex != null,
-                        )
-                    }
+                    if (currentLine != null) {
+                        // ---- B-4 追回機制 ----
+                        // 有「比現在這行更早」的未答挖空 → 拉回該行開頭並暫停。
+                        // 觸發場景：卡頓、廣告、拖動、換版本、淡出那 0.3 秒跑過頭。
+                        val earliest = state.earliestUnanswered
+                        if (earliest != null && earliest.lineIndex < currentLine) {
+                            _uiState.update { it.copy(playbackPositionMs = position) }
+                            enterUnansweredLine(earliest, seekBack = true)
+                        } else {
+                            _uiState.update {
+                                it.copy(
+                                    playbackPositionMs = position,
+                                    singingLineIndex = currentLine,
+                                    isSongDriven = true,
+                                )
+                            }
 
-                    if (lineIndex != null && lineIndex != previousLine) {
-                        onSingingLineAdvanced(previousLine, lineIndex)
+                            // ---- B-2 行進入驅動 ----
+                            // 進入新的一行時，只要該行有未答挖空就**立即**暫停。
+                            // 刻意不用「時間落在某區間內」判斷，避免 tick 間隔剛好跳過整句。
+                            if (currentLine != state.singingLineIndex) {
+                                val question = questionForLine(currentLine)
+                                if (question != null &&
+                                    !_uiState.value.selections.containsKey(question.blankIndex)
+                                ) {
+                                    enterUnansweredLine(question, seekBack = true)
+                                }
+                            }
+                        }
+                    } else {
+                        _uiState.update { it.copy(playbackPositionMs = position) }
                     }
                 }
                 delay(POSITION_POLL_MS)
@@ -385,50 +425,39 @@ class PracticeViewModel @Inject constructor(
     }
 
     /**
-     * 歌詞前進到新的一行時要處理兩件事：
+     * 暫停在一個尚未作答的挖空上。
      *
-     * 1. **作答目標跟著歌曲走**——題目換成新這一行（如果它有挖空）
-     * 2. **上一句沒作答就暫停**——0.5 秒寬限後仍未作答，淡出暫停
+     * **這是唯一會暫停的地方**（使用者的播放鍵除外）。流程：
+     *  1. 把題目切到那一題（否則使用者補不到它）
+     *  2. 0.3 秒淡出後 pause
+     *  3. seek 回該行開頭——保證「播放不會越過該句」，也讓補答後能重聽整句
      */
-    private fun onSingingLineAdvanced(previousLine: Int?, currentLine: Int) {
-        // 1. 把作答目標移到目前這一行
-        val question = questionForLine(currentLine)
-        if (question != null) {
-            _uiState.update {
-                it.copy(
-                    activeBlankIndex = question.blankIndex,
-                    options = optionsByBlank[question.blankIndex].orEmpty(),
-                )
-            }
+    private fun enterUnansweredLine(question: FillChoiceQuestion, seekBack: Boolean) {
+        if (pausing) return
+        pausing = true
+
+        _uiState.update {
+            it.copy(
+                activeBlankIndex = question.blankIndex,
+                options = optionsByBlank[question.blankIndex].orEmpty(),
+                waitingForBlankIndex = question.blankIndex,
+                singingLineIndex = question.lineIndex,
+                audioNotice = WAITING_FOR_ANSWER,
+            )
         }
 
-        // 2. 上一句的空白若還沒作答 → 開始 0.5 秒的寬限計時
-        //
-        //    只在**往前**換行時判斷：使用者往回拖曳進度條時不該被暫停。
-        if (previousLine == null || currentLine <= previousLine) return
-
-        val previousQuestion = questionForLine(previousLine) ?: return
-        if (_uiState.value.selections.containsKey(previousQuestion.blankIndex)) return
-
-        autoPauseJob?.cancel()
-        autoPauseJob = viewModelScope.launch {
-            delay(ANSWER_GRACE_MS)
-            if (_uiState.value.selections.containsKey(previousQuestion.blankIndex)) return@launch
-
-            // ⚠️ 暫停時必須**把題目換回漏掉的那一句**。
-            // 否則畫面上會是「下一句」的選項，使用者永遠補不到上一句，
-            // 也就無法觸發「答完就恢復播放」。
-            _uiState.update {
-                it.copy(
-                    activeBlankIndex = previousQuestion.blankIndex,
-                    options = optionsByBlank[previousQuestion.blankIndex].orEmpty(),
-                    waitingForBlankIndex = previousQuestion.blankIndex,
-                    audioNotice = WAITING_FOR_ANSWER,
-                )
-            }
-            // 0.3 秒淡出後才 pause，不是硬切
+        viewModelScope.launch {
             player.fadeOut(FADE_OUT_MS)
             player.pause()
+
+            if (seekBack) {
+                val target = (question.startMs - _uiState.value.lyricOffsetMs).coerceAtLeast(0L)
+                player.seekTo(target)
+                _uiState.update {
+                    it.copy(playbackPositionMs = target, singingLineIndex = question.lineIndex)
+                }
+            }
+            pausing = false
         }
     }
 
@@ -586,18 +615,16 @@ class PracticeViewModel @Inject constructor(
      * 播放鍵：**同時控制播放器與歌詞滾動**。
      *
      * 這是擁有者指定的核心行為——只有一個開關，不是兩個。
-     * 使用者手動操作時，要取消「等你作答」的自動暫停，否則會互相打架。
+     * 使用者手動按下播放時，視同「我知道我欠一題，先讓我聽」：清掉等待狀態。
+     * （但未答的題目**不會消失**，追回機制仍會在下一次 tick 把它拉回來。）
      */
     fun onTogglePlayPause() {
-        autoPauseJob?.cancel()
-
         if (!_uiState.value.isAudioReady) {
             prepareAudio()
             return
         }
 
         if (_uiState.value.waitingForBlankIndex != null) {
-            // 使用者選擇自己恢復播放 → 不再等作答
             _uiState.update {
                 it.copy(waitingForBlankIndex = null, audioNotice = null)
             }
@@ -606,10 +633,28 @@ class PracticeViewModel @Inject constructor(
         player.togglePlayPause()
     }
 
-    /** 拖曳播放進度條。 */
+    /** 拖曳進度條過程中的即時 seek（不判斷未答，放手時才算）。 */
     fun onSeekPlayback(positionMs: Long) {
         player.seekTo(positionMs)
         _uiState.update { it.copy(playbackPositionMs = positionMs) }
+    }
+
+    /**
+     * 拖曳結束（模組 B-7 / H-2）。
+     *
+     * 擁有者指定：「允許拖動，但到達後必須暫停在第一個未答挖空處，不得直接播過去」。
+     * 因此放手時把位置對齊到「拖到的地方之後第一個未答的挖空」，並停在那裡。
+     */
+    fun onTimelineSeekFinished() {
+        val state = _uiState.value
+        val next = state.unansweredQuestions
+            .filter { it.startMs >= state.playbackPositionMs - SNAP_TOLERANCE_MS }
+            .minByOrNull { it.startMs }
+            ?: state.unansweredQuestions.minByOrNull { it.lineIndex }
+            ?: return
+
+        player.pause()
+        enterUnansweredLine(next, seekBack = true)
     }
 
     /**
@@ -643,8 +688,8 @@ class PracticeViewModel @Inject constructor(
         // 語言資料（等級／原形／詞頻）約 6 萬筆，第一次載入要解析 0.9 MB，
         // 因此在 IO 執行緒完成後才組題——否則第一次進練習頁會掉一格畫面。
         val language = languageData.get()
-        val minLevel = userSettings.minLevelValue
-        val coverage = userSettings.coverageValue
+        val difficulty = userSettings.difficultyValue
+        val maxBlanks = userSettings.maxBlanksValue
 
         // 第 1 層：記憶體中的 session（涵蓋設定變更／旋轉螢幕）。
         // 用 get() 而非已移除的 take()——見 PracticeSessionStore 的類別註解。
@@ -665,8 +710,8 @@ class PracticeViewModel @Inject constructor(
                     ),
                 ),
                 language = language,
-                minLevel = minLevel,
-                coverage = coverage,
+                difficulty = difficulty,
+                maxBlanks = maxBlanks,
             )
             return
         }
@@ -675,7 +720,7 @@ class PracticeViewModel @Inject constructor(
         // 這條路徑需要第 1 次作答時寫入的 song / lyric_line（見 ensureSongPersisted）。
         val restored = restoreFromCache(songId)
         if (restored != null) {
-            applySource(restored, language, minLevel, coverage)
+            applySource(restored, language, difficulty, maxBlanks)
         } else {
             failWith(ERROR_NO_SESSION)
         }
@@ -720,25 +765,24 @@ class PracticeViewModel @Inject constructor(
     private fun applySource(
         source: SongSource,
         language: LanguageData,
-        minLevel: com.antigravity.lyrian.domain.model.CefrLevel,
-        coverage: com.antigravity.lyrian.domain.practice.BlankCoverage,
+        difficulty: BlankDifficulty,
+        maxBlanks: Int,
     ) {
         songHead = source.head
 
         // 播放器是單例，可能還留著上一首歌的狀態 → 每次都清乾淨
-        autoPauseJob?.cancel()
         player.stop()
         audioResolved = false
         candidates = emptyList()
 
         val dataset = FillChoiceBuilder.buildDataset(
             lines = source.lines,
-            minLevel = minLevel,
-            coverage = coverage,
+            difficulty = difficulty,
+            maxBlanks = maxBlanks,
             levelSource = language,
         )
 
-        logBlankDecisions(dataset.debug, minLevel, coverage)
+        logBlankDecisions(dataset.debug, difficulty, maxBlanks)
 
         if (dataset.questions.isEmpty()) {
             _uiState.update {
@@ -792,13 +836,13 @@ class PracticeViewModel @Inject constructor(
                 elapsedMs = null,
                 wrongWords = emptyList(),
                 extensionWords = emptyList(),
-                minLevel = minLevel,
-                coverage = coverage,
+                difficulty = difficulty,
+                maxBlanks = maxBlanks,
                 hasTimeline = dataset.lines.any { it.startMs > 0L },
                 blankDecisions = dataset.debug,
                 extensionCandidates = computeExtensionCandidates(
                     lines = source.lines,
-                    minLevel = minLevel,
+                    difficulty = difficulty,
                     language = language,
                     blanked = allAnswers.map { it.lowercase() }.toSet(),
                 ),
@@ -807,18 +851,17 @@ class PracticeViewModel @Inject constructor(
     }
 
     /**
-     * 找出「本首歌中沒被挖空、等級高於設定值」的字。
+     * 找出「本首歌中沒被挖空、等級高於這次難度」的字。
      *
      * 依擁有者指定：**依原形去重、等級高者優先、最多 20 條**。
-     * 「高於設定值」是嚴格大於，所以從下一個等級開始掃。
      */
     private fun computeExtensionCandidates(
         lines: List<LyricLine>,
-        minLevel: CefrLevel,
+        difficulty: BlankDifficulty,
         language: LanguageData,
         blanked: Set<String>,
     ): List<String> {
-        val floor = CefrLevel.entries.getOrNull(minLevel.ordinal + 1) ?: CefrLevel.C2
+        val floor = difficulty.minLevel
 
         // lemma → 排序鍵（等級序、詞頻排名），取較難的那一個
         data class Key(val level: Int, val rank: Int)
@@ -871,8 +914,8 @@ class PracticeViewModel @Inject constructor(
      */
     private fun logBlankDecisions(
         decisions: List<BlankDecision>,
-        minLevel: com.antigravity.lyrian.domain.model.CefrLevel,
-        coverage: com.antigravity.lyrian.domain.practice.BlankCoverage,
+        difficulty: BlankDifficulty,
+        maxBlanks: Int,
     ) {
         if (decisions.isEmpty()) return
 
@@ -882,8 +925,8 @@ class PracticeViewModel @Inject constructor(
 
         android.util.Log.d(
             TAG,
-            "挖空統計：${decisions.size} 句 → $blanks 題（起點 ${minLevel.label}，${coverage.label}）" +
-                "；過濾 $filtered 個高頻詞；無實詞略過 $filler 句",
+            "挖空統計：${decisions.size} 句 → $blanks 題（難度 ${difficulty.label}，上限 $maxBlanks）" +
+                "；過濾 $filtered 個字；無實詞略過 $filler 句",
         )
 
         decisions.forEach { decision ->
@@ -937,9 +980,11 @@ class PracticeViewModel @Inject constructor(
         // 答錯仍照常進字庫（擁有者指定）——不論對錯都落庫，錯的才進字庫
         persist(question, choice, attempt.isCorrect)
 
-        // 剛剛就是因為這一句被暫停的 → 從暫停位置淡入恢復，**不重頭播**
+        // ---- B-1 第三條因果 ----
+        // 作答**只解除暫停**：淡入恢復播放。不碰 `singingLineIndex`、
+        // 也不碰 `activeBlankIndex`——換行永遠只由播放時間決定。
+        // 未答狀態本來就只增不減，所以「回到前面補答」永遠可行。
         if (wasWaitingForThis) {
-            autoPauseJob?.cancel()
             _uiState.update {
                 it.copy(waitingForBlankIndex = null, audioNotice = null)
             }
@@ -1014,11 +1059,25 @@ class PracticeViewModel @Inject constructor(
         }
     }
 
-    /** 跳到指定題（拖曳進度條時使用）。 */
+    /**
+     * 跳到指定題（進度條上點未答刻度、或補答入口）。
+     *
+     * 模組 B-6：「使用者任何時候都應能回到未答的題目補答」。
+     * 因此這裡會**暫停**並把時間對齊到該句開頭——不會只是換題目而繼續播。
+     */
     fun onSeekTo(blankIndex: Int) {
         val state = _uiState.value
         val clamped = blankIndex.coerceIn(0, (state.questions.size - 1).coerceAtLeast(0))
+        val question = state.questions.getOrNull(clamped) ?: return
 
+        if (state.unansweredQuestions.any { it.blankIndex == clamped }) {
+            // 未答的題目：停下來讓使用者補答（不繼續往前播）
+            player.pause()
+            enterUnansweredLine(question, seekBack = true)
+            return
+        }
+
+        // 已答的題目：單純跳時間，不強制暫停
         _uiState.update {
             it.copy(
                 activeBlankIndex = clamped,
@@ -1026,10 +1085,7 @@ class PracticeViewModel @Inject constructor(
             )
         }
 
-        // 歌曲驅動時，「題目軸」必須連動歌曲位置，否則下一個輪詢就把它蓋回正在唱的那句，
-        // 控制項會看起來完全失效。
-        val question = state.questions.getOrNull(clamped)
-        if (state.isAudioReady && question != null) {
+        if (state.isAudioReady) {
             // 歌詞位置 = 播放位置 + offset，所以跳回歌詞時間要反過來扣掉 offset
             onSeekPlayback((question.startMs - state.lyricOffsetMs).coerceAtLeast(0L))
         }
@@ -1038,8 +1094,6 @@ class PracticeViewModel @Inject constructor(
     fun onReplay() {
         val state = _uiState.value
         if (state.questions.isEmpty()) return
-
-        autoPauseJob?.cancel()
 
         _uiState.update {
             it.copy(

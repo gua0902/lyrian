@@ -20,6 +20,7 @@ import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.RadioButton
 import androidx.compose.material3.Scaffold
+import androidx.compose.material3.Slider
 import androidx.compose.material3.Text
 import androidx.compose.material3.TopAppBar
 import androidx.compose.runtime.Composable
@@ -34,20 +35,18 @@ import androidx.lifecycle.ViewModel
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.antigravity.lyrian.R
 import com.antigravity.lyrian.data.settings.UserSettings
-import com.antigravity.lyrian.domain.model.CefrLevel
-import com.antigravity.lyrian.domain.practice.BlankCoverage
+import com.antigravity.lyrian.domain.practice.BlankDifficulty
+import com.antigravity.lyrian.domain.practice.BlankSelector
 import dagger.hilt.android.lifecycle.HiltViewModel
 import javax.inject.Inject
 import kotlinx.coroutines.flow.StateFlow
 
 /**
- * 學習設定：**挖空的最低 CEFR 等級**。
+ * 學習設定：**挖空難度** 與 **題數上限**。
  *
- * 擁有者指定預設 B1，選項只給 A1–B2（CEFR-J 的範圍）。C1/C2 的資料其實存在
- * （Octanove Vocabulary Profile），但依規格先不開放——選到 C2 之後幾乎挖不出字，
- * 那不是使用者想要的結果。
- *
- * 改完後**下一次組題**就套用（進任何一首歌的練習頁時重新計算）。
+ * 擁有者指定（模組 C-4）：
+ *  - 難度只影響「先挖哪一類字」，**不影響題數**
+ *  - 題數用滑桿，上限 40，而且它只是上限（每首歌長短不一）
  */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -55,13 +54,13 @@ fun LearningSettingsScreen(
     onBack: () -> Unit,
     viewModel: LearningSettingsViewModel = hiltViewModel(),
 ) {
-    val current by viewModel.minLevel.collectAsStateWithLifecycle()
-    val coverage by viewModel.coverage.collectAsStateWithLifecycle()
+    val difficulty by viewModel.difficulty.collectAsStateWithLifecycle()
+    val maxBlanks by viewModel.maxBlanks.collectAsStateWithLifecycle()
 
     Scaffold(
         topBar = {
             TopAppBar(
-                title = { Text(stringResource(R.string.settings_learning_level)) },
+                title = { Text(stringResource(R.string.settings_blank_difficulty)) },
                 navigationIcon = {
                     IconButton(onClick = onBack) {
                         Icon(
@@ -78,86 +77,67 @@ fun LearningSettingsScreen(
                 .fillMaxSize()
                 .padding(innerPadding)
                 .verticalScroll(rememberScrollState())
-                .padding(16.dp)
-                .selectableGroup(),
+                .padding(16.dp),
             verticalArrangement = Arrangement.spacedBy(12.dp),
         ) {
             Text(
-                text = stringResource(R.string.settings_learning_level_hint),
+                text = stringResource(R.string.settings_blank_difficulty_hint),
                 style = MaterialTheme.typography.bodyMedium,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
 
-            CefrLevel.SELECTABLE.forEach { level ->
-                LevelOption(
-                    level = level,
-                    selected = level == current,
-                    onSelect = { viewModel.setMinLevel(level) },
-                )
+            Column(
+                modifier = Modifier.selectableGroup(),
+                verticalArrangement = Arrangement.spacedBy(10.dp),
+            ) {
+                BlankDifficulty.entries.forEach { option ->
+                    DifficultyOption(
+                        difficulty = option,
+                        selected = option == difficulty,
+                        onSelect = { viewModel.setDifficulty(option) },
+                    )
+                }
             }
 
             Text(
-                text = stringResource(R.string.settings_blank_level_note),
+                text = stringResource(R.string.settings_blank_difficulty_note),
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
-                modifier = Modifier.padding(top = 4.dp),
             )
 
-            // ---- 每首要挖幾句（5 / 10 / 全部）----
+            // ---- 題數上限（滑桿）----
             Text(
-                text = stringResource(R.string.settings_blank_coverage),
+                text = stringResource(R.string.settings_blank_count),
                 style = MaterialTheme.typography.titleMedium,
                 modifier = Modifier.padding(top = 16.dp),
             )
             Text(
-                text = stringResource(R.string.settings_blank_coverage_hint),
+                text = stringResource(R.string.settings_blank_count_value, maxBlanks),
+                style = MaterialTheme.typography.bodyMedium,
+                color = MaterialTheme.colorScheme.primary,
+            )
+            Slider(
+                value = maxBlanks.toFloat(),
+                onValueChange = { viewModel.setMaxBlanks(it.toInt()) },
+                valueRange = UserSettings.MIN_BLANKS.toFloat()..BlankSelector.MAX_BLANKS.toFloat(),
+                steps = BlankSelector.MAX_BLANKS - UserSettings.MIN_BLANKS - 1,
+                modifier = Modifier.fillMaxWidth(),
+            )
+            Text(
+                text = stringResource(R.string.settings_blank_count_hint),
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
-
-            BlankCoverage.entries.forEach { option ->
-                CoverageOption(
-                    label = option.label,
-                    selected = option == coverage,
-                    onSelect = { viewModel.setCoverage(option) },
-                )
-            }
         }
     }
 }
 
 @Composable
-private fun CoverageOption(label: String, selected: Boolean, onSelect: () -> Unit) {
-    Card(
-        modifier = Modifier
-            .fillMaxWidth()
-            .selectable(selected = selected, role = Role.RadioButton, onClick = onSelect),
-        colors = CardDefaults.cardColors(
-            containerColor = if (selected) {
-                MaterialTheme.colorScheme.secondaryContainer
-            } else {
-                MaterialTheme.colorScheme.surfaceContainerHigh
-            },
-        ),
-    ) {
-        Row(
-            modifier = Modifier
-                .fillMaxWidth()
-                .padding(horizontal = 12.dp, vertical = 10.dp),
-            verticalAlignment = Alignment.CenterVertically,
-        ) {
-            RadioButton(selected = selected, onClick = null)
-            Text(
-                text = label,
-                style = MaterialTheme.typography.bodyLarge,
-                modifier = Modifier.padding(start = 8.dp),
-            )
-        }
-    }
-}
-
-@Composable
-private fun LevelOption(level: CefrLevel, selected: Boolean, onSelect: () -> Unit) {
+private fun DifficultyOption(
+    difficulty: BlankDifficulty,
+    selected: Boolean,
+    onSelect: () -> Unit,
+) {
     Card(
         modifier = Modifier
             .fillMaxWidth()
@@ -179,9 +159,9 @@ private fun LevelOption(level: CefrLevel, selected: Boolean, onSelect: () -> Uni
             // onClick = null：整張卡片已經是點擊目標，讀屏才不會重複宣告
             RadioButton(selected = selected, onClick = null)
             Column(modifier = Modifier.padding(start = 8.dp)) {
-                Text(text = level.label, style = MaterialTheme.typography.titleMedium)
+                Text(text = difficulty.label, style = MaterialTheme.typography.titleMedium)
                 Text(
-                    text = level.description,
+                    text = difficulty.description,
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
@@ -196,11 +176,11 @@ class LearningSettingsViewModel @Inject constructor(
     private val settings: UserSettings,
 ) : ViewModel() {
 
-    val minLevel: StateFlow<CefrLevel> = settings.minLevel
+    val difficulty: StateFlow<BlankDifficulty> = settings.difficulty
 
-    val coverage: StateFlow<BlankCoverage> = settings.coverage
+    val maxBlanks: StateFlow<Int> = settings.maxBlanks
 
-    fun setMinLevel(level: CefrLevel) = settings.setMinLevel(level)
+    fun setDifficulty(value: BlankDifficulty) = settings.setDifficulty(value)
 
-    fun setCoverage(value: BlankCoverage) = settings.setCoverage(value)
+    fun setMaxBlanks(value: Int) = settings.setMaxBlanks(value)
 }

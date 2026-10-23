@@ -1,4 +1,4 @@
-package com.antigravity.lyrian.ui.screens.search
+﻿package com.antigravity.lyrian.ui.screens.search
 
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
@@ -64,8 +64,8 @@ class SearchViewModel @Inject constructor(
                 repository.search(
                     artist = state.artist,
                     track = state.track,
-                    minLevel = userSettings.minLevelValue,
-                    coverage = userSettings.coverageValue,
+                    difficulty = userSettings.difficultyValue,
+                    maxBlanks = userSettings.maxBlanksValue,
                     levelSource = languageData.get(),
                 )
             }

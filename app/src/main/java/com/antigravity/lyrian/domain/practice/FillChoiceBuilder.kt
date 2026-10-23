@@ -37,6 +37,9 @@ object FillChoiceBuilder {
     /** 每題固定 4 個選項（依參考圖的 2x2 選項格）。 */
     const val OPTION_COUNT = 4
 
+    /** 題數上限的預設值（擁有者指定上限 40，這裡取 30 當預設）。 */
+    const val DEFAULT_MAX_BLANKS = 30
+
     /**
      * 切成「單字」的樣式。
      *
@@ -63,20 +66,20 @@ object FillChoiceBuilder {
      * 「哪幾句要挖、每句挖哪個字」由 [BlankSelector] 決定（逐句選詞、跨句 lemma 去重、
      * 均勻選句）。這裡只把結果套回歌詞行並建立題目。
      *
-     * @param minLevel 設定頁的「挖空等級」，作為候選排序的起點（**不是**硬性門檻）
-     * @param coverage 要挖幾句（5 / 10 / 全部）
+     * @param difficulty 挖空難度（只影響優先級，不影響題數）
+     * @param maxBlanks 題數上限（擁有者指定上限 40）
      */
     fun buildDataset(
         lines: List<LyricLine>,
         minWordLength: Int = BLANK_MIN_WORD_LENGTH,
-        minLevel: CefrLevel = CefrLevel.DEFAULT,
-        coverage: BlankCoverage = BlankCoverage.DEFAULT,
+        difficulty: BlankDifficulty = BlankDifficulty.DEFAULT,
+        maxBlanks: Int = DEFAULT_MAX_BLANKS,
         levelSource: WordLevelSource = WordLevelSource.None,
     ): FillChoiceDataset {
         val selections = BlankSelector.select(
             lines = lines,
-            minLevel = minLevel,
-            coverage = coverage,
+            difficulty = difficulty,
+            maxBlanks = maxBlanks,
             language = levelSource,
         )
 
@@ -132,13 +135,13 @@ object FillChoiceBuilder {
      */
     fun countBlankableLines(
         lines: List<LyricLine>,
-        minLevel: CefrLevel = CefrLevel.DEFAULT,
-        coverage: BlankCoverage = BlankCoverage.DEFAULT,
+        difficulty: BlankDifficulty = BlankDifficulty.DEFAULT,
+        maxBlanks: Int = DEFAULT_MAX_BLANKS,
         levelSource: WordLevelSource = WordLevelSource.None,
     ): Int = BlankSelector.select(
         lines = lines,
-        minLevel = minLevel,
-        coverage = coverage,
+        difficulty = difficulty,
+        maxBlanks = maxBlanks,
         language = levelSource,
     ).count { it.chosen != null }
 

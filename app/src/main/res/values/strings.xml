@@ -179,6 +179,14 @@
     <string name="settings_blank_coverage_current">目前：%1$s</string>
     <string name="settings_blank_level_note">等級是排序起點：達標的字優先，該句沒有達標的字時才會往下挑。</string>
 
+    <!-- 模組 C-4：挖空難度與題數 -->
+    <string name="settings_blank_difficulty">挖空難度</string>
+    <string name="settings_blank_difficulty_hint">只影響「先挖哪一類字」，同一個字不會因為難度不同而換人。</string>
+    <string name="settings_blank_difficulty_note">只影響選詞優先級，不影響題目數量。</string>
+    <string name="settings_blank_count">題數上限</string>
+    <string name="settings_blank_count_value">最多 %1$d 題</string>
+    <string name="settings_blank_count_hint">題目會依句子順序均勻分布於整首歌；實際題數可能少於上限（歌太短或合格句不夠）。</string>
+
     <!-- 模組 D：字庫 -->
     <string name="result_add_to_wordbank">加入字庫</string>
     <string name="result_added_to_wordbank">已加入字庫</string>

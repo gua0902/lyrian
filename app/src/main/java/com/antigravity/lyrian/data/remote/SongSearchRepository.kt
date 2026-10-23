@@ -1,9 +1,9 @@
-package com.antigravity.lyrian.data.remote
+﻿package com.antigravity.lyrian.data.remote
 
 import com.antigravity.lyrian.data.lang.WordLevelSource
 import com.antigravity.lyrian.data.lyrics.LyricsParser
 import com.antigravity.lyrian.domain.model.CefrLevel
-import com.antigravity.lyrian.domain.practice.BlankCoverage
+import com.antigravity.lyrian.domain.practice.BlankDifficulty
 import com.antigravity.lyrian.domain.practice.FillChoiceBuilder
 import javax.inject.Inject
 import javax.inject.Singleton
@@ -67,8 +67,8 @@ class SongSearchRepository @Inject constructor(
     suspend fun search(
         artist: String,
         track: String,
-        minLevel: CefrLevel = CefrLevel.DEFAULT,
-        coverage: BlankCoverage = BlankCoverage.DEFAULT,
+        difficulty: BlankDifficulty = BlankDifficulty.DEFAULT,
+        maxBlanks: Int = FillChoiceBuilder.DEFAULT_MAX_BLANKS,
         levelSource: WordLevelSource = WordLevelSource.None,
     ): List<SongSearchResult> {
         val entries = lrclibApi.search(
@@ -88,7 +88,7 @@ class SongSearchRepository @Inject constructor(
         val itunesTracks = fetchItunesTracks("$artist $track")
 
         return dedupe(
-            entries.map { toSearchResult(it, itunesTracks, minLevel, coverage, levelSource) },
+            entries.map { toSearchResult(it, itunesTracks, difficulty, maxBlanks, levelSource) },
         ).filter { it.blankCount > 0 }
     }
 
@@ -107,8 +107,8 @@ class SongSearchRepository @Inject constructor(
     fun toSearchResult(
         entry: LrclibTrackDto,
         itunesTracks: List<ItunesTrackDto>,
-        minLevel: CefrLevel = CefrLevel.DEFAULT,
-        coverage: BlankCoverage = BlankCoverage.DEFAULT,
+        difficulty: BlankDifficulty = BlankDifficulty.DEFAULT,
+        maxBlanks: Int = FillChoiceBuilder.DEFAULT_MAX_BLANKS,
         levelSource: WordLevelSource = WordLevelSource.None,
     ): SongSearchResult {
         val artist = NameMatcher.normalizeArtist(entry.artistName)
@@ -136,8 +136,8 @@ class SongSearchRepository @Inject constructor(
             genre = NameMatcher.translateGenre(match?.primaryGenreName),
             blankCount = FillChoiceBuilder.countBlankableLines(
                 lines,
-                minLevel = minLevel,
-                coverage = coverage,
+                difficulty = difficulty,
+                maxBlanks = maxBlanks,
                 levelSource = levelSource,
             ),
             lyricsFile = entry.lyricsfile,

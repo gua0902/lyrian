@@ -4,6 +4,8 @@ import androidx.compose.animation.animateColorAsState
 import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
+import androidx.compose.foundation.gestures.detectTapGestures
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
@@ -53,6 +55,17 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.blur
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.layout.onSizeChanged
+import androidx.compose.foundation.layout.offset
+import androidx.compose.foundation.layout.width
+import androidx.compose.ui.unit.IntOffset
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
+import kotlin.math.abs
+import kotlin.math.roundToInt
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.hapticfeedback.HapticFeedbackType
@@ -217,6 +230,7 @@ fun PracticeScreen(
                 onSeek = viewModel::onSeekTo,
                 onTogglePlayPause = viewModel::onTogglePlayPause,
                 onSeekPlayback = viewModel::onSeekPlayback,
+                onTimelineSeekFinished = viewModel::onTimelineSeekFinished,
                 onSwitchVersion = viewModel::onSwitchVersion,
                 onAdjustOffset = viewModel::onAdjustOffset,
                 onResetOffset = viewModel::onResetOffset,
@@ -236,6 +250,7 @@ private fun PracticeContent(
     onSeek: (Int) -> Unit,
     onTogglePlayPause: () -> Unit,
     onSeekPlayback: (Long) -> Unit,
+    onTimelineSeekFinished: () -> Unit,
     onSwitchVersion: () -> Unit,
     onAdjustOffset: (Long) -> Unit,
     onResetOffset: () -> Unit,
@@ -271,13 +286,6 @@ private fun PracticeContent(
                 artist = state.artist,
                 coverUrl = state.coverUrl,
                 player = player,
-                questionProgress = if (state.total > 0) {
-                    state.activeBlankIndex.toFloat() / state.total
-                } else {
-                    0f
-                },
-                total = state.total,
-                onSeek = onSeek,
                 onBack = onBack,
                 audio = AudioControls(
                     isReady = state.isAudioReady,
@@ -297,6 +305,19 @@ private fun PracticeContent(
                     onAdjustOffset = onAdjustOffset,
                     onResetOffset = onResetOffset,
                 ),
+            )
+
+            // 模組 H：全曲只有**一條**進度條（時間軸）。
+            // 舊版還有一條「作答進度」滑桿，兩條對得上但不成比例，會誤導使用者。
+            TimelineScrubber(
+                positionMs = state.playbackPositionMs,
+                durationMs = state.playbackDurationMs
+                    ?: state.lines.lastOrNull()?.startMs,
+                questions = state.questions,
+                answered = state.selections.keys,
+                onSeek = onSeekPlayback,
+                onSeekFinished = onTimelineSeekFinished,
+                onTapQuestion = onSeek,
             )
 
             Box(modifier = Modifier.weight(1f).fillMaxWidth()) {
@@ -396,9 +417,7 @@ private data class AudioControls(
  * **這是整個練習頁唯一處理狀態列 inset 的地方**——之前重複疊加了三次，
  * 導致頂部出現大片空白。
  *
- * 兩條進度軸刻意放在一起但視覺上分明確：
- *  - 上：**播放位置**（時間軸），可以拖曳跳時間
- *  - 下：**作答進度**（題目軸），可以拖曳跳題
+ * 進度條**不在這裡**：模組 H 之後全曲只剩一條時間軸，放在 header 下方。
  */
 @Composable
 private fun PlayerHeader(
@@ -406,9 +425,6 @@ private fun PlayerHeader(
     artist: String,
     coverUrl: String?,
     player: com.antigravity.lyrian.data.audio.YouTubePlayerController,
-    questionProgress: Float,
-    total: Int,
-    onSeek: (Int) -> Unit,
     onBack: () -> Unit,
     audio: AudioControls,
 ) {
@@ -489,10 +505,6 @@ private fun PlayerHeader(
                 PlayPauseButton(audio = audio)
             }
 
-            if (audio.isReady && audio.durationMs != null) {
-                PlaybackScrubber(audio = audio)
-            }
-
             if (audio.isReady) {
                 LyricTuneBar(audio = audio)
             }
@@ -505,26 +517,134 @@ private fun PlayerHeader(
                     modifier = Modifier.padding(horizontal = 16.dp, vertical = 4.dp),
                 )
             }
-
-            if (total > 0) {
-                Slider(
-                    value = questionProgress.coerceIn(0f, 1f),
-                    onValueChange = { fraction ->
-                        onSeek(Math.round(fraction * (total - 1)))
-                    },
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .height(24.dp),
-                    colors = SliderDefaults.colors(
-                        thumbColor = MaterialTheme.colorScheme.primary,
-                        activeTrackColor = MaterialTheme.colorScheme.primary,
-                        inactiveTrackColor = Color.White.copy(alpha = 0.24f),
-                    ),
-                )
-            }
         }
     }
 }
+
+/**
+ * 全曲唯一的進度條（模組 H）。
+ *
+ * ## 為什麼只剩一條
+ *
+ * 舊版有兩條：上面控影片時間（線性）、下面控填空題號（離散）。
+ * 兩條**對得上但不成比例**——第 3 題可能在 12 秒，第 4 題在 3 分半，
+ * 下面的滑桿卻把兩者畫成等距。使用者看到的「進度」是假的。
+ *
+ * 現在以**時間**為軸：拖曳即 seek，題目位置只是這條軸上的刻度。
+ *
+ * ## 刻度（B-6 的補答入口）
+ *
+ *  - **空心圓**＝還沒答，點一下就跳到該題並暫停
+ *  - **實心圓**＝已答，點一下只是跳時間
+ *  - 當前位置有一條白色指示線
+ *
+ * 用 `pointerInput` 直接量座標：`Slider` 不能同時畫刻度與點擊，
+ * 而「未答刻度可點」正是擁有者要的補答入口。
+ */
+@Composable
+private fun TimelineScrubber(
+    positionMs: Long,
+    durationMs: Long?,
+    questions: List<com.antigravity.lyrian.domain.model.FillChoiceQuestion>,
+    answered: Set<Int>,
+    onSeek: (Long) -> Unit,
+    onSeekFinished: () -> Unit,
+    onTapQuestion: (Int) -> Unit,
+) {
+    val duration = durationMs?.takeIf { it > 0 } ?: return
+    var widthPx by remember { mutableStateOf(0) }
+    val density = LocalDensity.current
+
+    Column(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(horizontal = 16.dp),
+    ) {
+        Box(
+            modifier = Modifier
+                .fillMaxWidth()
+                .height(40.dp)
+                .onSizeChanged { widthPx = it.width }
+                .pointerInput(duration, widthPx, questions, answered) {
+                    detectTapGestures { offset ->
+                        // 先看有沒有點在未答的刻度上（容許 12dp 的誤差）
+                        val tolerance = with(density) { 12.dp.toPx() }
+                        val hit = questions
+                            .filterNot { answered.contains(it.blankIndex) }
+                            .minByOrNull { abs(offset.x - fractionOf(it.startMs, duration) * widthPx) }
+                            ?.takeIf { abs(offset.x - fractionOf(it.startMs, duration) * widthPx) <= tolerance }
+
+                        if (hit != null) {
+                            onTapQuestion(hit.blankIndex)
+                        } else if (widthPx > 0) {
+                            onSeek((offset.x / widthPx * duration).toLong())
+                            onSeekFinished()
+                        }
+                    }
+                },
+            contentAlignment = Alignment.CenterStart,
+        ) {
+            // 底軌
+            Box(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .height(4.dp)
+                    .clip(RoundedCornerShape(2.dp))
+                    .background(Color.White.copy(alpha = 0.24f)),
+            )
+
+            // 已播放
+            val progress = fractionOf(positionMs, duration)
+            Box(
+                modifier = Modifier
+                    .fillMaxWidth(progress)
+                    .height(4.dp)
+                    .clip(RoundedCornerShape(2.dp))
+                    .background(MaterialTheme.colorScheme.primary),
+            )
+
+            // 題目刻度
+            if (widthPx > 0) {
+                questions.forEach { question ->
+                    val isAnswered = answered.contains(question.blankIndex)
+                    Box(
+                        modifier = Modifier
+                            .offset { IntOffset((fractionOf(question.startMs, duration) * widthPx).roundToInt() - with(density) { 4.dp.roundToPx() }, 0) }
+                            .size(8.dp)
+                            .clip(CircleShape)
+                            .background(
+                                if (isAnswered) {
+                                    MaterialTheme.colorScheme.primary
+                                } else {
+                                    Color.White
+                                },
+                            )
+                            .then(
+                                if (isAnswered) {
+                                    Modifier
+                                } else {
+                                    Modifier.border(1.dp, Color.Black.copy(alpha = 0.5f), CircleShape)
+                                },
+                            ),
+                    )
+                }
+            }
+
+            // 目前位置
+            Box(
+                modifier = Modifier
+                    .offset { IntOffset((progress * widthPx).roundToInt() - with(density) { 1.dp.roundToPx() }, 0) }
+                    .width(2.dp)
+                    .height(16.dp)
+                    .background(Color.White),
+            )
+        }
+    }
+}
+
+/** 位置 → 0..1。 */
+private fun fractionOf(ms: Long, duration: Long): Float =
+    if (duration <= 0) 0f else (ms.toFloat() / duration).coerceIn(0f, 1f)
 
 /**
  * 官方 YouTube 播放器。
@@ -692,26 +812,6 @@ private fun PlayPauseButton(audio: AudioControls) {
             )
         }
     }
-}
-
-/** 播放位置拖曳條。與作答進度條是**不同的軸**，不要合併。 */
-@Composable
-private fun PlaybackScrubber(audio: AudioControls) {
-    val duration = audio.durationMs ?: return
-    if (duration <= 0) return
-
-    Slider(
-        value = (audio.positionMs.toFloat() / duration).coerceIn(0f, 1f),
-        onValueChange = { fraction -> audio.onSeekPlayback((fraction * duration).toLong()) },
-        modifier = Modifier
-            .fillMaxWidth()
-            .height(20.dp),
-        colors = SliderDefaults.colors(
-            thumbColor = MaterialTheme.colorScheme.secondary,
-            activeTrackColor = MaterialTheme.colorScheme.secondary,
-            inactiveTrackColor = MaterialTheme.colorScheme.surfaceContainerHighest,
-        ),
-    )
 }
 
 /**

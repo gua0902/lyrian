@@ -1,4 +1,4 @@
-package com.antigravity.lyrian.ui.screens.practice
+﻿package com.antigravity.lyrian.ui.screens.practice
 
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
@@ -161,7 +161,7 @@ fun PracticeResultScreen(
             item {
                 SectionTitle(
                     title = stringResource(R.string.result_extend_title),
-                    hint = stringResource(R.string.result_extend_hint, state.minLevel.label),
+                    hint = stringResource(R.string.result_extend_hint, state.difficulty.label),
                 )
             }
 

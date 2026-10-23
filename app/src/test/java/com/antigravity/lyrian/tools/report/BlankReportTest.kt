@@ -3,10 +3,10 @@
 import com.antigravity.lyrian.data.lang.LanguageData
 import com.antigravity.lyrian.data.lyrics.LyricsParser
 import com.antigravity.lyrian.data.remote.LrclibTrackDto
-import com.antigravity.lyrian.domain.model.CefrLevel
 import com.antigravity.lyrian.domain.practice.FillChoiceBuilder
 import java.io.File
-import com.antigravity.lyrian.domain.practice.BlankCoverage
+import com.antigravity.lyrian.domain.practice.BlankDifficulty
+import com.antigravity.lyrian.domain.practice.BlankSelector
 import kotlinx.serialization.json.Json
 import org.junit.Assume.assumeTrue
 import org.junit.Test
@@ -58,33 +58,33 @@ class BlankReportTest {
             println("${track.trackName} — ${track.artistName}  (${lines.size} 行)")
             println("-".repeat(100))
 
-            CefrLevel.SELECTABLE.forEach { level ->
+            BlankDifficulty.entries.forEach { level ->
                 val dataset = FillChoiceBuilder.buildDataset(
                     lines = lines,
-                    minLevel = level,
-                    coverage = BlankCoverage.ALL,
+                    difficulty = level,
+                    maxBlanks = BlankSelector.MAX_BLANKS,
                     levelSource = language,
                 )
-                println("  起點 ${level.label}: ${dataset.questions.size} 題 / ${lines.size} 句")
+                println("  難度 ${level.label}: ${dataset.questions.size} 題 / ${lines.size} 句")
             }
 
-            BlankCoverage.entries.forEach { coverage ->
+            listOf(5, 10, BlankSelector.MAX_BLANKS).forEach { limit ->
                 val dataset = FillChoiceBuilder.buildDataset(
                     lines = lines,
-                    minLevel = CefrLevel.DEFAULT,
-                    coverage = coverage,
+                    difficulty = BlankDifficulty.DEFAULT,
+                    maxBlanks = limit,
                     levelSource = language,
                 )
-                println("  選句 ${coverage.label}: ${dataset.questions.size} 題")
+                println("  上限 $limit: ${dataset.questions.size} 題")
             }
 
             val dataset = FillChoiceBuilder.buildDataset(
                 lines = lines,
-                minLevel = CefrLevel.DEFAULT,
-                coverage = BlankCoverage.ALL,
+                difficulty = BlankDifficulty.DEFAULT,
+                maxBlanks = BlankSelector.MAX_BLANKS,
                 levelSource = language,
             )
-            println("  ── 起點 ${CefrLevel.DEFAULT.label}、全部選句的挖空明細 ──")
+            println("  ── 難度 ${BlankDifficulty.DEFAULT.label}、上限 ${BlankSelector.MAX_BLANKS} 的挖空明細 ──")
             dataset.debug.filter { it.chosenWord != null }.take(28).forEach { d ->
                 println(
                     "  L%-3d %-16s 原形 %-16s 等級 %-3s 詞頻 %-9s %s".format(
