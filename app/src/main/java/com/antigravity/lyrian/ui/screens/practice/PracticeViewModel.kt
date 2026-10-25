@@ -17,7 +17,7 @@ import com.antigravity.lyrian.data.audio.YouTubePlayerController
 import com.antigravity.lyrian.data.audio.YouTubeWebSearch
 import com.antigravity.lyrian.data.dictionary.DictionaryRepository
 import com.antigravity.lyrian.data.dictionary.DictionaryResult
-import com.antigravity.lyrian.data.lang.FREQ_SOURCE_LABEL
+import com.antigravity.lyrian.data.lang.ESTIMATED_SOURCE_LABELS
 import com.antigravity.lyrian.data.lang.LanguageData
 import com.antigravity.lyrian.data.lang.LanguageDataStore
 import com.antigravity.lyrian.data.lyrics.LyricsParser
@@ -31,7 +31,7 @@ import com.antigravity.lyrian.domain.model.LyricLine
 import com.antigravity.lyrian.domain.model.PracticeModeId
 import com.antigravity.lyrian.domain.model.ResultWord
 import com.antigravity.lyrian.domain.practice.BlankDifficulty
-import com.antigravity.lyrian.domain.practice.CommonWordFilter
+import com.antigravity.lyrian.domain.practice.ExtensionPicker
 import com.antigravity.lyrian.domain.practice.FillChoiceBuilder
 import com.antigravity.lyrian.domain.practice.LineBoundary
 import com.antigravity.lyrian.ui.navigation.Routes
@@ -110,6 +110,22 @@ data class PracticeUiState(
      */
     val playbackError: String? = null,
 
+    /**
+     * 開場狀態。
+     *
+     * 擁有者指定的行為：進入練習頁**不可以**立刻要求作答——音訊還沒開始，
+     * 使用者連句子都沒聽到。因此：
+     * ```
+     * LOADING（三點動畫）→ 音訊真的走了 + 位置進到第一句 → READY（淡入歌詞）
+     *                    → 15 秒或載入失敗 → FAILED（顯示重試）
+     * ```
+     * LOADING 期間：不顯示選項、不觸發暫停、不預先定位歌詞行。
+     */
+    val entryGate: EntryGate = EntryGate.LOADING,
+
+    /** 歌曲是否已經播完（**結果頁的唯一觸發條件**）。 */
+    val songFinished: Boolean = false,
+
     /** 使用者為這首歌設定的歌詞偏移（毫秒）。正值＝歌詞延後。 */
     val lyricOffsetMs: Long = 0L,
     /** 目前播放的是候選清單中的第幾個版本（0-based）。 */
@@ -130,7 +146,7 @@ data class PracticeUiState(
     /**
      * 延伸詞彙：本首歌中**沒被挖空**、等級高於設定值的字。
      *
-     * 依原形去重、等級高者優先，最多 [EXTENSION_LIMIT] 條。
+     * 依原形去重、等級高者優先，最多 [ExtensionPicker.LIMIT] 條。
      */
     val extensionWords: List<ResultWord> = emptyList(),
     /** 原始（未查字典）的延伸詞彙，字典查完後才填 [extensionWords]。 */
@@ -163,14 +179,20 @@ data class PracticeUiState(
         get() = currentQuestion?.let { selections[it.blankIndex] }
 
     /**
-     * 全部答完。
+     * 全部答完**而且歌曲播完**才進結果頁。
      *
      * ⚠️ 判斷依據是**答了幾題**，不是 [activeBlankIndex]。
      * 歌曲驅動時題目軸由播放時間決定，最後一句唱完之後 index 不會再增加——
      * 用 index 判斷的話，跟著歌唱歌永遠不會「完成」，也就永遠看不到結果頁。
+     *
+     * ⚠️ 擁有者修正：答完最後一題**不可以**立刻跳頁，要繼續播到歌曲結束
+     * （[songFinished]）。只有在完全沒有音源時（無法得知歌曲結束）才退回
+     * 「答完即完成」。
      */
     val isComplete: Boolean
-        get() = questions.isNotEmpty() && selections.size >= questions.size
+        get() = questions.isNotEmpty() &&
+            selections.size >= questions.size &&
+            (songFinished || !isAudioReady)
 
     val correctCount: Int get() = selections.values.count { it.isCorrect }
 
@@ -203,6 +225,17 @@ data class PracticeUiState(
 
     val percent: Int get() = if (total > 0) Math.round(correctCount * 100f / total) else 0
 }
+
+/**
+ * 練習頁的開場狀態。
+ *
+ * ```
+ * LOADING  三點動畫；不顯示選項、不暫停、不定位歌詞行
+ * READY    音訊已在走、位置進到第一句 → 動畫淡出、歌詞淡入，開始可作答
+ * FAILED   載入失敗或超過 15 秒沒有音訊 → 停止動畫，顯示重試
+ * ```
+ */
+enum class EntryGate { LOADING, READY, FAILED }
 
 /** 找不到練習資料。使用者唯一的出路是返回。 */
 private const val ERROR_NO_SESSION = "找不到這首歌的練習資料，請重新搜尋。"
@@ -249,14 +282,24 @@ private const val BOUNDARY_SNAP_TOLERANCE_MS = 250L
 /** 因為等作答而暫停時顯示的提示。 */
 private const val WAITING_FOR_ANSWER = "已暫停，補上這句的填空就會繼續播放。"
 
+/**
+ * 進入練習頁後，等音訊開始的最長時間（擁有者指定 15 秒）。
+ *
+ * 超過就停止三點動畫、顯示「載入失敗」與重試——不可以一直轉下去。
+ */
+private const val ENTRY_TIMEOUT_MS = 15_000L
+
+/** 判定「歌曲播完」的容差：`currentTime >= duration - 1 秒`（擁有者指定）。 */
+private const val SONG_END_TOLERANCE_MS = 1_000L
+
+/** 開場失敗時顯示的訊息。 */
+private const val ENTRY_FAILED = "載入失敗"
+
 /** 拖曳放手時，往前找未答挖空的容許誤差（避免差幾十毫秒就跳過該題）。 */
 private const val SNAP_TOLERANCE_MS = 1_500L
 
 /** 所有候選版本都不允許嵌入時顯示的提示（模組 A.5）。 */
 private const val EMBED_BLOCKED = "這些版本都不允許嵌入播放，換一首歌試試。"
-
-/** 結果頁的延伸詞彙上限（擁有者指定最多 20 條）。 */
-private const val EXTENSION_LIMIT = 20
 
 /**
  * 自動入庫的最低等級（模組 D）。
@@ -364,6 +407,16 @@ class PracticeViewModel @Inject constructor(
      */
     private val checkedLines = mutableSetOf<Int>()
 
+    /** 開場逾時的計時器（15 秒內等不到音訊就顯示重試）。 */
+    private var entryTimeoutJob: kotlinx.coroutines.Job? = null
+
+    /**
+     * 音量漸入的工作。
+     *
+     * 擁有者要求「0.5 秒內又觸發暫停 → 立即中止漸入」，所以必須握得住它。
+     */
+    private var fadeInJob: kotlinx.coroutines.Job? = null
+
     /**
      * ⚠️ **`init` 必須在所有欄位初始器之後**。
      *
@@ -442,8 +495,41 @@ class PracticeViewModel @Inject constructor(
                     val lyricPosition = position + state.lyricOffsetMs
                     val currentLine = lineIndexAt(lyricPosition)
 
+                    // ---- 修正 1：開場閘門 ----
+                    // 音訊真的走了（currentTime 前進）而且位置進到第一句的時間範圍，
+                    // 才把三點動畫換成歌詞。在這之前**不檢查交界、不端選項**。
+                    if (state.entryGate == EntryGate.LOADING) {
+                        val reachedFirstLine = currentLine != null || !state.hasTimeline
+                        if (position > 0 && reachedFirstLine) {
+                            entryTimeoutJob?.cancel()
+                            checkedLines.clear()
+                            lastSeenLine = currentLine
+                            _uiState.update {
+                                it.copy(
+                                    entryGate = EntryGate.READY,
+                                    singingLineIndex = currentLine,
+                                    playbackPositionMs = position,
+                                )
+                            }
+                            android.util.Log.d(
+                                TAG,
+                                "entry ready：音訊已開始（${formatLogTime(position)}）→ 顯示歌詞",
+                            )
+                        }
+                        delay(POSITION_POLL_MS)
+                        continue
+                    }
+
                     if (currentLine == null) {
                         _uiState.update { it.copy(playbackPositionMs = position) }
+                        delay(POSITION_POLL_MS)
+                        continue
+                    }
+
+                    // ---- 修正 5：歌曲播完才結束 ----
+                    // 不看「題目答完沒」，只看播放時間 → 答完最後一題也不會跳頁。
+                    if (isSongEnded(position, state.playbackDurationMs)) {
+                        onSongEnded()
                         delay(POSITION_POLL_MS)
                         continue
                     }
@@ -639,9 +725,7 @@ class PracticeViewModel @Inject constructor(
             val videos = youTubeSearch.search(query)
 
             if (videos.isEmpty()) {
-                _uiState.update {
-                    it.copy(isAudioLoading = false, audioNotice = NO_AUDIO_MATCH)
-                }
+                failEntry(NO_AUDIO_MATCH)
                 return@launch
             }
 
@@ -653,9 +737,7 @@ class PracticeViewModel @Inject constructor(
             )
 
             if (ranked.isEmpty()) {
-                _uiState.update {
-                    it.copy(isAudioLoading = false, audioNotice = NO_AUDIO_MATCH)
-                }
+                failEntry(NO_AUDIO_MATCH)
                 return@launch
             }
 
@@ -673,19 +755,25 @@ class PracticeViewModel @Inject constructor(
         }
     }
 
-    /** 播放候選清單中的第 [index] 個版本。 */
-    private fun playCandidate(index: Int) {
+    /**
+     * 播放候選清單中的第 [index] 個版本。
+     *
+     * @param resumeAtMs 要接續的播放位置（換版本時帶入，見 [onSwitchVersion]）
+     * @param autoPlay 載入後是否自動播放
+     */
+    private fun playCandidate(index: Int, resumeAtMs: Long = 0L, autoPlay: Boolean = true) {
         val list = candidates
         val chosen = list.getOrNull(index)
         if (chosen == null) {
-            _uiState.update { it.copy(isAudioLoading = false, audioNotice = NO_AUDIO_MATCH) }
+            failEntry(NO_AUDIO_MATCH)
             return
         }
 
-        // 使用者是「按了播放鍵」才走到這裡的，所以要自動播
-        player.load(videoId = chosen.video.videoId, startAtMs = 0L, autoPlay = true)
+        // `startAtMs` 會變成 embed URL 的 `&start=`；播放器另外會在拿到
+        // 真實時長後再校正一次（新影片比記錄的時間短 → 停在時長前 1 秒）。
+        player.load(videoId = chosen.video.videoId, startAtMs = resumeAtMs, autoPlay = autoPlay)
 
-        // 從 0 重新開始 → 交界檢查全部重來（換版本後仍要在同一個交界暫停）。
+        // 從這裡開始重新檢查交界（換版本後仍要在同一個交界暫停）。
         checkedLines.clear()
         lastSeenLine = null
 
@@ -705,8 +793,27 @@ class PracticeViewModel @Inject constructor(
         }
     }
 
+    /** 音源解析失敗：開場動畫要停下來，讓使用者看到「載入失敗／重試」。 */
+    private fun failEntry(message: String) {
+        entryTimeoutJob?.cancel()
+        _uiState.update {
+            it.copy(
+                isAudioLoading = false,
+                audioNotice = message,
+                entryGate = if (it.entryGate == EntryGate.READY) {
+                    it.entryGate
+                } else {
+                    EntryGate.FAILED
+                },
+            )
+        }
+    }
+
     /**
      * 換下一個候選版本。
+     *
+     * **保留播放位置**（擁有者指定）：播放到 1:30 換版本，新版本從 1:30 繼續，
+     * 不是從頭開始。原本在等作答就維持暫停（不自動播），原本在播就繼續播。
      *
      * @param auto true 表示是「播放器回報不能嵌入」時自動換的
      */
@@ -726,11 +833,27 @@ class PracticeViewModel @Inject constructor(
             return
         }
 
-        val next = (_uiState.value.playerVersionIndex + 1) % list.size
-        playCandidate(next)
+        val state = _uiState.value
 
-        if (!auto) {
-            _uiState.update { it.copy(audioNotice = null) }
+        // ---- 換源前記錄三件事（擁有者指定）----
+        val resumeAtMs = state.playbackPositionMs.coerceAtLeast(0L)
+        val wasWaiting = state.waitingForBlankIndex != null
+        val keepPaused = wasWaiting
+
+        val next = (state.playerVersionIndex + 1) % list.size
+        playCandidate(next, resumeAtMs = resumeAtMs, autoPlay = !keepPaused)
+
+        android.util.Log.d(
+            TAG,
+            "換版本 #${next + 1}：接續 ${formatLogTime(resumeAtMs)}" +
+                "（行=${state.singingLineIndex}，${if (keepPaused) "保持暫停等作答" else "繼續播放"}）",
+        )
+
+        _uiState.update {
+            it.copy(
+                // 換版本不清作答、不跳結果頁
+                audioNotice = if (keepPaused) WAITING_FOR_ANSWER else null,
+            )
         }
     }
 
@@ -775,6 +898,11 @@ class PracticeViewModel @Inject constructor(
             return
         }
 
+        // 使用者手動暫停 → 立即中止還在跑的漸入（擁有者指定）。
+        if (_uiState.value.isPlaying) {
+            stopFadeIn()
+        }
+
         if (_uiState.value.waitingForBlankIndex != null) {
             _uiState.update {
                 it.copy(waitingForBlankIndex = null, audioNotice = null)
@@ -782,6 +910,32 @@ class PracticeViewModel @Inject constructor(
         }
 
         player.togglePlayPause()
+    }
+
+    /**
+     * 音量漸入（修正 2）。
+     *
+     * 擁有者指定的順序：**先把音量設成 0 → 再 play() → 才從 0 線性升到 1.0（0.5 秒）**。
+     * 直接 `play()` 再用滿音量會有突兀的截斷感，所以這裡不能省任何一步。
+     *
+     * 新的漸入會取消舊的；暫停時由 [stopFadeIn] 立刻中止（不會有「漸入還在跑、
+     * 但已經暫停」的狀態）。
+     */
+    private fun startFadeIn() {
+        fadeInJob?.cancel()
+        fadeInJob = viewModelScope.launch {
+            player.setVolumePercent(0)
+            player.play()
+            player.fadeIn(FADE_OUT_MS)
+        }
+    }
+
+    /** 中止漸入（暫停、換版本、歌曲結束時呼叫）。 */
+    private fun stopFadeIn() {
+        if (fadeInJob?.isActive == true) {
+            fadeInJob?.cancel()
+            android.util.Log.d(TAG, "fadeIn 中止（使用者按下暫停）")
+        }
     }
 
     /** 拖曳進度條過程中的即時 seek（不判斷未答，放手時才算）。 */
@@ -828,6 +982,52 @@ class PracticeViewModel @Inject constructor(
         if (lines.all { it.startMs <= 0L }) return null
 
         return lines.lastOrNull { it.startMs <= positionMs }?.index
+    }
+
+    /**
+     * 歌曲是否已經播完（修正 5）。
+     *
+     * 兩個條件任一成立即可（擁有者指定）：
+     * ```
+     * currentTime >= duration - 1.0 秒
+     * 播放器回報 ended
+     * ```
+     */
+    private fun isSongEnded(positionMs: Long, durationMs: Long?): Boolean {
+        if (player.state.value.ended) return true
+        if (durationMs == null || durationMs <= 0L) return false
+        return positionMs >= durationMs - SONG_END_TOLERANCE_MS
+    }
+
+    /**
+     * 歌曲播完（**不是**答完最後一題）。
+     *
+     * 擁有者修正：答完最後一題後音樂要繼續播，播完才進結果頁。
+     * 若結束時還有未答題目，**不強制跳頁**——回到第一個未答句等待補答。
+     */
+    private fun onSongEnded() {
+        val state = _uiState.value
+        if (state.songFinished) return
+
+        player.pause()
+        fadeInJob?.cancel()
+
+        val unanswered = state.unansweredQuestions
+        if (unanswered.isNotEmpty()) {
+            val next = unanswered.minByOrNull { it.lineIndex } ?: return
+            checkedLines.remove(next.lineIndex)
+            lastSeenLine = next.lineIndex
+            focusUnanswered(next, seekToStart = true)
+            android.util.Log.d(
+                TAG,
+                "song end：還有 ${unanswered.size} 題未答 → 回到 line=${next.lineIndex} 等補答（不跳頁）",
+            )
+            return
+        }
+
+        _uiState.update { it.copy(songFinished = true, isPlaying = false) }
+        android.util.Log.d(TAG, "song end：全部作答完成 → 進結果頁")
+        finishIfComplete()
     }
 
     override fun onCleared() {
@@ -995,7 +1195,8 @@ class PracticeViewModel @Inject constructor(
                 coverUrl = source.head.coverUrl,
                 lines = dataset.lines,
                 questions = dataset.questions,
-                options = optionsByBlank[0].orEmpty(),
+                // 開場時**不端選項**（擁有者指定：豆豆期間不顯示挖空選項）
+                options = emptyList(),
                 // 換歌時把節奏狀態歸零，避免上一首的暫停／行號黏過來
                 isSongDriven = false,
                 singingLineIndex = null,
@@ -1008,6 +1209,8 @@ class PracticeViewModel @Inject constructor(
                 videoAspectRatio = null,
                 isAudioReady = false,
                 isAudioLoading = false,
+                entryGate = EntryGate.LOADING,
+                songFinished = false,
                 // 結果頁的統計只存在這一次的 session，不落庫
                 sessionStartedAtMs = System.currentTimeMillis(),
                 elapsedMs = null,
@@ -1017,7 +1220,7 @@ class PracticeViewModel @Inject constructor(
                 maxBlanks = maxBlanks,
                 hasTimeline = dataset.lines.any { it.startMs > 0L },
                 blankDecisions = dataset.debug,
-                extensionCandidates = computeExtensionCandidates(
+                extensionCandidates = ExtensionPicker.pick(
                     lines = source.lines,
                     difficulty = difficulty,
                     language = language,
@@ -1025,55 +1228,49 @@ class PracticeViewModel @Inject constructor(
                 ),
             )
         }
+
+        // 進入練習頁就開始解析音源（擁有者要求「進頁即載入」）：
+        // 三點動畫蓋住搜尋＋緩衝的過程，音訊真的開始走才放開畫面。
+        startEntry()
     }
 
     /**
-     * 找出「本首歌中沒被挖空、等級高於這次難度」的字。
+     * 開場：開始解析音源，並啟動 15 秒逾時。
      *
-     * 依擁有者指定：**依原形去重、等級高者優先、最多 20 條**。
+     * 逾時或失敗都只影響 [EntryGate]，不會把使用者丟回去——他仍然可以按重試。
      */
-    private fun computeExtensionCandidates(
-        lines: List<LyricLine>,
-        difficulty: BlankDifficulty,
-        language: LanguageData,
-        blanked: Set<String>,
-    ): List<String> {
-        val floor = difficulty.minLevel
-
-        // lemma → 排序鍵（等級序、詞頻排名），取較難的那一個
-        data class Key(val level: Int, val rank: Int)
-        val byLemma = LinkedHashMap<String, Key>()
-
-        lines.forEach { line ->
-            FillChoiceBuilder.TOKEN_PATTERN.findAll(line.text).forEach { match ->
-                val token = match.value
-                if (token.length < FillChoiceBuilder.BLANK_MIN_WORD_LENGTH) return@forEach
-                if (token.lowercase() in blanked) return@forEach
-                if (CommonWordFilter.classify(token).isCommon) return@forEach
-                if (language.isHighFrequency(token)) return@forEach
-
-                val level = language.lookup(token)
-                if (level.treatAsLevel < floor) return@forEach
-
-                val key = Key(level.treatAsLevel.ordinal, level.frequencyRank ?: Int.MAX_VALUE)
-                val previous = byLemma[level.lemma]
-                if (previous == null || key.level > previous.level ||
-                    (key.level == previous.level && key.rank > previous.rank)
-                ) {
-                    byLemma[level.lemma] = key
+    private fun startEntry() {
+        entryTimeoutJob?.cancel()
+        entryTimeoutJob = viewModelScope.launch {
+            delay(ENTRY_TIMEOUT_MS)
+            if (_uiState.value.entryGate == EntryGate.LOADING) {
+                android.util.Log.w(TAG, "entry timeout：15 秒內等不到音訊")
+                _uiState.update {
+                    it.copy(entryGate = EntryGate.FAILED, isAudioLoading = false)
                 }
             }
         }
-
-        return byLemma.entries
-            .sortedWith(
-                compareByDescending<Map.Entry<String, Key>> { it.value.level }
-                    .thenByDescending { it.value.rank }
-                    .thenBy { it.key },
-            )
-            .map { it.key }
-            .take(EXTENSION_LIMIT)
+        prepareAudio()
     }
+
+    /** 使用者按「重試」：重新解析音源，三點動畫重來一次。 */
+    fun retryEntry() {
+        if (_uiState.value.entryGate == EntryGate.READY) return
+
+        audioResolved = false
+        checkedLines.clear()
+        lastSeenLine = null
+        _uiState.update {
+            it.copy(
+                entryGate = EntryGate.LOADING,
+                audioNotice = null,
+                playbackError = null,
+                isAudioLoading = false,
+            )
+        }
+        startEntry()
+    }
+
 
     private fun failWith(message: String) {
         _uiState.update { it.copy(isLoading = false, errorMessage = message) }
@@ -1181,12 +1378,10 @@ class PracticeViewModel @Inject constructor(
             android.util.Log.d(
                 TAG,
                 "resume@${formatLogTime(player.currentPositionMs())} 補答 line=${question.lineIndex}" +
-                    " blank=${question.blankIndex} → fadeIn 0.5s → play",
+                    " blank=${question.blankIndex} → volume=0 → play → fadeIn 0.5s",
             )
-            viewModelScope.launch {
-                player.fadeIn(FADE_OUT_MS)
-                player.play()
-            }
+            // 先歸零再播，然後才漸入（擁有者指定的順序）
+            startFadeIn()
         } else {
             android.util.Log.d(
                 TAG,
@@ -1195,11 +1390,16 @@ class PracticeViewModel @Inject constructor(
             )
         }
 
+        // 有音源時**不在這裡**進結果頁：要等歌曲播完（見 onSongEnded）。
+        // 沒有音源時才退回「答完即完成」，否則永遠看不到結果頁。
         finishIfComplete()
     }
 
     /**
      * 全部答完時，算出結果頁要的統計與兩份字表。
+     *
+     * **有音源時要等歌曲播完**（[songFinished]）——擁有者修正：答完最後一題
+     * 不可以立刻跳頁，音樂要繼續播。
      *
      * 「用時」只存在 session 狀態裡（擁有者指定不新增資料表）；
      * 字典查詢是離線資產，查 20~30 個字只是一連串雜湊查表。
@@ -1208,6 +1408,8 @@ class PracticeViewModel @Inject constructor(
         val state = _uiState.value
         if (state.elapsedMs != null) return
         if (state.questions.isEmpty() || state.selections.size < state.questions.size) return
+        // 有音源 → 必須等歌曲結束；沒有音源（無法得知結束）才用「答完即完成」
+        if (state.isAudioReady && !state.songFinished) return
 
         val elapsed = (System.currentTimeMillis() - state.sessionStartedAtMs).coerceAtLeast(0L)
         _uiState.update { it.copy(elapsedMs = elapsed) }
@@ -1319,13 +1521,12 @@ class PracticeViewModel @Inject constructor(
                 val lemma = decision?.chosenLemma
                     ?: FillChoiceBuilder.normalizeAnswer(question.answer)
 
-                // 只有**真資料**（CEFR-J／Octanove）才寫進字庫的等級欄位。
+                // 只有**官方 CEFR 清單**（CEFR-J／Octanove）的等級才寫進字庫。
                 //
-                // 詞頻推估的等級是 App 自己算的，寫成 C2 等於讓字庫聲稱一個
-                // 官方清單從未做過的判定——擁有者就是這樣看到「blah = C2」的
-                // （blah 在 CEFR-J／Octanove 都沒有收錄）。寧可留空。
+                // 考試標籤與 BNC 詞頻都是推估：寫進字庫等於聲稱一個官方清單
+                // 從未做過的判定（擁有者就是這樣看到「blah = C2」的）。寧可留空。
                 val cefrLabel = decision?.chosenLevel
-                    ?.takeIf { decision.chosenLevelSource != FREQ_SOURCE_LABEL }
+                    ?.takeIf { decision.chosenLevelSource !in ESTIMATED_SOURCE_LABELS }
 
                 val shouldAddToWordbank = level >= WORDBANK_MIN_LEVEL
 

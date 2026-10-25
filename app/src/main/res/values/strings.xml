@@ -154,6 +154,8 @@
 
     <!-- 播放器（模組 3） -->
     <string name="player_searching">正在找官方錄音室版本…</string>
+    <string name="practice_load_failed">載入失敗</string>
+    <string name="practice_retry">重試</string>
     <string name="player_switch_version">換版本</string>
     <string name="player_version_label">版本 %1$d / %2$d</string>
     <string name="player_offset_title">歌詞微調</string>

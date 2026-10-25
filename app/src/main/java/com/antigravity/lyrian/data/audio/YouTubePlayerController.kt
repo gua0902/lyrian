@@ -30,6 +30,8 @@ data class PlayerState(
     val embedBlocked: Boolean = false,
     /** 影片的長寬比（寬 / 高）；還沒拿到時為 null。 */
     val videoAspectRatio: Float? = null,
+    /** 播放器回報「播完了」（HTMLMediaElement 的 `ended`）。 */
+    val ended: Boolean = false,
 )
 
 /**
@@ -75,6 +77,22 @@ class YouTubePlayerController @Inject constructor() {
 
     /** 目前音量（0–100），淡入淡出時以它為起點。 */
     private var currentVolume = 100
+
+    /**
+     * 漸層音量的世代號。
+     *
+     * 每次開始新的漸層就 +1，舊的迴圈一看到號碼變了立刻停手——
+     * 這就是「漸出與漸入不會互相覆蓋」的實作。
+     */
+    private var rampToken = 0
+
+    /**
+     * 換版本後要接續的播放位置（毫秒）。
+     *
+     * 換源時把記錄的時間帶進來；等播放器回報**真實時長**之後才做校正
+     * （新影片比記錄的時間短 → 停在時長前 1 秒，而不是歸零）。
+     */
+    private var pendingResumeMs: Long? = null
 
     /** 使用者剛剛拖過進度條：下一次回報的倒退是合理的。 */
     private var seekPending = false
@@ -192,6 +210,8 @@ class YouTubePlayerController @Inject constructor() {
         seekPending = true
         tickLogs = 0
         videoReadyHandled = false
+        // 不是從 0 開始才需要校正；從 0 開始就不用管
+        pendingResumeMs = startAtMs.takeIf { it > 0 }
         _state.value = PlayerState(positionMs = startAtMs)
 
         val start = if (startAtMs > 0) "&start=${startAtMs / 1000}" else ""
@@ -269,17 +289,38 @@ class YouTubePlayerController @Inject constructor() {
     /** 音量淡出（0–100）。 */
     suspend fun fadeOut(durationMs: Long = FADE_MS) = rampVolume(from = null, to = 0, durationMs)
 
-    /** 音量淡入，回到滿音量。 */
+    /** 音量淡入，從 0 回到滿音量。 */
     suspend fun fadeIn(durationMs: Long = FADE_MS) = rampVolume(from = 0, to = 100, durationMs)
 
+    /**
+     * 立刻設定音量（不漸層）。
+     *
+     * 用在「補答後恢復播放」的第一步：**先歸零才 play()**，
+     * 然後才交給 [fadeIn] 從 0 拉上來——否則會有一聲滿音量的破口。
+     */
+    fun setVolumePercent(percent: Int) {
+        currentVolume = percent.coerceIn(0, 100)
+        rampToken++
+        setVolume(currentVolume)
+    }
+
+    /**
+     * 音量漸層的唯一實作（漸出／漸入共用）。
+     *
+     * `rampToken`：每一次新的漸層都會讓舊的**自動停手**。若不做這件事，
+     * 一邊漸出（暫停）一邊漸入（補答）就會互相覆蓋，最後音量停在半空中。
+     */
     private suspend fun rampVolume(from: Int?, to: Int, durationMs: Long) {
+        val token = ++rampToken
         val start = from ?: currentVolume
         for (step in 0..FADE_STEPS) {
+            if (token != rampToken) return
             val fraction = step.toFloat() / FADE_STEPS
             currentVolume = start + ((to - start) * fraction).toInt()
             setVolume(currentVolume)
             delay((durationMs / FADE_STEPS).coerceAtLeast(1L))
         }
+        if (token != rampToken) return
         currentVolume = to
         setVolume(to)
     }
@@ -302,6 +343,8 @@ class YouTubePlayerController @Inject constructor() {
         pendingLoad = null
         lastPositionMs = 0L
         videoReadyHandled = false
+        pendingResumeMs = null
+        rampToken++          // 任何進行中的音量漸層立刻停手
         _state.value = PlayerState()
         evaluateCommand("stop") { """
             (function(){
@@ -462,7 +505,8 @@ class YouTubePlayerController @Inject constructor() {
                   v.paused ? 2 : 1,
                   v.volume,
                   v.muted ? 1 : 0,
-                  v.readyState
+                  v.readyState,
+                  v.ended ? 1 : 0
                 );
               }, 100);
 
@@ -546,7 +590,7 @@ class YouTubePlayerController @Inject constructor() {
      * **單調夾制**：位置突然倒退（廣告開始、或播放器重置）時忽略，
      * 讓歌詞時間軸停在原處。使用者自己拖曳時 [seekPending] 會放行。
      */
-    private fun handleTick(positionMs: Long, durationMs: Long?, state: Int) {
+    private fun handleTick(positionMs: Long, durationMs: Long?, state: Int, ended: Boolean = false) {
         val sanitized = positionMs.coerceAtLeast(0L)
 
         if (!seekPending && sanitized < lastPositionMs - REWIND_TOLERANCE_MS) {
@@ -554,6 +598,7 @@ class YouTubePlayerController @Inject constructor() {
             _state.value = _state.value.copy(
                 isPlaying = state == STATE_PLAYING,
                 isBuffering = state == STATE_BUFFERING,
+                ended = ended,
             )
             return
         }
@@ -571,12 +616,28 @@ class YouTubePlayerController @Inject constructor() {
             positionMs = sanitized,
             durationMs = durationMs?.takeIf { it > 0 } ?: _state.value.durationMs,
             error = null,
+            ended = ended,
         )
+
+        // ---- 換版本的位置校正（擁有者指定）----
+        // 新影片時長比記錄的時間短 → 停在「時長 - 1 秒」，不要歸零。
+        val resume = pendingResumeMs
+        val duration = durationMs?.takeIf { it > 0 }
+        if (resume != null && duration != null) {
+            pendingResumeMs = null
+            val target = if (resume > duration - RESUME_TAIL_MARGIN_MS) {
+                (duration - RESUME_TAIL_MARGIN_MS).coerceAtLeast(0L)
+            } else {
+                resume
+            }
+            log("換版本接續：記錄 ${resume}ms、新時長 ${duration}ms → seek ${target}ms")
+            seekTo(target)
+        }
 
         if (tickLogs < MAX_TICK_LOGS) {
             tickLogs++
             log("tick #$tickLogs：getCurrentTime=${js("%.2f", sanitized / 1000.0)}s " +
-                "duration=${js("%.1f", (durationMs ?: 0) / 1000.0)}s state=$state")
+                "duration=${js("%.1f", (durationMs ?: 0) / 1000.0)}s state=$state ended=$ended")
         }
     }
 
@@ -641,6 +702,7 @@ class YouTubePlayerController @Inject constructor() {
             volume: Double,
             muted: Int,
             readyState: Int,
+            ended: Int,
         ) {
             if (muted == 1 && !triedUnmute) {
                 triedUnmute = true
@@ -654,6 +716,7 @@ class YouTubePlayerController @Inject constructor() {
                 positionMs = (positionSeconds * 1000).toLong(),
                 durationMs = if (durationSeconds > 0) (durationSeconds * 1000).toLong() else null,
                 state = state,
+                ended = ended == 1,
             )
         }
 
@@ -754,6 +817,9 @@ class YouTubePlayerController @Inject constructor() {
 
         /** 位置「倒退」多少毫秒以上才視為異常（廣告／重置）。 */
         const val REWIND_TOLERANCE_MS = 1_500L
+
+        /** 換版本接續時，最多只能停在「新影片時長 - 這個值」。 */
+        const val RESUME_TAIL_MARGIN_MS = 1_000L
 
         /** 位置回報只印前幾筆，避免 log 被灌爆。 */
         const val MAX_TICK_LOGS = 5

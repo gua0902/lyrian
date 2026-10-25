@@ -134,3 +134,19 @@ dependencies {
     debugImplementation(libs.androidx.compose.ui.tooling)
     debugImplementation(libs.androidx.compose.ui.test.manifest)
 }
+
+/**
+ * 單元測試的 stdout 預設不會顯示，但 `BlankReportTest` 的產出**就是**一份報表
+ * （每首歌挖了哪些字、等級、來源、詞頻）。
+ *
+ * 想看那份報表：
+ * ```
+ * gradlew :app:testDebugUnitTest --tests "*BlankReportTest*"
+ * ```
+ * 其餘測試不會印東西，所以打開它沒有副作用。
+ */
+tasks.withType<Test>().configureEach {
+    testLogging {
+        showStandardStreams = true
+    }
+}

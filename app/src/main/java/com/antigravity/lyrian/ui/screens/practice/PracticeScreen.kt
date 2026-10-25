@@ -1,14 +1,19 @@
 package com.antigravity.lyrian.ui.screens.practice
 
 import androidx.compose.animation.animateColorAsState
+import androidx.compose.animation.core.LinearEasing
+import androidx.compose.animation.core.RepeatMode
+import androidx.compose.animation.core.animateFloat
 import androidx.compose.animation.core.animateFloatAsState
+import androidx.compose.animation.core.infiniteRepeatable
+import androidx.compose.animation.core.rememberInfiniteTransition
+import androidx.compose.animation.core.tween
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
-import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
@@ -18,6 +23,7 @@ import androidx.compose.foundation.layout.aspectRatio
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.statusBars
@@ -27,6 +33,7 @@ import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyListState
 import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.lazy.rememberLazyListState
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
@@ -54,12 +61,15 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.blur
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.unit.IntOffset
 import androidx.compose.foundation.layout.width
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.graphicsLayer
+import kotlin.math.roundToInt
+import kotlin.math.sin
 import androidx.compose.ui.hapticfeedback.HapticFeedbackType
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
@@ -92,6 +102,35 @@ private const val WRONG_ANSWER_DELAY_MS = 900L
 
 /** 答對後的停頓：短一些，維持流暢的節奏。 */
 private const val CORRECT_ANSWER_DELAY_MS = 450L
+
+// ---------- 開場三點動畫（修正 1）----------
+
+/** 開場閘門的淡入／淡出時長（擁有者指定 200ms）。 */
+private const val GATE_FADE_MS = 200
+
+/** 圓點數量（擁有者指定 3 顆）。 */
+private const val DOT_COUNT = 3
+
+/** 圓點直徑（8dp）、間距（6dp）、上下起伏（6dp）。 */
+private val DOT_SIZE = 8.dp
+private val DOT_GAP = 6.dp
+private val DOT_RISE = 6.dp
+
+/**
+ * 一輪動畫的週期（擁有者指定「較慢且放鬆」的 3.0 秒）。
+ *
+ * 三顆圓點各錯開 1/3 週期，形成「前一顆還在上升、下一顆就接上」的波浪感。
+ */
+private const val DOT_PERIOD_MS = 3_000
+
+/**
+ * 歌詞列表的底部內距。
+ *
+ * 舊版用 `bottom = maxHeight`（整個視窗高）讓最後幾句也能捲到頂端，
+ * 結果滾到底時最後一句下方留了一大片空白。擁有者要求「不得超過 32dp」，
+ * 所以固定 32dp——代價是最後幾句無法再往上捲，這是刻意的取捨。
+ */
+private val LYRICS_BOTTOM_PADDING = 32.dp
 
 /**
  * 當前句強調色的淡入時間。
@@ -236,6 +275,7 @@ fun PracticeScreen(
                 onSwitchVersion = viewModel::onSwitchVersion,
                 onAdjustOffset = viewModel::onAdjustOffset,
                 onResetOffset = viewModel::onResetOffset,
+                onRetryEntry = viewModel::retryEntry,
                 modifier = Modifier.padding(innerPadding),
             )
         }
@@ -255,6 +295,7 @@ private fun PracticeContent(
     onSwitchVersion: () -> Unit,
     onAdjustOffset: (Long) -> Unit,
     onResetOffset: () -> Unit,
+    onRetryEntry: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
     val haptics = LocalHapticFeedback.current
@@ -265,8 +306,27 @@ private fun PracticeContent(
     // 取不到（無封面／純灰階）時退回 M3 的 primary。
     val accent = rememberPlaybackAccent(state.coverUrl) ?: MaterialTheme.colorScheme.primary
 
-    // 歌曲驅動時跟著「正在唱的那句」；沒有音源時退回作答進度
-    val targetLineIndex = state.singingLineIndex ?: currentLineIndex
+    // 歌曲驅動時跟著「正在唱的那句」；沒有音源時退回作答進度。
+    // 開場期間給 -1：擁有者要求「豆豆顯示期間不預先定位歌詞行」——
+    // -1 不在歌詞索引內，LyricsViewport 就不會捲動，也不會標記當前句。
+    val targetLineIndex = if (state.entryGate == EntryGate.READY) {
+        state.singingLineIndex ?: currentLineIndex
+    } else {
+        -1
+    }
+
+    // ---- 修正 1：開場閘門的淡入淡出（200ms）----
+    val gateReady = state.entryGate == EntryGate.READY
+    val contentAlpha by animateFloatAsState(
+        targetValue = if (gateReady) 1f else 0f,
+        animationSpec = tween(GATE_FADE_MS),
+        label = "gateContent",
+    )
+    val dotsAlpha by animateFloatAsState(
+        targetValue = if (state.entryGate == EntryGate.LOADING) 1f else 0f,
+        animationSpec = tween(GATE_FADE_MS),
+        label = "gateDots",
+    )
 
     // 答完自動前進（不分對錯）；依對錯給不同延遲。
     // **歌曲驅動時不自動前進**——題目由播放時間軸決定，硬跳會跟歌曲打架。
@@ -325,27 +385,121 @@ private fun PracticeContent(
             )
 
             Box(modifier = Modifier.weight(1f).fillMaxWidth()) {
-                LyricsViewport(
-                    lines = state.lines,
-                    questions = state.questions,
-                    targetLineIndex = targetLineIndex,
-                    selections = state.selections,
-                    listState = listState,
-                )
+                // 未就緒時歌詞完全透明（但仍然先配置好，避免就緒瞬間版面跳動）
+                Box(
+                    modifier = Modifier
+                        .fillMaxSize()
+                        .graphicsLayer { alpha = contentAlpha },
+                ) {
+                    LyricsViewport(
+                        lines = state.lines,
+                        questions = state.questions,
+                        targetLineIndex = targetLineIndex,
+                        selections = state.selections,
+                        listState = listState,
+                    )
+                }
+
+                // 三點載入動畫：位於第一句歌詞上方、與歌詞一樣靠左對齊
+                if (dotsAlpha > 0f) {
+                    LoadingDots(
+                        alpha = dotsAlpha,
+                        modifier = Modifier
+                            .align(Alignment.TopStart)
+                            .padding(start = 20.dp, top = 6.dp),
+                    )
+                }
+
+                // 載入失敗：停止動畫，給重試按鈕（不得一直轉下去）
+                if (state.entryGate == EntryGate.FAILED) {
+                    LoadingFailedBlock(
+                        onRetry = onRetryEntry,
+                        modifier = Modifier
+                            .align(Alignment.TopStart)
+                            .padding(start = 20.dp, top = 6.dp),
+                    )
+                }
             }
 
-            OptionGrid(
-                options = state.options,
-                answer = state.currentQuestion?.answer,
-                record = state.currentRecord,
-                onSelect = onSelectOption,
-            )
+            // 開場期間**不顯示任何挖空選項**（擁有者指定）
+            if (gateReady) {
+                OptionGrid(
+                    options = state.options,
+                    answer = state.currentQuestion?.answer,
+                    record = state.currentRecord,
+                    onSelect = onSelectOption,
+                )
+            }
 
             BottomStats(
                 current = state.activeBlankIndex + 1,
                 total = state.total,
                 percent = state.percent,
             )
+        }
+    }
+}
+
+/**
+ * 三點跳動的載入動畫（修正 1）。
+ *
+ * 規格（擁有者指定）：
+ * ```
+ * 3 顆圓點、直徑 8dp、間距 6dp、顏色與歌詞相同
+ * 上下跳動為簡諧運動（sin 曲線，起伏平滑）
+ * 整體週期 3.0 秒；三顆各錯開 1/3 週期 → 波浪交錯
+ * ```
+ * `sin` 本身就是簡諧運動的定義，配合線性推進的相位，不需要額外 easing。
+ */
+@Composable
+private fun LoadingDots(alpha: Float, modifier: Modifier = Modifier) {
+    val transition = rememberInfiniteTransition(label = "loadingDots")
+    val phase by transition.animateFloat(
+        initialValue = 0f,
+        targetValue = 1f,
+        animationSpec = infiniteRepeatable(
+            animation = tween(durationMillis = DOT_PERIOD_MS, easing = LinearEasing),
+            repeatMode = RepeatMode.Restart,
+        ),
+        label = "dotPhase",
+    )
+
+    val risePx = with(LocalDensity.current) { DOT_RISE.toPx() }
+
+    Row(
+        modifier = modifier,
+        horizontalArrangement = Arrangement.spacedBy(DOT_GAP),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        repeat(DOT_COUNT) { index ->
+            val shifted = (phase + index.toFloat() / DOT_COUNT) % 1f
+            // -1..1 → 0..1；sin 讓起步與收尾都平滑（不會有硬轉折）
+            val wave = sin(shifted * 2.0 * Math.PI).toFloat()
+            val rise = risePx * ((wave + 1f) / 2f)
+
+            Box(
+                modifier = Modifier
+                    .offset { IntOffset(0, -rise.roundToInt()) }
+                    .size(DOT_SIZE)
+                    .clip(CircleShape)
+                    .background(Color.White.copy(alpha = alpha)),
+            )
+        }
+    }
+}
+
+/** 開場失敗：停止動畫，顯示「載入失敗」與重試（不得一直轉下去）。 */
+@Composable
+private fun LoadingFailedBlock(onRetry: () -> Unit, modifier: Modifier = Modifier) {
+    Column(modifier = modifier) {
+        Text(
+            text = stringResource(R.string.practice_load_failed),
+            style = MaterialTheme.typography.titleSmall,
+            color = ON_IMAGE_PRIMARY,
+        )
+        Spacer(Modifier.height(8.dp))
+        Button(onClick = onRetry) {
+            Text(stringResource(R.string.practice_retry))
         }
     }
 }
@@ -856,10 +1010,9 @@ private fun LyricsViewport(
         questions.associate { it.lineIndex to it.blankIndex }
     }
 
-    BoxWithConstraints(modifier = Modifier.fillMaxSize()) {
-        // 上下留白：頂端 0（第一行就貼齊歌詞區上緣）、底部留一個視窗高，
-        // 讓最後幾行也能被捲到頂端。
-        val bottomPadding = maxHeight
+    Box(modifier = Modifier.fillMaxSize()) {
+        // 底部內距只留 LYRICS_BOTTOM_PADDING（32dp）：滾到底時最後一句與選項區
+        // 之間不會再出現一整片空白（舊版用 maxHeight）。
         val peekPx = with(LocalDensity.current) { PREVIOUS_LINE_PEEK.roundToPx() }
 
         LaunchedEffect(targetLineIndex) {
@@ -877,7 +1030,7 @@ private fun LyricsViewport(
             contentPadding = PaddingValues(
                 start = 20.dp,
                 end = 20.dp,
-                bottom = bottomPadding,
+                bottom = LYRICS_BOTTOM_PADDING,
             ),
             verticalArrangement = Arrangement.spacedBy(LYRIC_LINE_SPACING),
         ) {

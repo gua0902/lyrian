@@ -1748,3 +1748,140 @@ private val checkedLines = mutableSetOf<Int>()       // ← 宣告在 init 之�
 
 - 182 個單元測試全過、`assembleDebug` BUILD SUCCESSFUL
 - 閃退**尚未實機驗證**（無裝置），但成因是確定的初始化順序問題
+## TASK-21：開場三點動畫、漸入、底部空白、換源接續、播完才結算、四層等級
+
+### 1. 進入練習頁的等待狀態
+
+舊版一進頁就把畫面定位到第一個挖空句、要求作答——音訊根本還沒開始。
+
+- 新增 `EntryGate { LOADING, READY, FAILED }`。`applySource` 建完題目就
+  `startEntry()`：立刻解析音源，並啟動 **15 秒**逾時。
+- 放行條件（兩者皆滿足）：`currentTime > 0` 且位置進到第一句的時間範圍
+  （沒有時間軸的歌詞只要求前者）。
+- 三點動畫：3 顆 8dp 圓點、間距 6dp、白色（與歌詞同色）、**簡諧運動**
+  （`sin` 曲線）上下起伏、週期 3.0 秒、三顆各錯開 1/3 週期形成波浪。
+- 放行時圓點淡出 200ms、歌詞淡入 200ms（`animateFloatAsState`），不瞬間切換。
+- 豆豆期間：不端選項、交界檢查直接 return、歌詞 `targetLineIndex = -1` 不定位。
+- 失敗（找不到版本／播放器錯誤）或逾時 → 停止動畫，顯示「載入失敗」＋重試。
+
+### 2. 補上音量漸入
+
+舊版只有漸出，補答後 `play()` 直接滿音量。
+
+- `startFadeIn()`：**volume = 0 → play() → 0.5 秒線性升到 1.0**。
+- 控制器新增 `setVolumePercent()` 與 `rampToken`：每次新的漸層都會讓舊的停手，
+  漸出／漸入共用同一套邏輯，不會互相覆蓋。
+- 使用者按下暫停 → `stopFadeIn()` 立刻取消（0.5 秒內也算）。
+
+### 3. 歌詞列表底部空白
+
+`LyricsViewport` 的 `contentPadding.bottom` 原本是 `maxHeight`（整個視窗高），
+滾到底時最後一句下方一大片空白。改成固定 **32dp**（`LYRICS_BOTTOM_PADDING`）。
+代價是最後幾句無法再捲到頂端，這是擁有者指定的取捨。
+
+### 4. 換源保留播放位置
+
+- 換版本前記錄：`playbackPositionMs`、是否在等作答、當前歌詞行。
+- `playCandidate(index, resumeAtMs, autoPlay)`：位置帶進 `&start=`，
+  控制器再用 `pendingResumeMs` 在拿到**真實時長**後校正
+  （新影片較短 → 停在 `duration - 1s`，不歸零）。
+- 原本在等作答 → 保持暫停不自動播；原本在播 → 繼續播。
+- 不清 `selections`、不觸發完成。
+
+### 5. 結束條件改為歌曲播完
+
+- 新增 `songFinished`；`isComplete = 全部答完 && (songFinished || 沒有音源)`。
+- tick 迴圈偵測 `currentTime >= duration - 1s` 或播放器 `ended` → `onSongEnded()`。
+- 結束時若還有未答題目：**不跳頁**，回到第一個未答句等待補答。
+- 完全沒有音源時退回舊行為（答完即完成），否則永遠看不到結果頁。
+
+### 6. 四層等級來源（系統性）
+
+舊資料只有 CEFR + 「BCR 排名 ≤14k 才進表」，查不到的字雖然沒被排除，
+但**也沒有等級**（一律當 C2）；而 `respect` 這種高頻字被判 B1。
+
+新管線（`tools/build_assets.py`）：
+
+```
+1. CEFR（CEFR-J / Octanove）       j / o
+2. ECDICT 考試標籤                 t
+   zk A1 / gk A2 / cet4 B1 / cet6 B2 / ky B2
+   toefl,ielts B2（同時在 cet6 以上 → C1）/ gre C1
+   多個標籤取最低者
+3. BNC 排名分級                    b
+   1-2k A2 / 2-4k B1 / 4-8k B2 / 8-15k C1 / >15k C2
+4. 都沒有 → U（UNKNOWN）           u
+```
+
+- **詞頻校正**（永遠最後套用，只降不升）：rank < 2000 → 上限 A2；
+  rank < 5000 → 上限 B2→B1。`respect`（CEFR-J B1，rank 1476）→ **A2**。
+- `levels.tsv` 由 5 欄擴成 6 欄：`word level source bnc properNoun rawLevel`
+  （第 6 欄是校正前的等級，供報表驗證「最終 vs 原始」）。
+- 讀取端：`u` 列 → `level = null`（有這個字、沒有等級）；`WordLevel` 新增
+  `estimated` / `rawLevel` / `isUnlisted`。
+- 查找優先序：官方 CEFR > 考試標籤 > BNC 分級；同層「字面 → 原形 → 縮寫字幹」。
+  **原形的 CEFR 贏過字面的標籤**（`met` 仍是 A2、`healing` 跟著 `heal`）。
+- 縮寫字幹：`time's → time`、`husband's → husband`。沒有這一層，歌詞裡大量
+  縮寫會被當成「四層都查不到」而**排到最前面被挖**（實測第一版就是這樣）。
+- 挖空排序：UNKNOWN 在同一難度層內**排最前**（擁有者指定）。
+- 結果頁延伸詞彙排除專有名詞（`California` 不該出現在「值得學的字」裡）。
+
+### 產生的資料集（實際輸出，非估算）
+
+```
+dict entries      : 31792
+level rows        : 47064  (UNKNOWN 0)
+lemma rows        : 42864
+levels.tsv        :   1115.9 KB   (舊 618.0 KB)
+lemma.tsv         :    738.5 KB   (舊 538.8 KB)
+freq.tsv          :     13.9 KB
+dict/*.json       :   3978.9 KB   (舊 3678.2 KB)
+TOTAL             :      5.71 MB  (舊 4.71 MB)
+
+== level sources ==
+  j CEFR-J            6864   14.6%
+  o Octanove C1/C2    1815    3.9%
+  t 考試標籤            8124   17.3%
+  b 詞頻推估           30261   64.3%
+  u 未收錄                 0    0.0%
+  frequency-capped  : 1739 words
+  level distribution: A1=1114 A2=2230 B1=3419 B2=4581 C1=9119 C2=26601 U=0
+```
+
+**UNKNOWN = 0 的原因**：我們的字表本身是「有資料才算」，所以「是實詞但四層都沒有」
+在這份資料集裡不存在；真正查不到的詞（例如歌詞裡的 `cran`）在執行期才會出現，
+讀取端一樣把它當 UNKNOWN（不排除、最優先）。
+
+### 三首歌報表（`build/reports/blank_report.txt`，由測試實際產生）
+
+| 歌 | 題數（上限 40） | 上限 5 | 上限 10 | 延伸詞彙 |
+|---|---|---|---|---|
+| Hello — Adele | 23 | 4 | 9 | 1（heal） |
+| expectations — Olivia Rodrigo | 31 | 5 | 10 | 4（cran/vega/vodka/mini） |
+| Yellow — Coldplay | 18 | 5 | 9 | 0 |
+
+點名 7 字的判定（最終／原始／來源／BNC／專名）：
+
+```
+piercing      C1 / C1  考試標籤   14689  否
+respect       A2 / B1  CEFR-J     1476   否
+healing       B1 / B1  CEFR-J     6591   否
+stipulations  C2 / C2  Octanove   14812  否
+california    B1 / B1  詞頻推估    3311   是
+years         A1 / A1  CEFR-J      56    否
+everything    A1 / A1  CEFR-J      538   否
+```
+
+### 測試
+
+- 203 個單元測試全過（新增 `LevelResolutionTest` 10、`LevelAssetTest` 10，
+  以及 `LineBoundaryTest`、`AccentColorTest`）
+- `python tools/test_build_assets.py` 3/3（標籤映射、BNC 分級、詞頻校正）
+- `app/build.gradle.kts` 打開測試 stdout，報表會印出來並寫成
+  `build/reports/blank_report.txt`
+
+### 未完成／限制
+
+- **截圖無法提供**（無裝置）：修正 1 的載入狀態、修正 3 的滾到底部都要實機截圖。
+- `piercing`、`respect` **不存在於這三首歌的歌詞**（已逐字掃描 fixtures），
+  所以「出現在題目或延伸詞彙」無法用這三首歌驗證；等級判定本身已驗證。

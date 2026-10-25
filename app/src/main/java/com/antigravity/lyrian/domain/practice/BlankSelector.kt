@@ -1,4 +1,4 @@
-﻿package com.antigravity.lyrian.domain.practice
+package com.antigravity.lyrian.domain.practice
 
 import com.antigravity.lyrian.data.lang.WordLevel
 import com.antigravity.lyrian.data.lang.WordLevelSource
@@ -286,6 +286,14 @@ object BlankSelector {
         val tierA = if (difficulty.isPreferred(a.level.treatAsLevel)) 0 else 1
         val tierB = if (difficulty.isPreferred(b.level.treatAsLevel)) 0 else 1
         if (tierA != tierB) return@Comparator tierA - tierB
+
+        // ---- UNKNOWN 最優先（擁有者指定）----
+        //
+        // 四層都查不到等級的字（`piercing` 這種生僻實詞）**不可以被忽略**：
+        // 它通常正是最該練的字。所以在同一個難度層裡，未知字排在所有已知字前面。
+        if (a.level.isUnlisted != b.level.isUnlisted) {
+            return@Comparator if (a.level.isUnlisted) -1 else 1
+        }
 
         val byLevel = b.level.treatAsLevel.ordinal - a.level.treatAsLevel.ordinal
         if (byLevel != 0) return@Comparator byLevel

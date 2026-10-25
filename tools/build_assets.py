@@ -9,10 +9,22 @@ Inputs (downloaded by ``tools/fetch_data.py`` / ``tools/fetch_ecdict.py``)::
 
 Outputs (committed, consumed by the app at runtime)::
 
-    app/src/main/assets/data/levels.tsv   word<TAB>level<TAB>source-code
+    app/src/main/assets/data/levels.tsv   word<TAB>level<TAB>source<TAB>bnc<TAB>properNoun
     app/src/main/assets/data/lemma.tsv    inflection<TAB>lemma
     app/src/main/assets/data/freq.tsv     the 2000 most frequent word forms (BNC)
     app/src/main/assets/data/dict/*.json  dictionary shards keyed by first letter
+
+Level sources, highest priority first (see ``resolve`` below)::
+
+    j  CEFR-J (A1-B2)            authoritative
+    o  Octanove C1/C2            authoritative
+    t  ECDICT exam tags          zk A1 / gk A2 / cet4 B1 / cet6 B2 / ky B2 /
+                                 toefl,ielts B2 (C1 if also cet6+) / gre C1
+    b  BNC rank bands            1-2k A2, 2-4k B1, 4-8k B2, 8-15k C1, >15k C2
+    u  UNKNOWN                   no data at all -- still usable, ranked first
+
+A final "frequency cap" (rank < 2000 -> A2, rank < 5000 -> B1) is applied last
+and can only *lower* a level; it is what keeps `respect` from being B1.
 
 All Chinese glosses are converted to Traditional here, at build time, so the app
 never needs an OpenCC runtime (and never downloads a dictionary).
@@ -45,7 +57,11 @@ BR_RE = re.compile(r"\\n")
 
 # How many BNC-ranked words to pull from ECDICT into the dictionary shards.
 # Tuned so the whole asset folder stays well under the 5 MB budget.
-BNC_LIMIT = 14000
+#
+# 2026-10: raised 14,000 -> 30,000. The level table now bands the whole BNC tail
+# (see BNC_BANDS), so a word can be C2 *and* have a dictionary entry; keeping the
+# old cap would have left those words blankable but untranslatable.
+BNC_LIMIT = 30000
 
 LEVEL_ORDER = ["A1", "A2", "B1", "B2", "C1", "C2"]
 LEVEL_RANK = {lv: i for i, lv in enumerate(LEVEL_ORDER)}
@@ -53,12 +69,115 @@ LEVEL_RANK = {lv: i for i, lv in enumerate(LEVEL_ORDER)}
 # Source codes, kept as one character to keep levels.tsv small.
 SRC_CEFRJ = "j"
 SRC_OCTANOVE = "o"
-SRC_FREQ = "f"
+SRC_TAG = "t"
+SRC_BNC = "b"
+SRC_UNKNOWN = "u"
+# 舊資產用過的代碼；讀取端仍認得，寫入端不再使用。
+SRC_FREQ_LEGACY = "f"
+
+# `levels.tsv` 的等級欄位用 `U` 表示「四層都查不到」。讀取端要把它當成
+# 「有這個字、但沒有等級」，而不是「沒有這個字」。
+UNKNOWN_LEVEL = "U"
+
 _SRC_LABEL = {
     SRC_CEFRJ: "CEFR-J",
     SRC_OCTANOVE: "Octanove C1/C2",
-    SRC_FREQ: "詞頻推估",
+    SRC_TAG: "考試標籤",
+    SRC_BNC: "詞頻推估",
+    SRC_UNKNOWN: "未收錄",
+    SRC_FREQ_LEGACY: "詞頻推估",
 }
+
+# ---------- 第 2 層：ECDICT 考試標籤 ----------
+#
+# ECDICT 的 `tag` 欄位是空白分隔的標籤集合（實測只有這 8 種）。
+# 一個詞常同時有多個標籤（`respect` = gk cet4 cet6 ky toefl），取**最低**者：
+# 只要它出現在任何一個較基礎的考試範圍裡，對學習者就不算難詞。
+TAG_LEVELS = {
+    "zk": "A1",      # 中考
+    "gk": "A2",      # 高考
+    "cet4": "B1",
+    "cet6": "B2",
+    "ky": "B2",      # 考研
+    "toefl": "B2",
+    "ielts": "B2",
+    "gre": "C1",
+}
+
+# ---------- 第 3 層：BNC 詞頻排名 ----------
+#
+# (排名上限, 等級)。第一筆符合的就用。
+BNC_BANDS = [
+    (2_000, "A2"),
+    (4_000, "B1"),
+    (8_000, "B2"),
+    (15_000, "C1"),
+]
+BNC_TAIL_LEVEL = "C2"
+
+# ---------- 詞頻校正 ----------
+#
+# 「越常見的字，等級不該越高」。實測 `respect` 在 CEFR-J 是 B1、在 ECDICT 拿
+# 五個考試標籤，但它的 BNC 排名是 1,476——一個 B1 的字不可能在高頻榜那麼前面。
+# 校正只降不升，而且永遠最後套用（可覆蓋前三層）。
+#
+# (排名上限, 等級上限)
+FREQUENCY_CAPS = [
+    (2_000, "A2"),
+    (5_000, "B1"),
+]
+
+
+def tag_level(raw_tag: str) -> str | None:
+    """把 ECDICT 的標籤集合映射成 CEFR 等級。
+
+    「多個標籤取最低者」只對**基礎標籤**（zk/gk/cet4）成立——它們代表
+    「這個字出現在某個較基礎的考試範圍」，只要命中一個就不算難詞。
+
+    `toefl` / `ielts` 的規則是「B2，若同時在 cet6 以上則取 C1」：
+    兩者同時出現代表兩個獨立訊號都指向「進階」，因此取 C1，
+    而不是被 cet6 的 B2 拉低（那會讓這條規則永遠失效）。
+    """
+    tags = {t for t in raw_tag.split() if t in TAG_LEVELS}
+    if not tags:
+        return None
+
+    basic = [TAG_LEVELS[t] for t in tags if t in ("zk", "gk", "cet4")]
+    upgraded = bool(tags & {"toefl", "ielts"}) and bool(tags & {"cet6", "gre"})
+
+    candidates = list(basic)
+    if upgraded:
+        candidates.append("C1")
+    if not candidates:
+        # 只有進階標籤（cet6 / ky / gre / toefl / ielts 單獨出現）
+        candidates = [TAG_LEVELS[t] for t in tags]
+
+    return min(candidates, key=LEVEL_RANK.__getitem__)
+
+
+def bnc_level(rank: int) -> str | None:
+    """BNC 排名 → 等級；沒有排名時回傳 None。"""
+    if rank <= 0:
+        return None
+    for limit, level in BNC_BANDS:
+        if rank <= limit:
+            return level
+    return BNC_TAIL_LEVEL
+
+
+def cap_by_frequency(level: str, rank: int) -> str:
+    """詞頻校正：常見詞的等級上限。
+
+    **只降不升**——`A1` 不會被拉高到 `A2`。`U`（未知）不參與校正：
+    一個查不到的詞我們連它常不常見都不知道。
+    """
+    if level == UNKNOWN_LEVEL or level not in LEVEL_RANK or rank <= 0:
+        return level
+    for limit, cap in FREQUENCY_CAPS:
+        if rank < limit:
+            return level if LEVEL_RANK[level] <= LEVEL_RANK[cap] else cap
+    return level
+
 
 
 def read_cefrj(path: str) -> dict[str, str]:
@@ -207,7 +326,8 @@ def read_ecdict(path: str):
                 continue
             bnc = (row.get("bnc") or "").strip()
             rank = int(bnc) if bnc.isdigit() else 0
-            yield word, row, translation, rank
+            tag = (row.get("tag") or "").strip()
+            yield word, row, translation, rank, tag
 
 
 POS_PREFIX_RE = re.compile(r"^([a-z]+\.)\s*(.*)$", re.S)
@@ -313,67 +433,82 @@ def main() -> int:
     def to_trad(text: str) -> str:
         return cc.convert(text) if CJK_RE.search(text) else text
 
-    # ---------- levels ----------
-    levels: dict[str, tuple[str, str]] = {}
-    for word, lv in cefrj.items():
-        levels[word] = (lv, SRC_CEFRJ)
-    for word, lv in octanove.items():
-        # CEFR-J is authoritative for A1-B2; Octanove only adds C1/C2 words.
-        levels.setdefault(word, (lv, SRC_OCTANOVE))
-
-    # 專有名詞：字典裡只有大寫形式（`California`）→ 挖空時永久排除
+    # ---------- levels：四層來源 ----------
+    #
+    # ```
+    # 1. CEFR（CEFR-J / Octanove）   最可信
+    # 2. ECDICT 考試標籤             zk/gk/cet4/cet6/ky/toefl/ielts/gre
+    # 3. BNC 詞頻排名               1-2k A2、2-4k B1、4-8k B2、8-15k C1、>15k C2
+    # 4. 都沒有 → UNKNOWN(U)        **不得排除**，排序時給最高優先級
+    # ```
+    # 最後再套一次「詞頻校正」（只降不升），它可覆蓋前三層。
     proper_nouns = read_casing(os.path.join(RAW, "ecdict.csv"))
     print(f"proper-noun-only  : {len(proper_nouns)}")
 
-    # ---------- dictionary rows ----------
-    #
-    # Two passes on purpose: the C1/C2 level of a word can only be derived from
-    # its frequency, and the dictionary entry has to carry that level. Building
-    # the shards first would leave every frequency-derived word with `l: ""`
-    # (that bug shipped once - see the samples in docs/DEVLOG.md).
-    candidates: dict[str, tuple[dict, str, int]] = {}
-    freq_rows: dict[str, int] = {}
+    tag_by_word: dict[str, str] = {}
+    bnc_by_word: dict[str, int] = {}
+    dict_rows: dict[str, tuple[dict, str, int]] = {}
 
-    for word, row, translation, rank in read_ecdict(os.path.join(RAW, "ecdict.csv")):
-        if word in candidates:
-            continue
-        if word not in levels and not (0 < rank <= limit):
-            continue
-        candidates[word] = (row, translation, rank)
+    for word, row, translation, rank, tag in read_ecdict(os.path.join(RAW, "ecdict.csv")):
+        if tag:
+            tag_by_word.setdefault(word, tag)
         if rank > 0:
-            freq_rows[word] = rank
+            bnc_by_word.setdefault(word, rank)
 
-    # ---------- frequency-derived C1/C2 for words CEFR-J never listed ----------
-    #
-    # The cut used to be 8,000: everything past it became C2. Measured on the real
-    # asset that dumped 18,194 words into C2, 9,400 of them between BNC 8,001 and
-    # 20,000 -- i.e. ordinary colloquial words like `blah` (10,986) sat in the same
-    # bucket as words nobody has ever said. C2 is the *rarest* band, so it should
-    # only hold the rarest tail; 8k-20k is "uncommon", which is C1.
-    derived = 0
-    for word, rank in freq_rows.items():
-        if word in levels:
+        # 只有「要進字典」的字才留整列（77 萬列全留會吃掉幾百 MB）
+        if word in dict_rows:
             continue
-        level = "C1" if rank <= 20_000 else "C2"
-        levels[word] = (level, SRC_FREQ)
-        derived += 1
+        if (word in cefrj) or (word in octanove) or tag or (0 < rank <= limit):
+            dict_rows[word] = (row, translation, rank)
+
+    level_words = set(cefrj) | set(octanove) | set(tag_by_word) | set(bnc_by_word)
+
+    levels: dict[str, tuple[str, str]] = {}
+    raw_levels: dict[str, str] = {}
+    source_counts: dict[str, int] = defaultdict(int)
+    capped = 0
+    for word in level_words:
+        if word in cefrj:
+            level, source = cefrj[word], SRC_CEFRJ
+        elif word in octanove:
+            level, source = octanove[word], SRC_OCTANOVE
+        else:
+            level, source = "", ""
+            raw_tag = tag_by_word.get(word)
+            if raw_tag:
+                tagged = tag_level(raw_tag)
+                if tagged:
+                    level, source = tagged, SRC_TAG
+            if not level:
+                banded = bnc_level(bnc_by_word.get(word, 0))
+                if banded:
+                    level, source = banded, SRC_BNC
+            if not level:
+                level, source = UNKNOWN_LEVEL, SRC_UNKNOWN
+
+        corrected = cap_by_frequency(level, bnc_by_word.get(word, 0))
+        if corrected != level:
+            capped += 1
+        levels[word] = (corrected, source)
+        raw_levels[word] = level
+        source_counts[source] += 1
 
     # ---------- dictionary shards ----------
     #
-    # Only *real* CEFR levels go into the shard (`l`). A frequency-derived level
-    # would make an inflected form look like a headword: `met` would then show
-    # up as a C2 word instead of "past tense of meet". Leaving `l` empty lets
-    # the app prefer the lemma's entry.
+    # Only *real* CEFR levels go into the shard (`l`). A tag/BNC level would make
+    # an inflected form look like a headword: `met` would then show up as a C2
+    # word instead of "past tense of meet". Leaving `l` empty lets the app prefer
+    # the lemma's entry.
     shards: dict[str, list[dict]] = defaultdict(list)
-    for word, (row, translation, _rank) in candidates.items():
+    for word, (row, translation, _rank) in dict_rows.items():
         level, origin = levels.get(word, ("", ""))
         shard_level = level if origin in (SRC_CEFRJ, SRC_OCTANOVE) else ""
         entry = build_entry(word, row, translation, shard_level, to_trad)
         shards[word[0]].append(entry)
-    seen = set(candidates)
+    seen = set(dict_rows)
 
     # ---------- top-2000 frequency list ----------
-    top = sorted(freq_rows.items(), key=lambda kv: kv[1])[:2000]
+    top = sorted(bnc_by_word.items(), key=lambda kv: kv[1])[:2000]
     top_words = [w for w, _ in top]
 
     os.makedirs(ASSETS, exist_ok=True)
@@ -390,8 +525,11 @@ def main() -> int:
     # 第四欄是 BNC 詞頻排名（0 = 未知）。挖空要用它排序：
     # 「同級取詞頻更低者」需要一個可比較的數字，不能只有「是否前 2000」的布林值。
     # 第五欄標記「字典裡只有大寫形式」的專有名詞（1 = 是）。
+    # 第六欄是**詞頻校正前**的等級——報表要能區分「原始等級」與「最終等級」，
+    # 這也是驗證 `respect` 真的從 B1 被壓到 A2 的唯一證據。
     level_lines = sorted(
-        f"{w}\t{lv}\t{src}\t{freq_rows.get(w, 0)}\t{1 if w in proper_nouns else 0}"
+        f"{w}\t{lv}\t{src}\t{bnc_by_word.get(w, 0)}\t{1 if w in proper_nouns else 0}"
+        f"\t{raw_levels.get(w, lv)}"
         for w, (lv, src) in levels.items()
     )
     size_levels = write("levels.tsv", "\n".join(level_lines) + "\n")
@@ -416,13 +554,28 @@ def main() -> int:
     entries = sum(len(v) for v in shards.values())
 
     print(f"\ndict entries      : {entries}")
-    print(f"level rows        : {len(level_lines)}  (freq-derived {derived})")
+    print(f"level rows        : {len(level_lines)}  (UNKNOWN {source_counts.get(SRC_UNKNOWN, 0)})")
     print(f"lemma rows        : {len(useful)}")
     print(f"levels.tsv        : {size_levels/1024:8.1f} KB")
     print(f"lemma.tsv         : {size_lemma/1024:8.1f} KB")
     print(f"freq.tsv          : {size_freq/1024:8.1f} KB")
     print(f"dict/*.json       : {size_dict/1024:8.1f} KB")
     print(f"TOTAL             : {total/1024/1024:8.2f} MB")
+
+    # ---------- 等級來源統計（擁有者要求的驗收報表） ----------
+    total_levels = max(len(levels), 1)
+    print("\n== level sources ==")
+    for code in (SRC_CEFRJ, SRC_OCTANOVE, SRC_TAG, SRC_BNC, SRC_UNKNOWN):
+        count = source_counts.get(code, 0)
+        print(f"  {code} {_SRC_LABEL[code]:14s} {count:7d}  {count * 100.0 / total_levels:5.1f}%")
+    print(f"  frequency-capped : {capped} words (respect 這類常見詞被壓到 A2/B1)")
+
+    level_dist: dict[str, int] = defaultdict(int)
+    for lv, _src in levels.values():
+        level_dist[lv] += 1
+    print("  level distribution: " + "  ".join(
+        f"{lv}={level_dist.get(lv, 0)}" for lv in LEVEL_ORDER + [UNKNOWN_LEVEL]
+    ))
     if args.stats:
         print("(--stats: nothing written)")
 
