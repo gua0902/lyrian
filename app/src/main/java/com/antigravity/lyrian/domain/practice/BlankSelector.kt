@@ -9,7 +9,8 @@ import com.antigravity.lyrian.domain.model.RejectedCandidate
 /**
  * 挖空難度（模組 C-4）。
  *
- * **只影響選詞優先級，不影響題數。** 題數由設定頁的滑桿決定（上限 40）。
+ * **難度決定「哪些字值得挖」，不決定題數。**
+ * 題數由 [BlankCountPolicy] 決定（下限 20、句子多時 0.6 倍）。
  */
 enum class BlankDifficulty(
     val label: String,
@@ -51,25 +52,25 @@ enum class BlankDifficulty(
 /**
  * 逐句選詞的挖空策略（模組 C）。
  *
- * ## 規則（擁有者指定，2026-10 重寫）
+ * ## 規則（擁有者指定，2026-10 重構）
  *
  * ```
  * 1. 以句為單位，每句最多一個空
  * 2. 候選池 = 該句所有實詞
  * 3. 硬性排除：功能詞（冠詞/介系詞/代名詞/連接詞/助動詞/數詞）、
  *              專有名詞、詞頻前 500 名
- * 4. 排序：難度優先 → CEFR 降序 → 詞頻升序（罕見優先）→ 長度降序
- * 5. 取排序第一個
- * 6. 只有「硬性排除後完全沒有候選」才不挖——**不得因為字都很常見就整句跳過**
+ * 4. 每個候選算學習價值分數（WordValue），每句只留最高的那一個
+ * 5. 題數由 BlankCountPolicy 決定（下限 20、句子多時 0.6 倍、上限 maxBlanks）
+ * 6. 先從「通過兩把鑰匙」的嚴格池分段取最佳；不足保量時用剩下的句子分段補齊
  * 7. 跨句 lemma 不重複（同一原形全曲只挖一次）
  * 8. 純感嘆詞（Oh / Yeah / La la）不挖
  * ```
  *
  * ## 與上一版的差別
  *
- * 上一版把「高頻詞」當成硬性排除，於是 Hello 有 42/48 句整句被跳過（那些句子的字
- * 全在前 2000 名內）。現在高頻只影響**排序**（罕見的優先），
- * 只有前 500 名才是硬性排除——這是擁有者明確的修正。
+ * 上一版「湊不到 5 題就少出」，Yellow 只有 3 題。現在保量下限 20：
+ * 嚴格池不夠時依分數往下補，補進來的句子會標記成 filler，
+ * 報表與結果頁都看得出來「哪幾題是為了湊數」。
  */
 internal fun isFunctionWord(category: CommonWordFilter.Category?): Boolean =
     category?.isFunctionWord() == true
@@ -89,11 +90,16 @@ object BlankSelector {
     const val MAX_BLANKS = 40
 
     /**
-     * 至少出幾題。
+     * 保量下限（擁有者 2026-10 核定）。
      *
-     * 新選詞會用地板分數過濾「不值得學的字」；若過濾到太少，逐段降低地板，
-     * 但**至少要湊到這個數字**（真的有候選的話），否則使用者會拿到空練習。
+     * 舊版是 5——「湊不到就少出」，於是 Yellow 只有 3 題。現在由
+     * [BlankCountPolicy] 統一決定，這裡保留常數是為了讓舊呼叫端能被編譯器
+     * 抓到（見 `@Deprecated` 訊息）。
      */
+    @Deprecated(
+        "改用 BlankCountPolicy.MIN_BLANKS（20）",
+        ReplaceWith("BlankCountPolicy.MIN_BLANKS"),
+    )
     const val MIN_BLANKS = 5
 
     /** 一個候選字。 */
@@ -104,9 +110,16 @@ object BlankSelector {
         val level: WordLevel,
         /** 學習價值分數（[WordValue]）；選句與排序都看它。 */
         val score: Int = 0,
+        /**
+         * 這首歌裡每次都是大寫（`Gave`、`Highs`）。
+         *
+         * 這種字**不能當保量補題**：挖一個句中被大寫的字，答案大小寫會有歧義，
+         * 而且九成是歌詞的強調寫法，不是詞彙。
+         */
+        val capitalizedOnly: Boolean = false,
     )
 
-    /** 一句的結果。 */
+    /** 這一句是不是「保量補題」（嚴格池不夠時才被抓進來）。 */
     data class Selection(
         val line: LyricLine,
         val chosen: Candidate?,
@@ -116,6 +129,8 @@ object BlankSelector {
         val skippedAsFiller: Boolean = false,
         /** 這一句所有合格候選（已依分數排序）；報表要列出「候選有哪些、各幾分」。 */
         val candidates: List<Candidate> = emptyList(),
+        /** 這題是為了湊到保量下限才選的（分數低於兩把鑰匙）。 */
+        val filler: Boolean = false,
     )
 
 
@@ -153,25 +168,24 @@ object BlankSelector {
         val scanned = lines.map { line ->
             scanLine(line, difficulty, language, casing, titleWords)
         }
+        val byIndex = scanned.associateBy { it.line.index }
         val eligible = scanned.filter { it.candidates.isNotEmpty() }
 
-        // 先決定要挖哪幾句（依分數、分段均勻），再逐句套用跨句去重。
-        // 順序很重要：若先去重再選句，去重會讓後段的歌詞大量落空，
-        // 整首歌的空就會全部擠在副歌之前。
-        val choice = chooseLines(eligible, difficulty, maxBlanks)
-        val chosenIndices = choice.indices
+        // 選句與跨句去重**在同一個迴圈裡**完成。
+        //
+        // 舊版先選句、再逐句去重，於是「這句的最佳字被前面挖過」的句子整句落空，
+        // 保量下限永遠達不到（Yellow 37 句只剩 11 題就是這樣來的）。
+        // 現在 `chooseLines` 在挑字的當下就檢查 lemma，並且會退而取該句的
+        // 次佳候選（同樣要通過兩把鑰匙）。
+        val target = BlankCountPolicy.target(eligible.size, maxBlanks)
+        val chosen = chooseLines(eligible, difficulty, target)
+        val usedLemmas = chosen.values.mapTo(HashSet()) { it.candidate.level.lemma }
 
-        val usedLemmas = HashSet<String>()
-        // member extension 放在這裡，lambda 裡才看得到
-        fun isFunctionWord(category: CommonWordFilter.Category?) =
-            category?.isFunctionWord() == true
-        val byIndex = scanned.associateBy { it.line.index }
-        val selections = mutableListOf<Selection>()
-
+        val selections = ArrayList<Selection>(lines.size)
         for (line in lines) {
-            val entry = byIndex[line.index] ?: continue
-            val candidates = entry.candidates
-            val rejected = entry.rejected
+            val entry = byIndex[line.index]
+            val candidates = entry?.candidates.orEmpty()
+            val rejected = entry?.rejected.orEmpty()
 
             if (candidates.isEmpty()) {
                 selections += Selection(
@@ -183,42 +197,37 @@ object BlankSelector {
                 continue
             }
 
-            if (line.index !in chosenIndices) {
+            val pick = chosen[line.index]
+            if (pick == null) {
+                // 說得出「為什麼這句沒挖」：全部候選的原形都已被別的句子用掉時
+                // 才是去重造成的；其餘是題數額度或分數不足（不硬掰原因）。
+                val allUsed = candidates.all { candidate ->
+                    candidate.level.lemma in usedLemmas
+                }
                 selections += Selection(
                     line = line,
                     chosen = null,
                     rejected = rejected,
+                    basis = if (allUsed) {
+                        "此句的候選原形都已被挖過（lemma 不重複）"
+                    } else {
+                        null
+                    },
                     candidates = candidates,
                 )
                 continue
             }
 
-            // 同一原形不重複；被前面的句子用掉時，退而求其次的那個字也要有價值，
-            // 否則會出現「這句的最佳字被用過 → 挖一個低分字」的漏洞
-            // 句內仍取分數最高的候選；被前面的句子用掉原形時，才退而求其次。
-            // （「哪幾句值得出題」已經由 chooseLines 的兩把鑰匙決定，這裡不再二次過濾，
-            //   否則重複字多的歌會整首只剩兩三題。）
-            val available = candidates.filter { it.level.lemma !in usedLemmas }
-            val picked = available.firstOrNull()
-
-            if (picked == null) {
-                selections += Selection(
-                    line = line,
-                    chosen = null,
-                    rejected = rejected,
-                    basis = "此句的候選都已被前面的句子挖過（lemma 不重複）",
-                    candidates = candidates,
-                )
-                continue
-            }
-
-            usedLemmas += picked.level.lemma
+            // 同一原形不重複（已在 chooseLines 保證）；這裡只負責說明依據
+            val others = candidates.filter { it !== pick.candidate }
+            val basis = describeBasis(pick.candidate, others, difficulty)
             selections += Selection(
                 line = line,
-                chosen = picked,
+                chosen = pick.candidate,
                 rejected = rejected,
-                basis = describeBasis(picked, available.drop(1), difficulty),
+                basis = if (pick.filler) "保量補題：$basis" else basis,
                 candidates = candidates,
+                filler = pick.filler,
             )
         }
 
@@ -296,6 +305,7 @@ object BlankSelector {
                 end = match.range.last + 1,
                 level = levelInfo,
                 score = score,
+                capitalizedOnly = casing.isCapitalizedOnly(token),
             )
         }
 
@@ -359,17 +369,7 @@ object BlankSelector {
     }
 
     /**
-     * 依分數挑句子（新選詞系統的核心）。
-     *
-     * ## 為什麼不是「均勻抽樣句子」
-     *
-     * 舊版（`pickEvenly`）只按**行號**均勻取樣：取到的句子若只有 A1 字，
-     * 還是會挖那個 A1 字。分數過濾 + 分段取最佳之後：
-     * ```
-     * 1. 先用地板分數把「不值得學的句子」濾掉
-     * 2. 把剩下的句子切成 K 段（K = 題數），每段取分數最高的那一句
-     * ```
-     * 分散度與舊版相同（不會擠在副歌），但每一題都是該區段裡最值得學的字。
+     * 這次難度的分數門檻（所有候選都要過）。
      *
      * ## 兩把鑰匙：等級要夠、或分數要很高
      *
@@ -380,15 +380,7 @@ object BlankSelector {
      * ```
      * 「A2 但很罕見」的字（`beg` 70、`apart` 74）還能進來；
      * 「A1 但很普通」的字（`sorry` 51、`lovely` 51）就不行。
-     *
-     * ## 地板太高怎麼辦
-     *
-     * 若嚴格過濾後不足 [MIN_BLANKS] 句，依分數由高到低放寬（仍然依分數排序），
-     * 直到湊到 [MIN_BLANKS]——寧可少出題，也不要整頁都是 `sorry`。
      */
-    private data class Choice(val indices: Set<Int>)
-
-    /** 這次難度的分數門檻（所有候選都要過）。 */
     private fun scoreCutFor(difficulty: BlankDifficulty): Int = when (difficulty) {
         BlankDifficulty.BASIC -> 35
         BlankDifficulty.ADVANCED -> 50
@@ -410,36 +402,121 @@ object BlankSelector {
         return levelOk || candidate.score >= hardCutFor(difficulty)
     }
 
+    /**
+     * 選句＋選字（**同一個迴圈**，因為 lemma 去重會影響「哪幾句還選得到字」）。
+     *
+     * ```
+     * target = BlankCountPolicy.target(可用句數, maxBlanks)
+     * 1. 嚴格池：每段依分數由高到低，取第一個「原形還沒被用過」的字
+     * 2. 不足 target：剩下的句子再分段，允許低分（filler），直到達標或沒進展
+     * ```
+     *
+     * @return 行號 → 選中的字（含 filler 標記）
+     */
     private fun chooseLines(
         eligible: List<Scan>,
         difficulty: BlankDifficulty,
-        maxBlanks: Int,
-    ): Choice {
-        if (maxBlanks <= 0 || eligible.isEmpty()) return Choice(emptySet())
+        target: Int,
+    ): Map<Int, Pick> {
+        if (target <= 0 || eligible.isEmpty()) return emptyMap()
 
-        val best = eligible.associate { scan ->
-            scan.line.index to scan.candidates.first()
+        val byIndex = eligible.associateBy { it.line.index }
+        val bestScore = eligible.associate { scan ->
+            scan.line.index to (scan.candidates.firstOrNull()?.score ?: 0)
         }
-        val bestScore = best.mapValues { it.value.score }
+        val usedLemmas = HashSet<String>(target * 2)
+        val chosen = LinkedHashMap<Int, Pick>(target)
 
-        val strict = eligible.filter { isValuable(best.getValue(it.line.index), difficulty) }
-        val pool = strict.toMutableList()
+        /** 這句還有沒有「原形沒被用過」的字；有的話就挖它。 */
+        fun take(lineIndex: Int, allowFiller: Boolean): Boolean {
+            val scan = byIndex[lineIndex] ?: return false
+            val candidate = scan.candidates.firstOrNull { c ->
+                c.level.lemma !in usedLemmas &&
+                    (allowFiller || isValuable(c, difficulty)) &&
+                    (!allowFiller || c.isAcceptableFiller())
+            } ?: return false
+            usedLemmas += candidate.level.lemma
+            chosen[lineIndex] = Pick(
+                candidate = candidate,
+                filler = !isValuable(candidate, difficulty),
+            )
+            return true
+        }
 
-        // 嚴格過濾不足 MIN_BLANKS → 依分數放寬（低分的句子只補到剛好夠用）
-        val wanted = minOf(MIN_BLANKS, eligible.size)
-        if (pool.size < wanted) {
-            val pickedLines = pool.map { it.line.index }.toSet()
-            eligible
-                .filter { it.line.index !in pickedLines }
-                .sortedByDescending { bestScore[it.line.index] ?: 0 }
-                .forEach { scan ->
-                    if (pool.size >= wanted) return@forEach
-                    pool += scan
+        // 1) 嚴格池（這句的最佳字通過兩把鑰匙）→ 分段，逐段往下找
+        val strict = eligible
+            .filter { isValuable(it.candidates.first(), difficulty) }
+            .map { it.line.index }
+        segmentLines(strict, bestScore, minOf(target, strict.size)).forEach { segment ->
+            segment.firstOrNull { take(it, allowFiller = false) }
+        }
+
+        // 2) 保量補題：剩下的句子一樣分段，每段取還選得到字的最高分那句
+        while (chosen.size < target) {
+            val remaining = eligible.map { it.line.index }.filter { it !in chosen }
+            if (remaining.isEmpty()) break
+
+            var progressed = false
+            segmentLines(remaining, bestScore, minOf(target - chosen.size, remaining.size))
+                .forEach { segment ->
+                    if (segment.firstOrNull { take(it, allowFiller = true) } != null) {
+                        progressed = true
+                    }
                 }
+            // 沒有進展＝剩下的句子都只剩被用過的原形，再跑一次也是空轉
+            if (!progressed) break
         }
 
-        val target = minOf(maxBlanks, pool.size)
-        return Choice(pickBySegment(pool.map { it.line.index }, bestScore, target))
+        return chosen
+    }
+
+    /** 一次選取：選中的字 + 它是不是補題。 */
+    private data class Pick(val candidate: Candidate, val filler: Boolean)
+
+    /**
+     * 補題的**品質底線**。
+     *
+     * 擁有者要求「保量、依分數往下拿、不限等級」——但分數 17 分的字（A1 + 每次都大寫
+     * + 前 2000 名）挖出來只是浪費使用者的時間，寧可少一題。
+     *
+     * 這一條不是「等級門檻」（等級可以很低），是「分數門檻」：
+     * 補題仍然必須是**像樣的實詞**。兩首歌實測會因此少 1–2 題。
+     */
+    private const val FILLER_MIN_SCORE = 30
+
+    /** 這句話符合補題的品質底線嗎（見 [FILLER_MIN_SCORE]）。 */
+    private fun Candidate.isAcceptableFiller(): Boolean =
+        score >= FILLER_MIN_SCORE && !capitalizedOnly
+
+    /**
+     * 把候選句子切成 [count] 段，回傳**每段內依分數排序**的行號。
+     *
+     * 為什麼不是直接每段取第一名：同名原形可能已經被前面的句子用掉，
+     * 呼叫端需要「這一段還有哪些句子可選」才知道要不要退而求其次。
+     */
+    internal fun segmentLines(
+        indices: List<Int>,
+        scores: Map<Int, Int>,
+        count: Int,
+    ): List<List<Int>> {
+        if (count <= 0 || indices.isEmpty()) return emptyList()
+        val k = minOf(count, indices.size)
+        val segments = ArrayList<List<Int>>(k)
+
+        for (i in 0 until k) {
+            val from = i * indices.size / k
+            val to = ((i + 1) * indices.size / k).coerceAtLeast(from + 1)
+            val end = minOf(to, indices.size)
+            val segment = indices.subList(from, end)
+            val centre = (from + end - 1) / 2.0
+
+            // 分數高的排前面；同分時取「離區段中心最近」的那一句
+            segments += segment.sortedWith(
+                compareByDescending<Int> { scores[it] ?: 0 }
+                    .thenBy { kotlin.math.abs(indices.indexOf(it) - centre) },
+            )
+        }
+        return segments
     }
 
     /**
@@ -448,25 +525,8 @@ object BlankSelector {
      * @param indices 已排序的句子行號
      * @param scores 行號 → 該句最佳候選分數
      */
-    fun pickBySegment(indices: List<Int>, scores: Map<Int, Int>, count: Int): Set<Int> {
-        if (count <= 0 || indices.isEmpty()) return emptySet()
-        if (count >= indices.size) return indices.toSet()
-
-        val picked = LinkedHashSet<Int>(count)
-        for (i in 0 until count) {
-            val from = i * indices.size / count
-            val to = ((i + 1) * indices.size / count).coerceAtLeast(from + 1)
-            val segment = indices.subList(from, minOf(to, indices.size))
-            val best = segment.maxOf { scores[it] ?: 0 }
-            val centre = (from + minOf(to, indices.size) - 1) / 2.0
-            // 同分時取「離區段中心最近」的那一句：分數優先，但不會全部擠在區段開頭
-            picked += segment
-                .filter { (scores[it] ?: 0) == best }
-                .minByOrNull { kotlin.math.abs(indices.indexOf(it) - centre) }
-                ?: segment.first()
-        }
-        return picked
-    }
+    fun pickBySegment(indices: List<Int>, scores: Map<Int, Int>, count: Int): Set<Int> =
+        segmentLines(indices, scores, count).mapNotNull { it.firstOrNull() }.toSet()
 
     /**
      * 依「均勻分布」挑句子（舊版演算法，保留給既有測試與需要純行號取樣的場合）。

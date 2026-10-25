@@ -181,11 +181,11 @@
 
     <!-- 模組 C-4：挖空難度與題數 -->
     <string name="settings_blank_difficulty">挖空難度</string>
-    <string name="settings_blank_difficulty_hint">只影響「先挖哪一類字」，同一個字不會因為難度不同而換人。</string>
-    <string name="settings_blank_difficulty_note">只影響選詞優先級，不影響題目數量。</string>
+    <string name="settings_blank_difficulty_hint">決定「哪些字值得挖」：基礎收 A2 以下、進階收 B1 以上、挑戰收 B2 以上。</string>
+    <string name="settings_blank_difficulty_note">難度不影響題數；題數由下方的保量規則決定（最少 20 題）。</string>
     <string name="settings_blank_count">題數上限</string>
     <string name="settings_blank_count_value">最多 %1$d 題</string>
-    <string name="settings_blank_count_hint">題目會依句子順序均勻分布於整首歌；實際題數可能少於上限（歌太短或合格句不夠）。</string>
+    <string name="settings_blank_count_hint">每首歌至少 20 題；句子多時按比例增加，但不會超過這裡的上限。實際題數可能較少（歌太短或合格句不夠）。</string>
 
     <!-- 模組 D：字庫 -->
     <string name="result_add_to_wordbank">加入字庫</string>

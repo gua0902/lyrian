@@ -108,6 +108,13 @@ data class BlankDecision(
     val partOfSpeech: String? = null,
     /** 這一句的合格候選與分數，例如 `desperate(67), passive(63)`；報表用。 */
     val candidateSummary: String? = null,
+    /**
+     * 這題是「保量補題」——嚴格池不足 20 題時，依分數往下補進來的。
+     *
+     * 擁有者要求保量（不能只有 3 題像半成品），但補題的字品質較低，
+     * 所以必須**可辨識**：報表列出來、結果頁可以顯示「補題」標記。
+     */
+    val isFiller: Boolean = false,
 )
 
 /** 被過濾掉的候選字。 */

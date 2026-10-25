@@ -3,6 +3,7 @@ package com.antigravity.lyrian.tools.report
 import com.antigravity.lyrian.data.lang.LanguageData
 import com.antigravity.lyrian.data.lyrics.LyricsParser
 import com.antigravity.lyrian.data.remote.LrclibTrackDto
+import com.antigravity.lyrian.domain.practice.BlankCountPolicy
 import com.antigravity.lyrian.domain.practice.BlankDifficulty
 import com.antigravity.lyrian.domain.practice.BlankSelector
 import com.antigravity.lyrian.domain.practice.ExtensionPicker
@@ -102,13 +103,24 @@ class BlankReportTest {
                 songTitle = track.trackName,
             )
             emit("  ── 挖空明細（難度 ${BlankDifficulty.DEFAULT.label}、上限 ${BlankSelector.MAX_BLANKS}）──")
+
+            // 題數政策：合格句 → 0.6 倍 → 目標 → 實際
+            val eligibleCount = dataset.debug.count { it.candidateSummary != null }
+            val target = BlankCountPolicy.target(eligibleCount, BlankSelector.MAX_BLANKS)
+            emit(
+                "  題數政策：合格句 $eligibleCount ｜ 0.6× = %.0f ｜ 目標 $target ｜ 實際 ${dataset.questions.size}"
+                    .format(eligibleCount * BlankCountPolicy.RATIO),
+            )
+
             emit("  L   字              原形            最終  原始  分數  詞性  來源            BNC      候選（分數）")
             dataset.debug.filter { it.chosenWord != null }.forEach { decision ->
                 val word = decision.chosenWord ?: return@forEach
                 val info = language.lookup(word)
                 emit(
-                    "  L%-3d %-15s %-15s %-5s %-5s %-4s %-5s %-14s %-8s %s".format(
+                    "  L%-3d%s %-15s %-15s %-5s %-5s %-4s %-5s %-14s %-8s %s".format(
                         decision.lineIndex,
+                        // ⚑ = 保量補題（嚴格池不足時依分數往下補的）
+                        if (decision.isFiller) "⚑" else " ",
                         word,
                         decision.chosenLemma ?: word,
                         info.level?.label ?: "—",
@@ -137,11 +149,21 @@ class BlankReportTest {
             val eligible = dataset.debug.count { it.candidateSummary != null }
             emit("  合格句（有候選）=$eligible；沒有可挖字的句子：$noBlank（其中無實詞 $filler）")
 
+            // 保量補題的品質：補了幾題、最低分是多少
+            val fillers = dataset.debug.filter { it.isFiller }
+            val lowest = fillers.mapNotNull { it.score }.minOrNull()
+            emit(
+                "  保量補題：${fillers.size} 題" +
+                    (lowest?.let { "（最低分 $it）" } ?: "") +
+                    if (fillers.isEmpty()) "（全部通過兩把鑰匙）" else
+                        "：" + fillers.joinToString(", ") { "${it.chosenWord}(${it.score})" },
+            )
+
             val extension = ExtensionPicker.pick(
                 lines = lines,
                 difficulty = BlankDifficulty.DEFAULT,
                 language = language,
-                blanked = dataset.questions.map { it.answer.lowercase() }.toSet(),
+                blankedLemmas = dataset.debug.mapNotNull { it.chosenLemma }.toSet(),
                 songTitle = track.trackName,
             )
             emit("  延伸詞彙 ${extension.size} 條：")

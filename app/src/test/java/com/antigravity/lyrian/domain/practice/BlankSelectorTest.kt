@@ -20,6 +20,20 @@ import org.junit.Test
 private val FILLER_LEVEL: CefrLevel = CefrLevel.A1
 private const val FILLER_RANK = 1500
 
+/**
+ * 40 個互不相同的「實詞」。
+ *
+ * 必須是純字母（`amber1` 會被 tokenizer 切成 `amber`，40 句變成同一個原形，
+ * 保量測試就永遠只有 1 題）。
+ */
+private val NAMES = listOf(
+    "amber", "blaze", "cider", "dune", "ember", "frost", "glow", "haze",
+    "iris", "jade", "karma", "lunar", "mist", "nova", "onyx", "prism",
+    "quartz", "raven", "sable", "tide", "umber", "vivid", "wisp", "yarn",
+    "zephyr", "basalt", "coral", "drift", "echo", "flint", "garnet", "husk",
+    "ivory", "jasper", "kite", "loom", "moss", "nectar", "opal", "pearl",
+)
+
 class BlankSelectorTest {
 
     /** 可控的等級來源。 */
@@ -182,10 +196,10 @@ class BlankSelectorTest {
     }
 
     @Test
-    fun `難度會改變選字與題數（新選詞系統）`() {
-        // ⚠️ 行為變更：舊版「難度只改優先級、不改題數」，
-        // 新版的難度同時決定「什麼值得學」的門檻（BASIC 收 A2、CHALLENGE 只收 B2+），
-        // 所以題數會隨難度單調遞減。這裡守的是這個新契約。
+    fun `難度只換字不換題數（保量政策）`() {
+        // ⚠️ 行為契約（2026-10 擁有者核定）：
+        // 題數由 BlankCountPolicy 決定（下限 20、句子多時 0.6 倍），
+        // **難度不影響題數**——難度決定「哪些字值得挖」與「補題先補誰」。
         val base = lines("happy velvet", "happy daylight", "velvet lantern")
         val source = FakeSource(
             levels = mapOf(
@@ -196,12 +210,40 @@ class BlankSelectorTest {
             ),
         )
 
-        val basic = select(base, source, BlankDifficulty.BASIC).count { it.chosen != null }
-        val advanced = select(base, source, BlankDifficulty.ADVANCED).count { it.chosen != null }
-        val challenge = select(base, source, BlankDifficulty.CHALLENGE).count { it.chosen != null }
+        val results = BlankDifficulty.entries.map { difficulty ->
+            difficulty to select(base, source, difficulty).filter { it.chosen != null }
+        }
 
-        assertTrue("基礎 >= 進階 >= 挑戰，實際 $basic/$advanced/$challenge", basic >= advanced && advanced >= challenge)
-        assertTrue("至少要能出題", advanced >= 1)
+        val counts = results.map { it.second.size }.toSet()
+        assertEquals("三種難度的題數必須相同，實際 ${results.map { it.first to it.second.size }}", 1, counts.size)
+
+        // 但選中的字會不同：挑戰模式不會挖 happy（A1）
+        val challenge = results.first { it.first == BlankDifficulty.CHALLENGE }.second
+        assertTrue(
+            "挑戰模式不該挖 happy：${challenge.mapNotNull { it.chosen?.word }}",
+            challenge.none { it.chosen?.word == "happy" },
+        )
+    }
+
+    @Test
+    fun `保量：合格句夠多時至少 20 題`() {
+        // 24 個相異實詞、每個一句 → 24 個合格句 → 目標 max(20, 14) = 20
+        val source = FakeSource(NAMES.take(24).associateWith { CefrLevel.B2 })
+        val twentyFour = lines(*NAMES.take(24).map { "$it here" }.toTypedArray())
+
+        val result = select(twentyFour, source, BlankDifficulty.ADVANCED)
+
+        assertEquals(20, result.count { it.chosen != null })
+    }
+
+    @Test
+    fun `保量：句子多時按比例拉高`() {
+        val source = FakeSource(NAMES.associateWith { CefrLevel.B2 })
+        val forty = lines(*NAMES.map { "$it here" }.toTypedArray())
+
+        val result = select(forty, source, BlankDifficulty.ADVANCED, maxBlanks = 40)
+
+        assertEquals("40 × 0.6 = 24", 24, result.count { it.chosen != null })
     }
 
     @Test

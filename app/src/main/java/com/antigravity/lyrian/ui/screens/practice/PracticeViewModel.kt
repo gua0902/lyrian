@@ -294,11 +294,20 @@ private const val SNAP_TOLERANCE_MS = 1_500L
 private const val EMBED_BLOCKED = "這些版本都不允許嵌入播放，換一首歌試試。"
 
 /**
- * 自動入庫的最低等級（模組 D）。
+ * 自動入庫的門檻。
  *
- * B1 以上不論對錯一律入庫；A1/A2 一律不入庫。
+ * ```
+ * 等級 >= B1   或   學習價值分數 >= 60
+ * ```
+ *
+ * 加入分數條件是因為 2026-10 的「保量」政策：題數固定 20 以上，
+ * 嚴格池不夠時會補進較簡單的字。若只看等級，`desperate`（B1，分數 67）
+ * 進得去、但補題進來的 A2 實詞（分數 70，例如 `beg`）反而進不去——
+ * 那與「字庫＝值得學的清單」的定義相反。
  */
 private val WORDBANK_MIN_LEVEL = CefrLevel.B1
+
+private const val WORDBANK_MIN_SCORE = 60
 
 private const val TAG = "LyrianPractice"
 
@@ -1291,7 +1300,9 @@ class PracticeViewModel @Inject constructor(
                     lines = source.lines,
                     difficulty = difficulty,
                     language = language,
-                    blanked = allAnswers.map { it.lowercase() }.toSet(),
+                    // 用**原形**排除：挖了 `dreaming` 之後，`dream` 不該再出現在延伸詞彙
+                    // （舊版比對字面，所以同一家族的字會重複推薦）
+                    blankedLemmas = dataset.debug.mapNotNull { it.chosenLemma }.toSet(),
                     songTitle = source.head.title,
                 ),
             )
@@ -1598,7 +1609,8 @@ class PracticeViewModel @Inject constructor(
                 val cefrLabel = decision?.chosenLevel
                     ?.takeIf { decision.chosenLevelSource !in ESTIMATED_SOURCE_LABELS }
 
-                val shouldAddToWordbank = level >= WORDBANK_MIN_LEVEL
+                val shouldAddToWordbank = level >= WORDBANK_MIN_LEVEL ||
+                    (decision?.score ?: 0) >= WORDBANK_MIN_SCORE
 
                 val vocabId = when {
                     !shouldAddToWordbank -> null

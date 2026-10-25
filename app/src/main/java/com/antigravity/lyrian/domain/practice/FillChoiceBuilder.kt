@@ -108,6 +108,7 @@ object FillChoiceBuilder {
                     ?.take(6)
                     ?.joinToString(", ") { "${it.word}(${it.score})" }
                     ?.takeIf { it.isNotBlank() },
+                isFiller = selection?.filler == true,
             )
 
             if (chosen == null) return@map line

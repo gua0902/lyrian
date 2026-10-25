@@ -1,6 +1,7 @@
 package com.antigravity.lyrian.data.settings
 
 import android.content.Context
+import com.antigravity.lyrian.domain.practice.BlankCountPolicy
 import com.antigravity.lyrian.domain.practice.BlankDifficulty
 import com.antigravity.lyrian.domain.practice.BlankSelector
 import com.antigravity.lyrian.domain.practice.FillChoiceBuilder
@@ -15,8 +16,13 @@ import kotlinx.coroutines.flow.asStateFlow
  * 使用者的學習設定。
  *
  * 兩項，都只影響**選詞**、不影響播放：
- *  - [difficulty] 挖空難度（基礎／進階／挑戰）——只影響優先級
- *  - [maxBlanks] 題數上限（滑桿，上限 40）——每首歌長短不一，它只是上限
+ *  - [difficulty] 挖空難度（基礎／進階／挑戰）——決定「哪些字值得挖」
+ *  - [maxBlanks] 題數上限（滑桿 20–40）——實際題數由 [BlankCountPolicy] 決定
+ *
+ * ## 題數不是直接等於滑桿值
+ *
+ * 擁有者 2026-10 核定「保量」：每首歌至少 20 題，句子多時按 0.6 倍拉高，
+ * 但不會超過這裡的上限。因此滑桿是**上限**，不是目標。
  *
  * ## 為什麼用 SharedPreferences 而不是 DataStore
  *
@@ -74,7 +80,13 @@ class UserSettings @Inject constructor(
             .coerceIn(MIN_BLANKS, BlankSelector.MAX_BLANKS)
 
     companion object {
-        const val MIN_BLANKS = 5
+        /**
+         * 滑桿下限＝保量下限（20）。
+         *
+         * 舊版是 5；2026-10 的保量政策把「最少幾題」拉高到 20，
+         * 滑桿若還允許 5，使用者會以為可以要求 5 題，但實際永遠出 20 題。
+         */
+        const val MIN_BLANKS = BlankCountPolicy.MIN_BLANKS
 
         private const val PREFS_NAME = "lyrian_prefs"
         private const val KEY_DIFFICULTY = "blank_difficulty"

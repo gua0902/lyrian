@@ -38,7 +38,7 @@ object ExtensionPicker {
      * @param lines 整首歌詞
      * @param difficulty 這一輪的難度（影響分數的等級契合）
      * @param language 等級資料
-     * @param blanked 已經被挖空（或已在題目中）的**字面形式**（小寫）
+     * @param blankedLemmas 已經被挖空的**原形**（`dreaming` 被挖 → 這裡是 `dream`）
      * @param songTitle 歌名；歌名本身就是歌詞裡的字時不推薦
      * @return 依學習價值排序後的原形清單
      */
@@ -46,7 +46,7 @@ object ExtensionPicker {
         lines: List<LyricLine>,
         difficulty: BlankDifficulty,
         language: LanguageData,
-        blanked: Set<String>,
+        blankedLemmas: Set<String>,
         songTitle: String = "",
     ): List<String> {
         val casing = LyricCasing(lines)
@@ -61,7 +61,6 @@ object ExtensionPicker {
                 val token = match.value
                 if (token.length < FillChoiceBuilder.BLANK_MIN_WORD_LENGTH) return@forEach
                 if (token.any { it == '\'' || it == '’' }) return@forEach
-                if (token.lowercase() in blanked) return@forEach
                 if (CommonWordFilter.classify(token).isCommon) return@forEach
                 if (casing.looksProper(token)) return@forEach
                 if (LyricCasing.matchKey(token) in titleWords) return@forEach
@@ -69,6 +68,8 @@ object ExtensionPicker {
 
                 val info = language.lookup(token)
                 if (info.isProperNoun) return@forEach
+                // 同一原形已被挖空 → 不再推薦（`dreaming` 挖過就不再推 `dream`）
+                if (info.lemma in blankedLemmas) return@forEach
 
                 // 詞性已知但**不是實詞**（介系詞／代名詞…）→ 不值得推薦。
                 // 詞性未知（資料裡沒有）則保留，由分數決定。
