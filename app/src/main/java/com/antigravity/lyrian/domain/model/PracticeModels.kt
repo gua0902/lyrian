@@ -132,13 +132,10 @@ data class Progress(
     val percent: Int get() = if (total > 0) Math.round(correct * 100f / total) else 0
 }
 
-/** 練習模式。目前只有 [FILL_CHOICE] 有實作。 */
+/** 練習模式。目前只有 [FILL_CHOICE]（翻譯模式已於 2026-10 取消）。 */
 enum class PracticeModeId {
     /** 四選一填空。完全離線，零 AI 依賴。 */
     FILL_CHOICE,
-
-    /** 英翻中翻譯，需 BYOK AI。 */
-    ZH_TRANSLATE,
 }
 
 /** 單次作答紀錄。`Attempt` 是所有練習模式的**唯一收斂點**。 */
@@ -150,7 +147,7 @@ data class Attempt(
     val userAnswer: String,
     val correctAnswer: String,
     val isCorrect: Boolean,
-    /** 0f..1f。選擇題為 0 或 1；翻譯題為相似度分數 */
+    /** 0f..1f。選擇題為 0 或 1；保留小數是給未來可能的相似度評分用 */
     val score: Float,
 )
 

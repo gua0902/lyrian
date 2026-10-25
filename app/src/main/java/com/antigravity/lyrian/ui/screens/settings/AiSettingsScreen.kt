@@ -6,10 +6,12 @@ import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
+import androidx.compose.material.icons.filled.Science
 import androidx.compose.material3.Button
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
@@ -17,15 +19,21 @@ import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.ExposedDropdownMenuBox
 import androidx.compose.material3.ExposedDropdownMenuDefaults
+import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.MenuAnchorType
+import androidx.compose.material3.ModalBottomSheet
+import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Scaffold
+import androidx.compose.material3.Surface
 import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
+import androidx.compose.material3.rememberModalBottomSheetState
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
@@ -76,6 +84,7 @@ fun AiSettingsScreen(
     var apiKey by remember { mutableStateOf("") }
     var expanded by remember { mutableStateOf(false) }
     var saved by remember { mutableStateOf(false) }
+    var showTestSheet by remember { mutableStateOf(false) }
 
     // 設定載入完成後把草稿填好（只做一次，避免覆蓋使用者正在打的字）
     LaunchedEffect(config.provider) {
@@ -231,7 +240,230 @@ fun AiSettingsScreen(
                     color = MaterialTheme.colorScheme.primary,
                 )
             }
+
+            // ---- 開發測試入口 ----
+            //
+            // 翻譯模式已取消，但「之後要接 AI」這件事還在。這裡留一個**明確的**
+            // 測試入口：有按鈕、有畫面、有真實狀態，但**不發任何請求**。
+            AiTestEntry(
+                config = config,
+                onClick = { showTestSheet = true },
+            )
         }
+    }
+
+    if (showTestSheet) {
+        AiTestSheet(
+            config = config,
+            onDismiss = { showTestSheet = false },
+        )
+    }
+}
+
+/**
+ * 「AI 測試」入口。
+ *
+ * 外觀用 `OutlinedButton` 而不是 `Button`：它不是這一頁的主要動作
+ * （主要動作是「儲存」），符合 M3 的層級——次要動作用外框，
+ * 不搶主要動作的視覺重量。
+ */
+@Composable
+private fun AiTestEntry(
+    config: AiConfig,
+    onClick: () -> Unit,
+) {
+    HorizontalDivider(
+        modifier = Modifier.padding(top = 8.dp),
+        color = MaterialTheme.colorScheme.outlineVariant,
+    )
+
+    Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+        Text(
+            text = stringResource(R.string.ai_test_section),
+            style = MaterialTheme.typography.labelLarge,
+            color = MaterialTheme.colorScheme.primary,
+        )
+        Text(
+            text = stringResource(R.string.ai_test_entry_hint),
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+        )
+
+        OutlinedButton(
+            onClick = onClick,
+            modifier = Modifier.fillMaxWidth(),
+        ) {
+            Icon(
+                imageVector = Icons.Filled.Science,
+                contentDescription = null,
+                modifier = Modifier.size(18.dp),
+            )
+            Text(
+                text = stringResource(R.string.ai_test_title),
+                modifier = Modifier.padding(start = 8.dp),
+            )
+        }
+
+        Text(
+            text = if (config.isUsable) {
+                stringResource(R.string.ai_test_state_configured)
+            } else {
+                stringResource(R.string.ai_test_state_not_configured)
+            },
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+        )
+    }
+}
+
+/**
+ * AI 測試的 Bottom Sheet。
+ *
+ * ## 它**不做**什麼
+ *
+ * 不呼叫任何網路、不建立金鑰、不假造回應。`AiService` 目前綁在
+ * `DisabledAiService`，任何呼叫都只會回「未啟用」——所以這裡直接把
+ * 狀態顯示出來，並把「執行測試」維持在停用。
+ *
+ * ## 它**做**什麼
+ *
+ * 把「要接 AI 還缺什麼」講清楚：服務設定、供應商、模型、金鑰，
+ * 以及未來測試會檢查的三件事。這是給開發者看的面板，不是使用者功能。
+ */
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+private fun AiTestSheet(
+    config: AiConfig,
+    onDismiss: () -> Unit,
+) {
+    val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
+
+    ModalBottomSheet(
+        onDismissRequest = onDismiss,
+        sheetState = sheetState,
+    ) {
+        Column(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(horizontal = 24.dp)
+                .padding(bottom = 32.dp),
+            verticalArrangement = Arrangement.spacedBy(12.dp),
+        ) {
+            Text(
+                text = stringResource(R.string.ai_test_sheet_title),
+                style = MaterialTheme.typography.titleLarge,
+            )
+
+            // 最重要的那一句：這是測試，不是功能
+            Surface(
+                color = MaterialTheme.colorScheme.secondaryContainer,
+                contentColor = MaterialTheme.colorScheme.onSecondaryContainer,
+                shape = MaterialTheme.shapes.medium,
+            ) {
+                Text(
+                    text = stringResource(R.string.ai_test_disclaimer),
+                    style = MaterialTheme.typography.bodySmall,
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(12.dp),
+                )
+            }
+
+            Text(
+                text = stringResource(R.string.ai_test_config_section),
+                style = MaterialTheme.typography.labelLarge,
+                color = MaterialTheme.colorScheme.primary,
+            )
+            AiTestRow(
+                label = stringResource(R.string.ai_test_provider),
+                value = if (config.isUsable) config.provider.label else "—",
+            )
+            AiTestRow(
+                label = stringResource(R.string.ai_test_model),
+                value = config.model.takeIf { it.isNotBlank() } ?: "—",
+            )
+            AiTestRow(
+                label = stringResource(R.string.ai_test_key),
+                value = config.apiKeyMasked ?: stringResource(R.string.ai_test_not_configured),
+            )
+            AiTestRow(
+                label = stringResource(R.string.ai_test_service_state),
+                value = if (config.isUsable) {
+                    stringResource(R.string.ai_test_service_disabled)
+                } else {
+                    stringResource(R.string.ai_test_not_configured)
+                },
+            )
+
+            Text(
+                text = stringResource(R.string.ai_test_task_section),
+                style = MaterialTheme.typography.labelLarge,
+                color = MaterialTheme.colorScheme.primary,
+                modifier = Modifier.padding(top = 4.dp),
+            )
+            AiTestBullet(stringResource(R.string.ai_test_task_json))
+            AiTestBullet(stringResource(R.string.ai_test_task_latency))
+            AiTestBullet(stringResource(R.string.ai_test_task_errors))
+
+            Button(
+                onClick = {},
+                // 沒有任何已確認的服務可以測 → 保持停用，不假裝跑完
+                enabled = false,
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(top = 4.dp),
+            ) {
+                Text(stringResource(R.string.ai_test_run))
+            }
+            Text(
+                text = stringResource(R.string.ai_test_blocked_hint),
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+
+            TextButton(
+                onClick = onDismiss,
+                modifier = Modifier.fillMaxWidth(),
+            ) {
+                Text(stringResource(R.string.action_close))
+            }
+        }
+    }
+}
+
+@Composable
+private fun AiTestRow(label: String, value: String) {
+    Row(
+        modifier = Modifier.fillMaxWidth(),
+        horizontalArrangement = Arrangement.SpaceBetween,
+    ) {
+        Text(
+            text = label,
+            style = MaterialTheme.typography.bodyMedium,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+        )
+        Text(
+            text = value,
+            style = MaterialTheme.typography.bodyMedium,
+            color = MaterialTheme.colorScheme.onSurface,
+        )
+    }
+}
+
+@Composable
+private fun AiTestBullet(text: String) {
+    Row(verticalAlignment = Alignment.Top) {
+        Text(
+            text = "·",
+            style = MaterialTheme.typography.bodyMedium,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+        )
+        Text(
+            text = text,
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+            modifier = Modifier.padding(start = 8.dp),
+        )
     }
 }
 

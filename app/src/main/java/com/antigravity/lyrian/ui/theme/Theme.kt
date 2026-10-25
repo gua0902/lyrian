@@ -113,8 +113,8 @@ fun LyrianTheme(
     MaterialTheme(
         colorScheme = colorScheme,
         typography = LyrianTypography,
-        // 圓角級距（M3 Expressive）：卡片 12、對話框與彈窗 28、按鈕全圓。
-        // 詳細的 token 與元件對應見 `LyrianShapes.kt`。
+        // 圓角級距：卡片 12、對話框與彈窗 28、按鈕全圓。
+        // 詳細的 token 與「為什麼只有五級」見 `LyrianShapes.kt`。
         shapes = LyrianShapes,
         content = content,
     )

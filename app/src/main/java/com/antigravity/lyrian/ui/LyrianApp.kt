@@ -27,9 +27,7 @@ import androidx.navigation.compose.composable
 import androidx.navigation.compose.currentBackStackEntryAsState
 import androidx.navigation.compose.rememberNavController
 import androidx.navigation.navArgument
-import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.antigravity.lyrian.data.active.PracticeSessionStore
-import com.antigravity.lyrian.data.ai.AiSettings
 import com.antigravity.lyrian.ui.navigation.LyrianNavigationBar
 import com.antigravity.lyrian.ui.navigation.LyrianNavigationRail
 import com.antigravity.lyrian.ui.navigation.Routes
@@ -67,7 +65,6 @@ import com.antigravity.lyrian.ui.screens.wordbank.WordbankScreen
 fun LyrianApp(
     windowSizeClass: WindowSizeClass?,
     sessionStore: PracticeSessionStore,
-    aiSettings: AiSettings,
     onboardingCompleted: Boolean,
     onOnboardingCompleted: () -> Unit,
 ) {
@@ -179,12 +176,8 @@ fun LyrianApp(
                 }
 
                 composable(TopLevelDestination.HOME.route) {
-                    // AI 設定是單例：有沒有金鑰決定「翻譯模式」能不能選。
-                    // 這裡只讀，不寫；設定頁改完回來會立刻反映。
-                    val aiConfig by aiSettings.config.collectAsStateWithLifecycle()
                     SearchScreen(
-                        aiConfigured = aiConfig.isUsable,
-                        onSongSelected = { song, mode ->
+                        onSongSelected = { song ->
                             sessionStore.put(
                                 PracticeSessionStore.Session(
                                     songId = song.lrclibId,

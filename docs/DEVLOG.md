@@ -64,10 +64,10 @@ C:\Antigravity\lyrian\android\app\build\outputs\apk\debug\app-debug.apk
 
 | 主題 | 決策 |
 |---|---|
-| 練習模式 | **只有兩個**：`fill-choice` 四選一填空（零 AI）、`zh-translate` 英翻中（需 AI）|
-| 模式選擇 UX | 不新增 Tab；搜尋頁點歌後彈 M3 Bottom Sheet |
-| 互動細節 | 全部藏進手勢：長按查字／長按滑動反白／AI 整句翻譯 |
-| AI 層 | **BYOK**（僅指 AI API 金鑰）+ 密鑰池 + 連接測試（參考 Operit）|
+| 練習模式 | **只有一個**：`fill-choice` 四選一填空（零 AI）；`zh-translate` 已於 2026-10 取消 |
+| 模式選擇 UX | **已移除**（只剩一種模式，點歌直接進練習） |
+| 互動細節 | 手勢：長按查字／長按滑動反白 |
+| AI 層 | **BYOK** 設定保留；設定頁有「AI 測試」入口，尚未接入任何服務（不發請求） |
 | Spotify | 憑證**不屬於** BYOK；音訊延至 Phase 6，先做純文字 |
 | 字典 | ECDICT 本地 SQLite，裁切至詞頻前 20k~50k |
 | 字庫 | FSRS 排程 + 學測式題型；一份契約兩種傳輸（App 直呼／外部 MCP）|
@@ -84,8 +84,7 @@ C:\Antigravity\lyrian\android\app\build\outputs\apk\debug\app-debug.apk
 
 ### 待處理
 - **R1（高風險）**：ECDICT 授權條款尚未確認，散布前必須查其 `LICENSE`。
-- 英翻中評分：純 LLM 或本地關鍵詞 + LLM 複核？
-- 翻譯題及格閾值（決定什麼進字庫）。
+- ~~英翻中評分方式~~、~~翻譯題及格閾值~~：已取消（2026-10 移除翻譯模式）。
 - 資料是否上雲（目前架構全本地）。
 
 ### 備註：git 身分
@@ -2405,3 +2404,87 @@ score >= 30   而且   不是 capitalizedOnly
 - `assembleDebug` BUILD SUCCESSFUL，APK **22.52 MB**（資產 +1.8 MB，
   APK 只 +0.18 MB——JSON 壓縮率很好）
 - **實機未驗證（無裝置）**：題目變多後的練習節奏、補題字在 UI 上的感受
+
+## TASK-29：M3 Expressive 版本校正、移除 AI 翻譯、新增 AI 測試入口
+
+### 一、M3 Expressive：先確認「哪些是真的官方 API」
+
+升級前逐一驗證過，結論與處置如下：
+
+| 項目 | 1.3.1（舊） | 1.4.0（BOM 2025.10.00） | 能不能用 |
+|---|---|---|---|
+| Compose BOM | 2025.01.00（ui 1.7.6） | **2025.10.00（ui 1.9.3 / material3 1.4.0）** | ✅ 升級 |
+| Kotlin 相容性 | 2.1.0 | 同一組 2.1.0 直接編譯通過 | ✅ 不用動 Kotlin |
+| `Shapes` 八級 | 5 個欄位 | 8 個欄位，但**建構子是 internal** | ❌ 用 5 級 + `LyrianCorner` 補後三級 |
+| `MaterialExpressiveTheme` | 不存在 | 存在，但**是 internal** | ❌ 維持 `MaterialTheme` |
+| `MotionScheme.expressive()` | 不存在 | 存在，但 `$material3` internal | ❌ 不使用 |
+| `MediumFlexibleTopAppBar` | 不存在 | 存在，**也是 internal** | ❌ 改用公開的 `MediumTopAppBar` |
+| `ShortNavigationBar` / `LoadingIndicator` / `ToggleButton` / `ButtonGroup` / `SplitButton` | — | 只有 token，沒有公開 composable | ❌ 不假裝使用 |
+
+也就是說：**material3 1.4.0 的 M3E 表面積，公開的只有「大標題會收合」的
+app bar 家族**。真正的 `MaterialExpressiveTheme`、八級 Shapes、彈性 app bar
+要等 1.5 穩定版（目前只有 alpha）——這是版本限制，不是設計選擇，
+所以沒有升級到 alpha，也沒有自己模仿外觀。
+
+實際做的：
+
+- **BOM 2025.01.00 → 2025.10.00**（material3 1.3.1 → 1.4.0、ui 1.7.6 → 1.9.3）。
+  Kotlin 2.1.0 直接編譯通過，沒有 metadata 不相容問題。
+- 新增 `ui/components/LyrianTopAppBar`：首頁與字庫用 `MediumTopAppBar`
+  + `exitUntilCollapsedScrollBehavior`（大標題會收合），「我的」用小型版本
+  （它是儀表板，不需要長捲動）。
+- 新增 `LyrianSpacing`（4/8/12/16/24/32）取代畫面裡 10/12/14/20dp 的混用。
+- 新增 `ui/components/StateViews.kt`：`LoadingState` / `EmptyState` / `ErrorState`，
+  搜尋頁與字庫頁改用它，三個狀態的字級、間距、顏色從此一致。
+- 搜尋頁的輸入框改用 `shapes.extraSmall`（M3 對 text field 的規定），
+  錯誤狀態加上「重試」。
+- 設定子頁維持小型 `TopAppBar`（單一任務頁不需要大標題）；底部導覽維持
+  `NavigationBar`（1.4.0 沒有公開的替代品）。
+
+**沒有動的**：固定 16:9 影片框、歌詞同步／捲動／高亮、播放控制、填空流程。
+
+### 二、移除 AI 歌詞翻譯
+
+| 移除的東西 | 位置 |
+|---|---|
+| `PracticeMode.ZH_TRANSLATE`、時間估算 enum | `domain/practice/PracticeMode.kt`（整檔刪除） |
+| 模式選擇 Bottom Sheet（含「需先設定 AI 金鑰」卡片） | `ui/screens/search/PracticeModeSheet.kt`（整檔刪除） |
+| `PracticeModeId.ZH_TRANSLATE` | `domain/model/PracticeModels.kt` |
+| `AiService.reviewTranslation` + `TranslationReview` + `DisabledAiService` 的實作 | `data/ai/AiService.kt` |
+| 翻譯相關字串 6 條 | `strings.xml` |
+| 翻譯模式的測試 | `PracticeModeTest.kt`（整檔刪除） |
+| 文件裡的翻譯計畫 | `ARCHITECTURE.md`（§6.1/6.3/6.4、§9.4/9.5、P2、R6、待決問題）、`INFORMATION-ARCHITECTURE.md`（流程圖與轉換表）、`ONBOARDING-AND-BYOK.md`、`DEVLOG.md` 決策表 |
+
+**連帶的行為變更**：點歌不再彈模式選擇，直接進練習頁。只剩一種模式時，
+那一層只是多一次點擊（擁有者要求「不要留下無用的功能入口」）。
+
+**沒有動的**：`AiSettings`／`AiProvider`／`SecureKeyStore`／金鑰池、
+`explainPhrase`・`analyzeSongVocabulary`・`generateQuestions` 三個介面
+（結果頁的「值得學的表達」還會用到）、網路層與通用 API client。
+
+### 三、AI 測試入口（設定頁）
+
+位置：**設定 → AI 與內容** 的最下方（就是填 API 金鑰那一頁），
+`OutlinedButton` + `Science` 圖示，標籤「AI 測試」。
+
+- 外框按鈕而非填色按鈕：這一頁的主要動作是「儲存」，測試是次要動作。
+- 按下去開 `ModalBottomSheet`，內容：
+  - 說明「這是開發測試入口，不是正式 AI 功能；這個畫面不會發出任何請求」
+  - 目前設定（供應商／模型／金鑰遮罩／服務狀態）
+  - 未來會檢查的三件事（合法 JSON、延遲與 token、錯誤處理）
+  - 「執行測試」按鈕**維持停用**，下方寫明要先確認服務與模型
+- `AiService` 目前綁在 `DisabledAiService`，結構上不可能發出請求；
+  畫面直接把這個事實顯示出來，不假造成功訊息。
+
+**關於你提供的 Google API key**：沒有寫進專案。理由有三個——
+(1) 金鑰進版控等於公開；(2) 只有 key 無法確定要打哪個端點與模型；
+(3) 那會是「自行選擇供應商並呼叫付費服務」，與這次的驗收條件衝突。
+若之後要接，建議用「執行時輸入、存 Keystore」的方式（現有 `SecureKeyStore`
+已經支援），而不是寫死在程式裡。
+
+### 驗證
+
+- **229 個單元測試全過**（刪除 `PracticeModeTest` 的 16 個）
+- `assembleDebug` BUILD SUCCESSFUL，APK **25.36 MB**（Compose 1.9 比 1.7 大約 +2.8 MB）
+- 全專案搜尋 `ZH_TRANSLATE` / `reviewTranslation` / `PracticeModeSheet` / 翻譯字串 → 0 筆
+- **實機未驗證（無裝置）**：大標題收合、AI 測試 Sheet 的實際呈現

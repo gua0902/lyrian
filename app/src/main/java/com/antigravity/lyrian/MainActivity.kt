@@ -10,7 +10,6 @@ import androidx.compose.material3.windowsizeclass.calculateWindowSizeClass
 import androidx.compose.runtime.getValue
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.antigravity.lyrian.data.active.PracticeSessionStore
-import com.antigravity.lyrian.data.ai.AiSettings
 import com.antigravity.lyrian.data.settings.AppearanceSettings
 import com.antigravity.lyrian.data.settings.ThemeMode
 import com.antigravity.lyrian.ui.LyrianApp
@@ -44,10 +43,6 @@ class MainActivity : ComponentActivity() {
     @Inject
     lateinit var appearance: AppearanceSettings
 
-    /** AI（BYOK）設定：首頁要用它決定翻譯模式能不能選。 */
-    @Inject
-    lateinit var aiSettings: AiSettings
-
     override fun onCreate(savedInstanceState: Bundle?) {
         enableEdgeToEdge()
         super.onCreate(savedInstanceState)
@@ -76,7 +71,6 @@ class MainActivity : ComponentActivity() {
                 LyrianApp(
                     windowSizeClass = calculateWindowSizeClass(this),
                     sessionStore = sessionStore,
-                    aiSettings = aiSettings,
                     onboardingCompleted = onboardingCompleted,
                     onOnboardingCompleted = {
                         prefs.edit().putBoolean(KEY_ONBOARDING_COMPLETED, true).apply()

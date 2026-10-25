@@ -5,23 +5,33 @@ import androidx.compose.material3.Shapes
 import androidx.compose.ui.unit.dp
 
 /**
- * 圓角級距（M3 Expressive，2025 之後的八級）。
+ * 圓角級距（Material 3 Expressive，八級）。
  *
  * ```
  * none 0 · extraSmall 4 · small 8 · medium 12 · large 16
  * largeIncreased 20 · extraLarge 28 · extraLargeIncreased 32 · extraExtraLarge 48 · full 50%
  * ```
  *
- * ## 為什麼要自己宣告
+ * ## 為什麼只設得進五個
  *
- * `androidx.compose.material3.Shapes` 在 1.3.x 只暴露五個角色
- * （extraSmall…extraLarge）。Expressive 多出來的三級（largeIncreased、
- * extraLargeIncreased、extraExtraLarge）沒有欄位可放，但規格書要求
- * **對話框用 28、底部彈窗用 28、卡片用 12**，而且大螢幕的卡片要能放大到 32／48。
+ * `material3 1.4.0` 的 [Shapes] **有**八個欄位，但那一版把「八參數建構子」
+ * 與 `MaterialExpressiveTheme` 都標成 `internal`——`kotlinc` 會直接拒絕
+ * （`Cannot access '<init>': it is internal`）。
  *
- * 因此：五個基本角色交給 `MaterialTheme.shapes`，其餘放在 [LyrianCorner]
- * 這個常數物件裡。**不要在畫面裡寫 `RoundedCornerShape(12.dp)`**——
- * 一律引用這裡的 token，換主題或改級距時才不用全域搜尋。
+ * 公開的八級版本要等 1.5（目前只有 alpha）。因此：
+ *  - 前五級交給 `MaterialTheme.shapes`（元件會自己用）
+ *  - 後三級放在 [LyrianCorner]，畫面需要時直接取
+ *
+ * 這是**版本限制**，不是設計選擇；升到 1.5 穩定版時把這裡換成八參數即可。
+ *
+ * | 元件 | token |
+ * |---|---|
+ * | 按鈕、FAB、chip、搜尋列 | full（元件自己的預設） |
+ * | 文字輸入框、選單、snackbar | extraSmall 4 |
+ * | 卡片 | medium 12 |
+ * | FAB（大）、導覽抽屜 | large 16 |
+ * | 對話框、底部彈窗 | extraLarge 28 |
+ * | 大螢幕的卡片、面板 | extraLargeIncreased 32（[LyrianCorner]） |
  */
 val LyrianShapes = Shapes(
     extraSmall = LyrianCorner.extraSmall,
@@ -34,16 +44,9 @@ val LyrianShapes = Shapes(
 /**
  * 完整的圓角 token。
  *
- * 元件的對應關係（依 M3 規格）：
- *
- * | 元件 | token |
- * |---|---|
- * | 按鈕、FAB、chip、搜尋列 | [full] |
- * | 文字輸入框、選單、snackbar | [extraSmall] |
- * | 卡片 | [medium] |
- * | FAB（大）、導覽抽屜 | [large] |
- * | 對話框、底部彈窗 | [extraLarge] |
- * | 大螢幕的卡片、面板 | [extraLargeIncreased] |
+ * `MaterialTheme.shapes` 可以**設定**八個角色，但 `largeIncreased` 之後的
+ * 讀取屬性在 1.4.0 還是 internal，所以畫面需要那三級時用這裡的常數。
+ * **不要在畫面裡寫 `RoundedCornerShape(12.dp)`**。
  */
 object LyrianCorner {
     val none = RoundedCornerShape(0.dp)

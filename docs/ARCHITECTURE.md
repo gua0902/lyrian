@@ -31,7 +31,7 @@
 | 四個 Tab | ❌ 只做了 1.5 個 | 參考圖要 搜尋/練習/字庫/我的；實際是範本殘留 `index` + `two` |
 | 單字庫 / 持久化 | ❌ 完全沒有 | `userSelections` 只在記憶體 |
 | 音樂播放 | ❌ 完全沒有 | 練習頁只有假 timer |
-| AI（英翻中） | ❌ 完全沒有 | 無 BYOK、無 provider 層 |
+| AI（BYOK） | ⚠️ 只有設定與測試入口 | 無 provider 實作、不發任何請求；英翻中模式已取消 |
 | APK 打包 | ⚠️ 已作廢 | 曾以 Capacitor 6 + JDK 17 成功（見 `docs/DEVLOG.md` TASK-01），但已於 §2.1 決策放棄 Capacitor，改走 Expo 原生 Android |
 | Git 版本控制 | ⚠️ 0 commits | repo 已 init 但無任何 commit |
 
@@ -107,7 +107,7 @@
 │  LRCLIB          歌詞 + start_ms/end_ms + duration           │
 │  iTunes / Deezer 封面 + 曲風（LRCLIB 無封面，必須外接）        │
 │  ECDICT (本地)    中文釋義 / 音標 / 詞頻 / 詞形還原 / 搭配     │
-│  LLM (BYOK)       英翻中評分 + 整句翻譯（唯一需要執行時 AI）   │
+│  LLM (BYOK)       已停用：只保留設定與開發測試入口（2026-10）  │
 │  Spotify          [Phase 6] 播放控制 + 播放位置                │
 └──────────────────────────────────────────────────────────────┘
                               ↓
@@ -122,14 +122,14 @@
 └──────────────────────────────────────────────────────────────┘
                               ↓
 ┌── 練習模式層 (Practice Modes，可插拔) ──────────────────────┐
-│  只註冊兩個：                                                │
+│  只註冊一個：                                                │
 │   A. fill-choice   四選一填空（完全離線，零 AI）              │
-│   B. zh-translate  英翻中翻譯（需要 AI，可降級）              │
+│  ※ zh-translate（英翻中）已於 2026-10 取消，不再實作          │
 └──────────────────────────────────────────────────────────────┘
                               ↓
 ┌── 呈現層 (UI) ──────────────────────────────────────────────┐
 │  M3 Design Tokens → 4 Tabs（搜尋/練習/字庫/我的）            │
-│  手勢承載細節（長按查字、長按滑動反白、AI 整句翻譯）          │
+│  手勢承載細節（長按查字、長按滑動反白）                       │
 └──────────────────────────────────────────────────────────────┘
 ```
 
@@ -420,7 +420,7 @@ interface Attempt {
 ### 6.1 插件介面
 
 ```ts
-type PracticeModeId = 'fill-choice' | 'zh-translate';
+type PracticeModeId = 'fill-choice';   // zh-translate 已取消（2026-10）
 
 interface PracticeMode {
   id: PracticeModeId;
@@ -489,22 +489,18 @@ interface GradeResult {
 **延後項目**：第 2、3 點（用 ECDICT 詞頻選字與挑干擾項）移至 P1.5，
 需先解決 ECDICT 授權（`docs/ARCHITECTURE.md` §13 R1）。
 
-### 6.3 模式 B：`zh-translate` 英翻中翻譯
+### 6.3 模式 B：`zh-translate`（**已取消，2026-10**）
 
-- 使用者看到英文歌詞行，輸入**中文翻譯**；AI 評分並給回饋。
-- AI 亦負責產生**參考譯句**（擁有者指定：「採 AI 整句翻譯」）。
-- `requires.ai === true`。**未設定 BYOK 時此模式自動停用並顯示設定引導，不可讓它擋住 App。**
-- 評分回傳 `score: 0..1`，低於閾值即 `isCorrect = false`。
-- **進字庫的目標**：取該行的挖空目標字（與模式 A 共用 `vocabTargets` 契約）。若該行無目標字，則不進字庫，只記 `Attempt`。
+擁有者決定不再提供 AI 歌詞翻譯，因此這一節原本的設計（AI 評分、參考譯句、
+翻譯結果畫面）**全部作廢**，程式碼也已移除。
 
-### 6.4 模式選擇 UX（參考圖缺的一頁）
+保留這個標題只是為了讓舊的討論不會憑空消失；不要再照著它實作，也不要把它
+接回新的 AI 測試入口。
 
-四張參考圖沒有「選模式」這一頁。決策：
+### 6.4 模式選擇 UX（已移除）
 
-> **在搜尋頁點選歌曲時，彈出 M3 Bottom Sheet**：「你想怎麼練這首歌？」
-> 列出可用模式卡片。`requires.ai` 未滿足 → 灰階 + 「需先設定 AI」引導；`requires.audio` 未滿足 → 同。
-
-不新增 Tab，符合 M3 互動慣例。
+原本點歌後會彈出「你想怎麼練這首歌？」的 Bottom Sheet。取消翻譯後只剩一種
+模式，那一層等於多一次點擊，所以**整個模式選擇流程已移除**：點歌直接進練習。
 
 ---
 
@@ -738,12 +734,15 @@ interface ProviderRegistry {
 
 ### 9.4 不可違反的規則
 
-1. **AI 失敗必須優雅降級。** `zh-translate` 停用並提示設定；`fill-choice` 完全不受影響。
+1. **AI 失敗必須優雅降級。** AI 不在任何核心路徑上；單字填空完全不受影響。
 2. **金鑰只存 SecureStore**，SQLite 只存別名（`key_ref`）。不得寫入 AsyncStorage 明文、不得寫入 log。
 3. **App 不內建任何 key。** BYOK 的意義在此——這同時讓「禁止付費 API」的規則得以維持：App 本身不提供、不轉售 API 額度。
-4. **設定頁必須有「連接測試」按鈕**（學 Operit）。
+4. **設定頁的 AI 測試入口只是入口。** 在確認服務與模型之前，按鈕保持停用、不發請求、不假造結果。
 
-### 9.5 英翻中評分契約
+### 9.5 英翻中評分契約（**已取消，2026-10**）
+
+翻譯模式移除後，這份契約、`TranslationGrade` 與「執行時呼叫 LLM 評分」的決策
+全部作廢。保留下面的內容只作為歷史記錄，**不要再實作**：
 
 ```ts
 interface TranslationGrade {
@@ -852,7 +851,7 @@ app/
 | **P0 地基** ✅ **已完成 2026-10-06** | M3 token 層；4 Tab 骨架；SQLite schema；移除範本殘留；修 `app.json`；放棄 Capacitor | commit `e3a3d24`——lint + tsc + Metro bundle 全通過 |
 | **P1 核心循環** ✅ **已完成 2026-10-06** | 搜尋頁（LRCLIB 真搜尋 + iTunes 封面 + 曲風）、練習模式 Bottom Sheet、`fill-choice` 模式（接 `lyricsfile` 的 `start_ms`/`end_ms`）| commits `88d22ad`→`93bdd79`；126 個單元測試、lint + tsc + Metro 全通過 |
 | **P1.5 持久化** ✅ **已完成 2026-10-07** | `expo-sqlite` 開啟與遷移層、songs/attempts/vocab/stats repository、作答落庫、答錯的字收進字庫、字庫 Tab 顯示真實資料 | 198 個測試（含**真實 SQLite**）、lint + tsc + Metro 全通過 |
-| **P2 AI** | 設定頁 + BYOK provider 清單 + KeyPool + 連接測試；`zh-translate` 模式；手勢（長按查字、滑動反白） | 兩種練習模式齊備 |
+| **P2 AI** | 設定頁 + BYOK provider 清單 + KeyPool（`zh-translate` 模式已於 2026-10 取消；改為設定頁的「AI 測試」入口） | 單字填空可用；AI 尚未接入 |
 | **P3 字庫複習** | ECDICT 詞頻/詞形還原、FSRS 排程、學測式複習題型（詞彙題／文意選填／搭配詞／詞形） | 字庫可複習 |
 | **P4 我的** | 累積總分、已學會單字、連續學習天數、每日統計 | 參考圖「我的」實作完成 |
 | **P5 選配** | Dynamic Color（Material You）、外部 MCP server（SQL 工具化） | — |
@@ -871,7 +870,7 @@ app/
 | R3 | Spotify SDK 官方標示 Beta | 🟡 中 | 「functionality is likely to change significantly without warning」；P6 才處理 |
 | R4 | 行動端 WebView 無 Widevine DRM | 🟡 中 | 確定 Web Playback SDK 路線不可行，只能走 Web API 或 App Remote SDK |
 | R5 | 長按 vs 長按滑動的手勢衝突 | 🟡 中 | P2 需先做原型驗證，否則兩者會互搶事件 |
-| R6 | 英翻中評分客觀性 | 🟡 中 | LLM 評分有變異性；`score` 閾值需實測調校 |
+| R6 | ~~英翻中評分客觀性~~ | ⚪ 已取消 | 翻譯模式移除，這個風險消失 |
 | R7 | LRCLIB 歌詞品質參差 | 🟡 中 | 社群貢獻，可能有錯字／時間軸偏差；需容錯與回報機制 |
 | R8 | 76 萬詞條體積 | 🟢 低 | 已定案裁切至詞頻前 20k~50k |
 | R9 | 全 repo 0 commits | 🟡 中 | **建議立即建立 baseline commit**，否則後續重構無法回溯 |
@@ -879,9 +878,9 @@ app/
 
 ### 尚未決定的問題
 
-1. **英翻中評分**：純 LLM（A）還是本地關鍵詞 + LLM 複核（B）？目前文件假設 A。
+1. ~~**英翻中評分**：純 LLM（A）還是本地關鍵詞 + LLM 複核（B）？~~ 已取消（2026-10）。
 2. **ECDICT 授權**結果若為否，改走哪條退路？
-3. **`score` 及格閾值**：翻譯題幾分算「答對」？（影響什麼進字庫）
+3. ~~**`score` 及格閾值**：翻譯題幾分算「答對」？~~ 已取消（翻譯模式移除）。
 4. **數據是否要上雲**？目前架構**全本地**（`AsyncStorage`/SQLite），與 `docs/REQUIREMENTS.md` 提到的 Supabase 不同。若日後要跨裝置同步，需重新評估。
 
 ---

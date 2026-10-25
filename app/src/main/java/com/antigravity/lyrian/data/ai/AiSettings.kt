@@ -99,8 +99,8 @@ data class AiConfig(
      * 這個設定「看起來」可用：已啟用、有金鑰、有端點、有模型。
      *
      * ⚠️ 目前 [AiService] 仍然綁在 [DisabledAiService] 上，所以就算這裡為 true，
-     * 實際呼叫也一定會回 `NotEnabled`。UI 用它來決定「翻譯模式可不可以選」，
-     * 因此**不會**出現「可以點但一定失敗」的假象——詳見 `AiSettings.kt` 的說明。
+     * 實際呼叫也一定會回 `NotEnabled`。設定頁的「AI 測試」用它來顯示狀態，
+     * 因此**不會**出現「可以按但一定失敗」的假象。
      */
     val isUsable: Boolean
         get() = enabled && hasApiKey && baseUrl.isNotBlank() && model.isNotBlank()

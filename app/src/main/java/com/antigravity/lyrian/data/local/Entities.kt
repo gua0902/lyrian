@@ -159,7 +159,7 @@ data class VocabScheduleEntity(
 )
 data class AttemptEntity(
     @PrimaryKey(autoGenerate = true) val id: Long = 0,
-    /** fill-choice / zh-translate */
+    /** 目前只有 `fill-choice`（`zh-translate` 已於 2026-10 取消） */
     val modeId: String,
     val songId: Long? = null,
     val lineIndex: Int? = null,

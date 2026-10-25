@@ -21,20 +21,22 @@ import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
-import androidx.compose.material3.TopAppBar
+import androidx.compose.material3.TopAppBarDefaults
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.input.nestedscroll.nestedScroll
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontWeight
-import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.hilt.navigation.compose.hiltViewModel
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.antigravity.lyrian.R
 import com.antigravity.lyrian.data.local.VocabEntity
+import com.antigravity.lyrian.ui.components.LyrianTopAppBar
+import com.antigravity.lyrian.ui.theme.LyrianSpacing
 
 /**
  * 字庫頁。
@@ -60,17 +62,29 @@ fun WordbankScreen(
         viewModel.fetchMissingDictionaryData()
     }
 
+    val scrollBehavior = TopAppBarDefaults.exitUntilCollapsedScrollBehavior()
+
     Scaffold(
+        modifier = Modifier.nestedScroll(scrollBehavior.nestedScrollConnection),
         topBar = {
-            TopAppBar(title = { Text(stringResource(R.string.tab_wordbank)) })
+            LyrianTopAppBar(
+                title = stringResource(R.string.tab_wordbank),
+                subtitle = stringResource(R.string.wordbank_banner_subtitle, state.total, state.dueForReview),
+                scrollBehavior = scrollBehavior,
+            )
         },
     ) { innerPadding ->
         LazyColumn(
             modifier = Modifier
                 .fillMaxSize()
                 .padding(innerPadding),
-            contentPadding = PaddingValues(horizontal = 16.dp, vertical = 8.dp),
-            verticalArrangement = Arrangement.spacedBy(12.dp),
+            contentPadding = PaddingValues(
+                start = LyrianSpacing.screenHorizontal,
+                end = LyrianSpacing.screenHorizontal,
+                top = LyrianSpacing.sm,
+                bottom = LyrianSpacing.xl,
+            ),
+            verticalArrangement = Arrangement.spacedBy(LyrianSpacing.md),
         ) {
             item { SummaryBanner(state) }
 
@@ -82,7 +96,16 @@ fun WordbankScreen(
             }
 
             if (state.items.isEmpty()) {
-                item { EmptyState(filter = state.filter) }
+                item {
+                    EmptyStateView(
+                        title = if (state.filter == WordbankFilter.ALL) {
+                            stringResource(R.string.wordbank_empty)
+                        } else {
+                            stringResource(R.string.wordbank_empty_filtered)
+                        },
+                        description = stringResource(R.string.wordbank_empty_hint),
+                    )
+                }
             } else {
                 items(items = state.items, key = { it.id }) { vocab ->
                     VocabCard(
@@ -261,22 +284,10 @@ private fun TagChip(text: String, emphasized: Boolean) {
 }
 
 @Composable
-private fun EmptyState(filter: WordbankFilter) {
-    Box(
-        modifier = Modifier
-            .fillMaxWidth()
-            .padding(vertical = 48.dp),
-        contentAlignment = Alignment.Center,
-    ) {
-        Text(
-            text = if (filter == WordbankFilter.ALL) {
-                stringResource(R.string.wordbank_empty)
-            } else {
-                stringResource(R.string.wordbank_empty_filtered)
-            },
-            style = MaterialTheme.typography.bodyMedium,
-            color = MaterialTheme.colorScheme.onSurfaceVariant,
-            textAlign = TextAlign.Center,
-        )
-    }
+private fun EmptyStateView(title: String, description: String) {
+    com.antigravity.lyrian.ui.components.EmptyState(
+        title = title,
+        description = description,
+        modifier = Modifier.padding(top = 24.dp),
+    )
 }

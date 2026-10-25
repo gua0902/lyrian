@@ -42,6 +42,7 @@ import androidx.compose.ui.unit.dp
 import androidx.hilt.navigation.compose.hiltViewModel
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.antigravity.lyrian.R
+import com.antigravity.lyrian.ui.components.LyrianTopAppBar
 import com.antigravity.lyrian.ui.theme.LyrianMotion
 
 /**
@@ -60,7 +61,9 @@ fun MyScreen(
 
     Scaffold(
         topBar = {
-            TopAppBar(title = { Text(stringResource(R.string.tab_my)) })
+            // 這一頁是儀表板（固定卡片、不需要長捲動），用小型 Top App Bar；
+            // 首頁與字庫是清單，才用「大標題會收合」的版本。
+            LyrianTopAppBar(title = stringResource(R.string.tab_my))
         },
     ) { innerPadding ->
         Column(

@@ -6,8 +6,10 @@ package com.antigravity.lyrian.data.ai
  * ## 為什麼要有這一層
  *
  * 擁有者的要求是「先建好接口與設定入口，之後接入任何 AI 都不必改動呼叫端」。
- * 因此所有 AI 能力都收斂在這四個方法，呼叫端（結果頁、翻譯批改、字庫出題）
- * **只認得這個介面**，不認得 OpenAI／Gemini／DeepSeek 任何一家。
+ * 因此所有 AI 能力都收斂在這個介面，呼叫端（結果頁、字庫出題）
+ * **只認得它**，不認得 OpenAI／Gemini／DeepSeek 任何一家。
+ *
+ * 翻譯批改已於 2026-10 取消，介面一併移除。
  *
  * ## 本輪的行為
  *
@@ -35,17 +37,6 @@ interface AiService {
         lyrics: String,
         minLevel: String,
     ): AiResult<SongVocabularyAnalysis>
-
-    /**
-     * 批改一次翻譯作答。
-     *
-     * @param source 原文（英文歌詞）
-     * @param userTranslation 使用者的中文翻譯
-     */
-    suspend fun reviewTranslation(
-        source: String,
-        userTranslation: String,
-    ): AiResult<TranslationReview>
 
     /**
      * 用字庫的單字出題。
@@ -101,14 +92,6 @@ data class VocabularyInsight(
     val kind: String = "phrase",
 )
 
-/** [AiService.reviewTranslation] 的結果。 */
-data class TranslationReview(
-    /** 0f..1f 的相似度分數 */
-    val score: Float,
-    /** 給使用者的回饋（中文） */
-    val feedback: String,
-)
-
 /** [AiService.generateQuestions] 的一題。 */
 data class GeneratedQuestion(
     val prompt: String,
@@ -134,11 +117,6 @@ class DisabledAiService @javax.inject.Inject constructor() : AiService {
         lyrics: String,
         minLevel: String,
     ): AiResult<SongVocabularyAnalysis> = AiResult.NotEnabled
-
-    override suspend fun reviewTranslation(
-        source: String,
-        userTranslation: String,
-    ): AiResult<TranslationReview> = AiResult.NotEnabled
 
     override suspend fun generateQuestions(
         words: List<String>,

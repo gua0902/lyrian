@@ -28,16 +28,13 @@
     <string name="search_result_count">%1$d 首歌曲</string>
     <string name="search_hint">輸入歌手與歌名，開始你的第一首歌。</string>
     <string name="search_empty_result">找不到可練習的歌曲，換個關鍵字試試。</string>
+    <string name="search_empty_result_hint">換個拼法，或只輸入歌名再試一次。</string>
+    <string name="search_loading">正在搜尋歌曲…</string>
+    <string name="practice_start">開始練習</string>
     <string name="search_error_no_input">請輸入歌手與歌名</string>
     <string name="search_error_generic">搜尋失敗，請稍後再試</string>
 
     <!-- 練習 -->
-    <string name="practice_choose_mode">你想怎麼練這首歌？</string>
-    <string name="practice_mode_fill_choice">單字填空</string>
-    <string name="practice_mode_fill_choice_desc">聽歌補上缺漏的單字，四選一</string>
-    <string name="practice_mode_zh_translate">翻譯 AI 打分</string>
-    <string name="practice_mode_zh_translate_desc">寫出中文意思，由 AI 給你回饋</string>
-    <string name="practice_needs_ai">需先設定 AI 金鑰</string>
     <string name="practice_progress_count">%1$d / %2$d</string>
     <string name="practice_accuracy">正確率 %1$d%%</string>
     <string name="practice_complete_title">全部答完了！</string>
@@ -56,6 +53,7 @@
     <string name="wordbank_filter_reviewing">待複習</string>
     <string name="wordbank_empty">還沒有收藏任何單字。去練習一首歌吧！</string>
     <string name="wordbank_empty_filtered">這個分類目前沒有單字。</string>
+    <string name="wordbank_empty_hint">答錯的字會自動進來；延伸詞彙也可以用「加入字庫」手動收藏。</string>
     <string name="wordbank_error_count">錯誤 %1$d 次</string>
 
     <!-- 我的 -->
@@ -90,14 +88,28 @@
     <string name="ai_add_key">新增金鑰</string>
     <string name="ai_key_count">目前有 %1$d 把金鑰會輪替使用</string>
     <string name="ai_key_pool_hint">多把金鑰會自動輪替，可繞過免費層的速率限制。</string>
-    <string name="ai_test_connection">連接測試</string>
-    <string name="ai_testing">測試中…</string>
-    <string name="ai_test_success">連線成功（%1$d 毫秒）</string>
-    <string name="ai_test_invalid_key">金鑰無效</string>
-    <string name="ai_test_not_found">找不到端點或模型</string>
-    <string name="ai_test_rate_limited">已達速率限制——可新增更多金鑰來輪替</string>
-    <string name="ai_test_server_error">服務暫時無法使用（%1$d）</string>
-    <string name="ai_test_network_error">無法連線：%1$s</string>
+
+    <!-- AI 測試入口（開發用） -->
+    <string name="ai_test_section">開發</string>
+    <string name="ai_test_title">AI 測試</string>
+    <string name="ai_test_entry_hint">開發測試入口。不會呼叫任何服務，也不會建立金鑰。</string>
+    <string name="ai_test_state_configured">設定看起來完整，但測試服務尚未接入。</string>
+    <string name="ai_test_state_not_configured">尚未設定測試服務。</string>
+    <string name="ai_test_sheet_title">AI 測試（開發用）</string>
+    <string name="ai_test_disclaimer">這是開發測試入口，不是正式 AI 功能；這個畫面不會發出任何請求。</string>
+    <string name="ai_test_config_section">目前設定</string>
+    <string name="ai_test_provider">供應商</string>
+    <string name="ai_test_model">模型</string>
+    <string name="ai_test_key">金鑰</string>
+    <string name="ai_test_service_state">服務狀態</string>
+    <string name="ai_test_service_disabled">尚未接入（AiService 目前是停用實作）</string>
+    <string name="ai_test_not_configured">尚未設定</string>
+    <string name="ai_test_task_section">未來會檢查</string>
+    <string name="ai_test_task_json">送出固定的一句話，確認回應是合法 JSON</string>
+    <string name="ai_test_task_latency">延遲與 token 用量</string>
+    <string name="ai_test_task_errors">錯誤處理（金鑰失效、額度不足）</string>
+    <string name="ai_test_run">執行測試</string>
+    <string name="ai_test_blocked_hint">先確認要接哪一個服務與模型，才會真的發出請求；在那之前按鈕保持停用。</string>
 
     <!-- Onboarding -->
     <string name="onboarding_welcome_title">用英文歌學單字</string>
@@ -109,7 +121,7 @@
     <string name="onboarding_privacy_outbound_cover">取得封面（iTunes）</string>
     <string name="onboarding_privacy_outbound_ai">使用 AI 功能時（用你自己的金鑰）</string>
     <string name="onboarding_byok_title">自備 AI 金鑰（選用）</string>
-    <string name="onboarding_byok_body">翻譯練習需要你自己的 LLM API 金鑰。沒有金鑰也能使用單字填空。</string>
+    <string name="onboarding_byok_body">之後的 AI 功能會用你自己的 LLM API 金鑰；沒有金鑰也能完整使用單字填空。</string>
     <string name="onboarding_byok_why_title">為什麼要自備？</string>
     <string name="onboarding_byok_why_body">App 不內建金鑰，所以沒有額度限制、也不會轉售 API。金鑰加密存在這台裝置上，支援多把金鑰輪替以繞過速率限制。</string>
     <string name="onboarding_setup_key">設定金鑰</string>
