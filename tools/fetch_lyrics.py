@@ -22,6 +22,13 @@ SONGS = [
     ("Coldplay", "Yellow"),
 ]
 
+# 擁有者要求「用另外三首歌」驗收新選詞系統（寫成 4.json / 5.json / 6.json）
+EXTRA_SONGS = [
+    ("Adele", "Someone Like You"),
+    ("Coldplay", "The Scientist"),
+    ("Olivia Rodrigo", "drivers license"),
+]
+
 UA = "LyrianApp/1.0.0 (https://github.com/antigravity/lyrian)"
 
 
@@ -32,21 +39,39 @@ def fetch(artist, track):
         return json.load(r)
 
 
-for i, (artist, track) in enumerate(SONGS, start=1):
-    try:
-        rows = fetch(artist, track)
-    except Exception as e:  # noqa: BLE001
-        print(f"FAIL {artist} - {track}: {e}")
-        continue
-    if not rows:
-        print(f"empty {artist} - {track}")
-        continue
-    # prefer a record that actually has structured/synced lyrics
-    rows.sort(key=lambda r: (r.get("lyricsfile") is None, r.get("syncedLyrics") is None))
-    best = rows[0]
-    path = os.path.join(OUT, f"{i}.json")
-    with open(path, "w", encoding="utf-8") as f:
-        json.dump(best, f, ensure_ascii=False)
-    print(f"{i}. {best['trackName']} - {best['artistName']} "
-          f"id={best['id']} lyricsfile={bool(best.get('lyricsfile'))} "
-          f"synced={bool(best.get('syncedLyrics'))} plain={bool(best.get('plainLyrics'))}")
+def write_all(songs, start=1):
+    for i, (artist, track) in enumerate(songs, start=start):
+        try:
+            rows = fetch(artist, track)
+        except Exception as e:  # noqa: BLE001
+            print(f"FAIL {artist} - {track}: {e}")
+            continue
+        if not rows:
+            print(f"empty {artist} - {track}")
+            continue
+        # prefer a record that actually has structured/synced lyrics
+        rows.sort(key=lambda r: (r.get("lyricsfile") is None, r.get("syncedLyrics") is None))
+        best = rows[0]
+        path = os.path.join(OUT, f"{i}.json")
+        with open(path, "w", encoding="utf-8") as f:
+            json.dump(best, f, ensure_ascii=False)
+        print(
+            i,
+            best["trackName"],
+            "-",
+            best["artistName"],
+            "id=",
+            best["id"],
+            "lyricsfile=",
+            bool(best.get("lyricsfile")),
+            "synced=",
+            bool(best.get("syncedLyrics")),
+            "plain=",
+            bool(best.get("plainLyrics")),
+        )
+
+
+if __name__ == "__main__":
+    write_all(SONGS, start=1)
+    write_all(EXTRA_SONGS, start=len(SONGS) + 1)
+    sys.exit(0)

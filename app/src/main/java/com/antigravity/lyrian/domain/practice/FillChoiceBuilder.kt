@@ -63,11 +63,12 @@ object FillChoiceBuilder {
     /**
      * 把整首歌詞轉成題目集。
      *
-     * 「哪幾句要挖、每句挖哪個字」由 [BlankSelector] 決定（逐句選詞、跨句 lemma 去重、
-     * 均勻選句）。這裡只把結果套回歌詞行並建立題目。
+     * 「哪幾句要挖、每句挖哪個字」由 [BlankSelector] 決定（學習價值分數、
+     * 跨句 lemma 去重、分段均勻）。這裡只把結果套回歌詞行並建立題目。
      *
-     * @param difficulty 挖空難度（只影響優先級，不影響題數）
+     * @param difficulty 挖空難度（影響分數與地板）
      * @param maxBlanks 題數上限（擁有者指定上限 40）
+     * @param songTitle 歌名；歌名本身就是歌詞裡的字時不挖（`Hello`、`Yellow`）
      */
     fun buildDataset(
         lines: List<LyricLine>,
@@ -75,12 +76,14 @@ object FillChoiceBuilder {
         difficulty: BlankDifficulty = BlankDifficulty.DEFAULT,
         maxBlanks: Int = DEFAULT_MAX_BLANKS,
         levelSource: WordLevelSource = WordLevelSource.None,
+        songTitle: String = "",
     ): FillChoiceDataset {
         val selections = BlankSelector.select(
             lines = lines,
             difficulty = difficulty,
             maxBlanks = maxBlanks,
             language = levelSource,
+            songTitle = songTitle,
         )
 
         val questions = mutableListOf<FillChoiceQuestion>()
@@ -99,6 +102,12 @@ object FillChoiceBuilder {
                 frequencyRank = chosen?.level?.frequencyRank,
                 basis = selection?.basis,
                 rejected = selection?.rejected.orEmpty(),
+                score = chosen?.score,
+                partOfSpeech = chosen?.level?.partOfSpeech,
+                candidateSummary = selection?.candidates
+                    ?.take(6)
+                    ?.joinToString(", ") { "${it.word}(${it.score})" }
+                    ?.takeIf { it.isNotBlank() },
             )
 
             if (chosen == null) return@map line
@@ -138,11 +147,13 @@ object FillChoiceBuilder {
         difficulty: BlankDifficulty = BlankDifficulty.DEFAULT,
         maxBlanks: Int = DEFAULT_MAX_BLANKS,
         levelSource: WordLevelSource = WordLevelSource.None,
+        songTitle: String = "",
     ): Int = BlankSelector.select(
         lines = lines,
         difficulty = difficulty,
         maxBlanks = maxBlanks,
         language = levelSource,
+        songTitle = songTitle,
     ).count { it.chosen != null }
 
     /**

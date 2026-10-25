@@ -1,4 +1,4 @@
-﻿package com.antigravity.lyrian.domain.practice
+package com.antigravity.lyrian.domain.practice
 
 import com.antigravity.lyrian.data.lang.UNLISTED_SOURCE
 import com.antigravity.lyrian.data.lang.WordLevel
@@ -168,7 +168,7 @@ class BlankSelectorTest {
         )
         val result = select(lines("velvet silhouette"), source)
         assertEquals("silhouette", result.single().chosen?.word)
-        assertTrue(result.single().basis!!.contains("罕見"))
+        assertTrue("依據要說得出是分數決定的：${result.single().basis}", result.single().basis!!.contains("分數"))
     }
 
     @Test
@@ -182,13 +182,12 @@ class BlankSelectorTest {
     }
 
     @Test
-    fun `難度只改優先級不改題數`() {
-        val source = FakeSource(
-            levels = mapOf("happy" to CefrLevel.A1, "velvet" to CefrLevel.B2),
-        )
+    fun `難度會改變選字與題數（新選詞系統）`() {
+        // ⚠️ 行為變更：舊版「難度只改優先級、不改題數」，
+        // 新版的難度同時決定「什麼值得學」的門檻（BASIC 收 A2、CHALLENGE 只收 B2+），
+        // 所以題數會隨難度單調遞減。這裡守的是這個新契約。
         val base = lines("happy velvet", "happy daylight", "velvet lantern")
-        // 補上另外兩個字，避免去重把句子清空
-        val source2 = FakeSource(
+        val source = FakeSource(
             levels = mapOf(
                 "happy" to CefrLevel.A1,
                 "velvet" to CefrLevel.B2,
@@ -197,16 +196,12 @@ class BlankSelectorTest {
             ),
         )
 
-        val advanced = select(base, source2, BlankDifficulty.ADVANCED)
-        val basic = select(base, source2, BlankDifficulty.BASIC)
+        val basic = select(base, source, BlankDifficulty.BASIC).count { it.chosen != null }
+        val advanced = select(base, source, BlankDifficulty.ADVANCED).count { it.chosen != null }
+        val challenge = select(base, source, BlankDifficulty.CHALLENGE).count { it.chosen != null }
 
-        assertEquals("題數不該因難度改變", advanced.count { it.chosen != null }, basic.count { it.chosen != null })
-        // 進階優先 → 先挑 B1 以上的字
-        assertEquals("velvet", advanced[0].chosen?.word)
-        // 基礎優先 → 先挑 A2 以下的字
-        assertEquals("happy", basic[0].chosen?.word)
-        // 用不到的 source 只是為了避免編譯警告
-        assertTrue(source.isHighFrequency("velvet").not())
+        assertTrue("基礎 >= 進階 >= 挑戰，實際 $basic/$advanced/$challenge", basic >= advanced && advanced >= challenge)
+        assertTrue("至少要能出題", advanced >= 1)
     }
 
     @Test

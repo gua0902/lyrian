@@ -78,6 +78,7 @@ class BlankReportTest {
                     difficulty = level,
                     maxBlanks = BlankSelector.MAX_BLANKS,
                     levelSource = language,
+                    songTitle = track.trackName,
                 )
                 emit("  難度 ${level.label}: ${dataset.questions.size} 題")
             }
@@ -88,6 +89,7 @@ class BlankReportTest {
                     difficulty = BlankDifficulty.DEFAULT,
                     maxBlanks = limit,
                     levelSource = language,
+                    songTitle = track.trackName,
                 )
                 emit("  上限 $limit: ${dataset.questions.size} 題")
             }
@@ -97,36 +99,50 @@ class BlankReportTest {
                 difficulty = BlankDifficulty.DEFAULT,
                 maxBlanks = BlankSelector.MAX_BLANKS,
                 levelSource = language,
+                songTitle = track.trackName,
             )
             emit("  ── 挖空明細（難度 ${BlankDifficulty.DEFAULT.label}、上限 ${BlankSelector.MAX_BLANKS}）──")
-            emit("  L   字              原形            最終  原始  來源            BNC      專名  依據")
+            emit("  L   字              原形            最終  原始  分數  詞性  來源            BNC      候選（分數）")
             dataset.debug.filter { it.chosenWord != null }.forEach { decision ->
                 val word = decision.chosenWord ?: return@forEach
                 val info = language.lookup(word)
                 emit(
-                    "  L%-3d %-15s %-15s %-5s %-5s %-14s %-8s %-5s %s".format(
+                    "  L%-3d %-15s %-15s %-5s %-5s %-4s %-5s %-14s %-8s %s".format(
                         decision.lineIndex,
                         word,
                         decision.chosenLemma ?: word,
                         info.level?.label ?: "—",
                         info.rawLevel?.label ?: "—",
+                        decision.score?.toString() ?: "—",
+                        decision.partOfSpeech?.trimEnd('.') ?: "—",
                         info.source,
                         info.frequencyRank?.toString() ?: "未收錄",
-                        if (info.isProperNoun) "是" else "否",
-                        decision.basis ?: "",
+                        decision.candidateSummary ?: "—",
+                    ),
+                )
+            }
+
+            emit("  ── 被排除的字（原因）──")
+            dataset.debug.filter { it.rejected.isNotEmpty() }.take(12).forEach { decision ->
+                emit(
+                    "  L%-3d %s".format(
+                        decision.lineIndex,
+                        decision.rejected.joinToString(", ") { "${it.word}(${it.levelSource})" },
                     ),
                 )
             }
 
             val noBlank = dataset.debug.count { it.chosenWord == null }
             val filler = dataset.debug.count { it.chosenWord == null && it.rejected.isEmpty() }
-            emit("  沒有可挖字的句子：$noBlank（其中無實詞 $filler）")
+            val eligible = dataset.debug.count { it.candidateSummary != null }
+            emit("  合格句（有候選）=$eligible；沒有可挖字的句子：$noBlank（其中無實詞 $filler）")
 
             val extension = ExtensionPicker.pick(
                 lines = lines,
                 difficulty = BlankDifficulty.DEFAULT,
                 language = language,
                 blanked = dataset.questions.map { it.answer.lowercase() }.toSet(),
+                songTitle = track.trackName,
             )
             emit("  延伸詞彙 ${extension.size} 條：")
             extension.forEach { lemma ->

@@ -1191,6 +1191,7 @@ class PracticeViewModel @Inject constructor(
             difficulty = difficulty,
             maxBlanks = maxBlanks,
             levelSource = language,
+            songTitle = source.head.title,
         )
 
         logBlankDecisions(dataset.debug, difficulty, maxBlanks)
@@ -1266,6 +1267,7 @@ class PracticeViewModel @Inject constructor(
                     difficulty = difficulty,
                     language = language,
                     blanked = allAnswers.map { it.lowercase() }.toSet(),
+                    songTitle = source.head.title,
                 ),
             )
         }

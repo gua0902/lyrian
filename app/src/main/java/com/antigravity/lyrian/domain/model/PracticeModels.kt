@@ -102,6 +102,12 @@ data class BlankDecision(
     val frequencyRank: Int? = null,
     val basis: String? = null,
     val rejected: List<RejectedCandidate> = emptyList(),
+    /** 學習價值分數（[com.antigravity.lyrian.domain.practice.WordValue]）；報表用。 */
+    val score: Int? = null,
+    /** 主要詞性；報表用。 */
+    val partOfSpeech: String? = null,
+    /** 這一句的合格候選與分數，例如 `desperate(67), passive(63)`；報表用。 */
+    val candidateSummary: String? = null,
 )
 
 /** 被過濾掉的候選字。 */

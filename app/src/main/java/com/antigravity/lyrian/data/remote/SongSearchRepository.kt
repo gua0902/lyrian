@@ -196,6 +196,8 @@ class SongSearchRepository @Inject constructor(
                 difficulty = difficulty,
                 maxBlanks = maxBlanks,
                 levelSource = levelSource,
+                // 與練習頁用同一個歌名，清單上的題數才會與進去後一致
+                songTitle = match?.trackName ?: entry.trackName,
             ),
             lyricsFile = entry.lyricsfile,
             syncedLyrics = entry.syncedLyrics,

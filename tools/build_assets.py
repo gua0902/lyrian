@@ -330,6 +330,18 @@ def read_ecdict(path: str):
             yield word, row, translation, rank, tag
 
 
+def primary_pos(translation: str) -> str:
+    """從釋義的第一行抓詞性（`n. 希望` → `n.`）。
+
+    ECDICT 的 `pos` 欄位在整份資料集裡是**空的**（實測 365,132 列全空），
+    詞性只寫在釋義的開頭，所以只能從那裡取。取不到就回空字串
+    （選詞時視為「詞性未知」，不影響是否入選）。
+    """
+    first = BR_RE.sub("\n", translation).split("\n")[0].strip()
+    match = POS_PREFIX_RE.match(first)
+    return match.group(1) if match else ""
+
+
 POS_PREFIX_RE = re.compile(r"^([a-z]+\.)\s*(.*)$", re.S)
 
 # 每個字最多保留幾個詞性、每行最長幾個字。放寬會讓分片體積翻倍。
@@ -447,6 +459,7 @@ def main() -> int:
 
     tag_by_word: dict[str, str] = {}
     bnc_by_word: dict[str, int] = {}
+    pos_by_word: dict[str, str] = {}
     dict_rows: dict[str, tuple[dict, str, int]] = {}
 
     for word, row, translation, rank, tag in read_ecdict(os.path.join(RAW, "ecdict.csv")):
@@ -454,6 +467,8 @@ def main() -> int:
             tag_by_word.setdefault(word, tag)
         if rank > 0:
             bnc_by_word.setdefault(word, rank)
+        # 詞性只存在釋義開頭（`n. 希望`），選詞要拿它判斷「值不值得學」
+        pos_by_word.setdefault(word, primary_pos(translation))
 
         # 只有「要進字典」的字才留整列（77 萬列全留會吃掉幾百 MB）
         if word in dict_rows:
@@ -529,7 +544,7 @@ def main() -> int:
     # 這也是驗證 `respect` 真的從 B1 被壓到 A2 的唯一證據。
     level_lines = sorted(
         f"{w}\t{lv}\t{src}\t{bnc_by_word.get(w, 0)}\t{1 if w in proper_nouns else 0}"
-        f"\t{raw_levels.get(w, lv)}"
+        f"\t{raw_levels.get(w, lv)}\t{pos_by_word.get(w, '')}"
         for w, (lv, src) in levels.items()
     )
     size_levels = write("levels.tsv", "\n".join(level_lines) + "\n")

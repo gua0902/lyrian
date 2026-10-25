@@ -33,6 +33,16 @@ data class WordLevel(
     val estimated: Boolean = false,
     /** 詞頻校正前的等級；等於 [level] 表示沒被校正。報表用。 */
     val rawLevel: CefrLevel? = null,
+    /** n. / a. / ad. 這類主要詞性；選詞用它判斷「值不值得學」。 */
+    val partOfSpeech: String? = null,
+    /**
+     * 「這個字到底多常見」用的排名：字面與原形**取較常見的那一個**。
+     *
+     * dreaming 自己的 BNC 排名是 21,585（因為它是屈折形），但原形 dream 是 1,000 多名
+     * ——使用者對這個字的熟悉度是後者。選詞算稀缺度時用這個值，
+     * 否則每個 A1 的 -ing 形都會被當成罕見字。
+     */
+    val commonnessRank: Int? = null,
 ) {
     /**
      * 沒有等級資料的字，一律視為比 B2 更難。
@@ -126,6 +136,8 @@ class LanguageData internal constructor(
         val properNoun: Boolean,
         /** 詞頻校正**之前**的等級（報表用；等於 [level] 表示沒被校正）。 */
         val rawLevel: CefrLevel? = level,
+        /** 主要詞性；空字串代表資料裡沒有。 */
+        val partOfSpeech: String = "",
     ) {
         /** `j`/`o` 是官方 CEFR 清單；其餘都是推估。 */
         val authoritative: Boolean get() = sourceCode == "j" || sourceCode == "o"
@@ -172,6 +184,11 @@ class LanguageData internal constructor(
         val fallbackRank = surfaceRank
             ?: fromLemma?.rank?.takeIf { it > 0 }
             ?: fromBase?.rank?.takeIf { it > 0 }
+        val commonness = listOfNotNull(
+            surfaceRank,
+            fromLemma?.rank?.takeIf { it > 0 },
+            fromBase?.rank?.takeIf { it > 0 },
+        ).minOrNull()
 
         return WordLevel(
             surface = surface,
@@ -185,6 +202,8 @@ class LanguageData internal constructor(
                 (fromBase?.properNoun ?: false),
             estimated = hit?.authoritative == false,
             rawLevel = hit?.rawLevel,
+            partOfSpeech = hit?.partOfSpeech?.takeIf { it.isNotBlank() },
+            commonnessRank = commonness,
         )
     }
 
@@ -295,6 +314,7 @@ class LanguageData internal constructor(
                     rawLevel = fields.getOrNull(5)?.let { raw ->
                         if (raw == UNKNOWN_LEVEL_CODE) null else CefrLevel.fromLabel(raw)
                     } ?: level,
+                    partOfSpeech = fields.getOrNull(6).orEmpty(),
                 )
             }
 
