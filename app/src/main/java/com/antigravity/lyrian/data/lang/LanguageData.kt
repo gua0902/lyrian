@@ -43,6 +43,15 @@ data class WordLevel(
      * 否則每個 A1 的 -ing 形都會被當成罕見字。
      */
     val commonnessRank: Int? = null,
+    /**
+     * 這個字的**所有**詞性（已去點、小寫），例如 `["vt","n"]`。
+     *
+     * [partOfSpeech] 只是第一個。選詞看的是整個集合：`love` 的釋義第一行是
+     * `n.`、第二行才是 `v.`，只看第一個會讓它拿不到動詞那一半分數。
+     */
+    val allPartsOfSpeech: Set<String> = emptySet(),
+    /** 等級是否來自官方 CEFR 清單（CEFR-J／Octanove）。 */
+    val authoritative: Boolean = false,
 ) {
     /**
      * 沒有等級資料的字，一律視為比 B2 更難。
@@ -128,6 +137,7 @@ class LanguageData internal constructor(
      *
      * @property level null = `U` 列（四層都查不到，但**這個字存在**）
      * @property sourceCode `j`/`o`/`t`/`b`/`u`
+     * @property partsOfSpeech 這個字**所有**詞性（已去點、小寫），例如 `["vt","n"]`
      */
     internal data class LevelRecord(
         val level: CefrLevel?,
@@ -138,10 +148,16 @@ class LanguageData internal constructor(
         val rawLevel: CefrLevel? = level,
         /** 主要詞性；空字串代表資料裡沒有。 */
         val partOfSpeech: String = "",
-    ) {
-        /** `j`/`o` 是官方 CEFR 清單；其餘都是推估。 */
-        val authoritative: Boolean get() = sourceCode == "j" || sourceCode == "o"
-    }
+        /** 這個字所有的詞性；[partOfSpeech] 只是第一個。 */
+        val partsOfSpeech: Set<String> = emptySet(),
+        /**
+         * 等級是否來自**官方 CEFR 清單**（CEFR-J／Octanove）。
+         *
+         * 第八欄的 `a`/`e`/`u`；舊資產沒有這一欄時退回看 `sourceCode`，
+         * 所以買舊資料也不會錯判。
+         */
+        val authoritative: Boolean = sourceCode == "j" || sourceCode == "o",
+    )
 
     override fun lookup(word: String): WordLevel {
         val surface = normalize(word)
@@ -203,6 +219,8 @@ class LanguageData internal constructor(
             estimated = hit?.authoritative == false,
             rawLevel = hit?.rawLevel,
             partOfSpeech = hit?.partOfSpeech?.takeIf { it.isNotBlank() },
+            allPartsOfSpeech = hit?.partsOfSpeech.orEmpty(),
+            authoritative = hit?.authoritative == true,
             commonnessRank = commonness,
         )
     }
@@ -271,14 +289,17 @@ class LanguageData internal constructor(
         const val UNKNOWN_LEVEL_CODE = "U"
 
         /** `levels.tsv` 第三欄的代碼 → 人看得懂的來源。 */
-        internal fun sourceLabel(code: String): String = when (code) {
-            "j" -> "CEFR-J"
+        internal fun sourceLabel(code: String): String = when (code) {            "j" -> "CEFR-J"
             "o" -> "Octanove C1/C2"
             "t" -> TAG_SOURCE_LABEL
             "b", "f" -> BNC_SOURCE_LABEL
             "u" -> "未收錄"
             else -> code
         }
+
+        /** `vt.` → `vt`；空白 → null。詞性比對一律用去點小寫。 */
+        internal fun normalizePos(raw: String): String? =
+            raw.trim().trimEnd('.').lowercase().takeIf { it.isNotEmpty() }
 
         /**
          * 從「路徑 → 內容」的讀取函式建構。
@@ -306,6 +327,8 @@ class LanguageData internal constructor(
                 } else {
                     CefrLevel.fromLabel(fields[1]) ?: return@forEach
                 }
+                val rawPos = fields.getOrNull(6).orEmpty()
+                val parts = rawPos.split('/').mapNotNull(::normalizePos).toSet()
                 levels[fields[0]] = LevelRecord(
                     level = level,
                     sourceCode = fields[2],
@@ -314,7 +337,14 @@ class LanguageData internal constructor(
                     rawLevel = fields.getOrNull(5)?.let { raw ->
                         if (raw == UNKNOWN_LEVEL_CODE) null else CefrLevel.fromLabel(raw)
                     } ?: level,
-                    partOfSpeech = fields.getOrNull(6).orEmpty(),
+                    partOfSpeech = rawPos.split('/').firstOrNull()?.trim().orEmpty(),
+                    partsOfSpeech = parts,
+                    // 第八欄：a=官方、e=推估、u=無。舊資產沒有這一欄 → 看來源代碼。
+                    authoritative = when (fields.getOrNull(7)) {
+                        "a" -> true
+                        "e", "u" -> false
+                        else -> fields[2] == "j" || fields[2] == "o"
+                    },
                 )
             }
 

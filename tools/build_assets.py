@@ -88,6 +88,25 @@ _SRC_LABEL = {
     SRC_FREQ_LEGACY: "詞頻推估",
 }
 
+# 等級的可信度。擁有者要的第八欄：
+#   a = 官方 CEFR 清單（CEFR-J / Octanove）給的
+#   e = 推估（考試標籤 / BNC 詞頻）
+#   u = 沒有等級（U 列）
+# 選詞目前**不因它改變行為**，只是讓資料說實話——之後要讓權威等級
+# 優先時才不必再改一次格式。
+CONF_AUTHORITATIVE = "a"
+CONF_ESTIMATED = "e"
+CONF_UNKNOWN = "u"
+
+
+def confidence_of(source_code: str) -> str:
+    if source_code in (SRC_CEFRJ, SRC_OCTANOVE):
+        return CONF_AUTHORITATIVE
+    if source_code == SRC_UNKNOWN:
+        return CONF_UNKNOWN
+    return CONF_ESTIMATED
+
+
 # ---------- 第 2 層：ECDICT 考試標籤 ----------
 #
 # ECDICT 的 `tag` 欄位是空白分隔的標籤集合（實測只有這 8 種）。
@@ -177,7 +196,6 @@ def cap_by_frequency(level: str, rank: int) -> str:
         if rank < limit:
             return level if LEVEL_RANK[level] <= LEVEL_RANK[cap] else cap
     return level
-
 
 
 def read_cefrj(path: str) -> dict[str, str]:
@@ -314,6 +332,62 @@ def read_casing(path: str) -> set[str]:
     return capitalized - lowercase_seen
 
 
+# ECDICT 用中文括號標註「這個字是名字」：
+#   `n. 艾比（女子名）`、`n. 阿巴斯（地名, 伊朗最大港口）`
+# 把括號內容按逗號切成 token 再比對，才不會把 `abseil` 的
+# `(登山运动中的)` 誤判成地名（它含有「山」字）。
+NAME_MARKER_TOKENS = {
+    "人名", "姓氏", "男子名", "女子名", "地名", "城市", "州名",
+    "港口", "港市", "首都", "岛", "島", "河", "郡", "县", "縣", "村", "镇", "鎮",
+    "湖", "湾", "灣", "山", "山脉", "山脈", "街", "街道", "广场", "廣場",
+    "教堂", "大学", "大學", "球队", "球隊", "公司名", "品牌",
+}
+
+_PAREN_RE = re.compile(r"[\(（]([^)）]{1,20})[\)）]")
+_TOKEN_SPLIT_RE = re.compile(r"[,，、;；]")
+
+
+def read_name_marked(path: str) -> set[str]:
+    """從中文釋義的括號標註找出「這是名字」的字。
+
+    實測命中 2,569 個（`aaron`、`abbott`、`aberdeen`…），而
+    `velvet` / `silence` 這類正常字不會被誤判。
+
+    這一層補的是「字典有權威標註」的情況；`vega`（織女星）與 `cran`（鲱斗）
+    這種字典不認為是名字的字，靠 `tools/data/proper_nouns.txt` 的人工清單。
+    """
+    marked: set[str] = set()
+    with open(path, encoding="utf-8", newline="") as f:
+        for row in csv.DictReader(f):
+            word = (row.get("word") or "").strip().lower()
+            if not WORD_RE.match(word) or word in marked:
+                continue
+            translation = row.get("translation") or ""
+            for group in _PAREN_RE.findall(translation):
+                tokens = [t.strip() for t in _TOKEN_SPLIT_RE.split(group)]
+                if any(t in NAME_MARKER_TOKENS for t in tokens):
+                    marked.add(word)
+                    break
+    return marked
+
+
+# 人工維護的補漏清單（一行一個字，# 之後是註解）。
+PROPER_NOUN_EXTRA = os.path.join("tools", "data", "proper_nouns.txt")
+
+
+def read_proper_noun_extra(path: str) -> set[str]:
+    """讀人工黑名單；檔案不存在時回空集合（建置不該因此失敗）。"""
+    if not os.path.exists(path):
+        return set()
+    words: set[str] = set()
+    with open(path, encoding="utf-8") as f:
+        for line in f:
+            word = line.split("#", 1)[0].strip().lower()
+            if WORD_RE.match(word):
+                words.add(word)
+    return words
+
+
 def read_ecdict(path: str):
     """Stream ECDICT rows that are single words with a Chinese gloss."""
     with open(path, encoding="utf-8", newline="") as f:
@@ -330,16 +404,63 @@ def read_ecdict(path: str):
             yield word, row, translation, rank, tag
 
 
-def primary_pos(translation: str) -> str:
-    """從釋義的第一行抓詞性（`n. 希望` → `n.`）。
+def read_ecdict_stats(path: str):
+    """第一趟 ECDICT 掃描：標籤、BNC 排名、詞性。
 
-    ECDICT 的 `pos` 欄位在整份資料集裡是**空的**（實測 365,132 列全空），
-    詞性只寫在釋義的開頭，所以只能從那裡取。取不到就回空字串
-    （選詞時視為「詞性未知」，不影響是否入選）。
+    每字只留第一次出現的那一列——ECDICT 有重複字（大小寫、異體），
+    第一列就是它的主要條目。
     """
-    first = BR_RE.sub("\n", translation).split("\n")[0].strip()
-    match = POS_PREFIX_RE.match(first)
-    return match.group(1) if match else ""
+    tag_by_word: dict[str, str] = {}
+    bnc_by_word: dict[str, int] = {}
+    pos_by_word: dict[str, str] = {}
+    for word, _row, translation, rank, tag in read_ecdict(path):
+        if tag:
+            tag_by_word.setdefault(word, tag)
+        if rank > 0:
+            bnc_by_word.setdefault(word, rank)
+        pos_by_word.setdefault(word, all_pos(translation))
+    return tag_by_word, bnc_by_word, pos_by_word
+
+
+def collect_dict_rows(path: str, wanted: set[str]) -> dict[str, tuple[dict, str, int]]:
+    """第二趟 ECDICT 掃描：只留 ``wanted`` 的整列。
+
+    ``wanted`` 是「有等級的字」——含 BNC 尾段（排名 > 30,000）那些。
+    舊版用 ``rank <= BNC_LIMIT`` 當條件，於是 15,272 個被 BNC 分成 C2 的
+    尾段字**看得到等級、查不到字典**。擁有者要求補滿，所以條件改成
+    「這張等級表裡有它」。
+    """
+    rows: dict[str, tuple[dict, str, int]] = {}
+    for word, row, translation, rank, _tag in read_ecdict(path):
+        if word in wanted and word not in rows:
+            rows[word] = (row, translation, rank)
+    return rows
+
+
+def all_pos(translation: str, limit: int = 3) -> str:
+    """從釋義抓**所有**詞性（`n. 希望\\nv. 期望` → `n./v.`）。
+
+    ECDICT 的 `pos` 欄位在整份資料集裡是**空的**（實測 770,611 列全空），
+    詞性只寫在每一行釋義的開頭，所以只能從那裡取。
+
+    為什麼不是只取第一個：只留第一個會讓 `love`（`n.` 在 `v.` 前面）看起來
+    只能是名詞，選詞的「詞性價值」就永遠拿不到動詞那一半分數。
+    擁有者要求的修正就是這個——一個字只要**有任一實詞詞性**就該算實詞。
+
+    取不到就回空字串（選詞時視為「詞性未知」，不影響是否入選）。
+    """
+    seen: list[str] = []
+    for line in BR_RE.sub("\n", translation).split("\n"):
+        match = POS_PREFIX_RE.match(line.strip())
+        if not match:
+            continue
+        code = match.group(1)
+        if code in seen:
+            continue
+        seen.append(code)
+        if len(seen) >= limit:
+            break
+    return "/".join(seen)
 
 
 POS_PREFIX_RE = re.compile(r"^([a-z]+\.)\s*(.*)$", re.S)
@@ -456,25 +577,15 @@ def main() -> int:
     # 最後再套一次「詞頻校正」（只降不升），它可覆蓋前三層。
     proper_nouns = read_casing(os.path.join(RAW, "ecdict.csv"))
     print(f"proper-noun-only  : {len(proper_nouns)}")
+    name_marked = read_name_marked(os.path.join(RAW, "ecdict.csv"))
+    manual = read_proper_noun_extra(PROPER_NOUN_EXTRA)
+    proper_nouns |= name_marked | manual
+    print(f"  + 中文標註名字 {len(name_marked)}  + 人工清單 {len(manual)}"
+          f"  = {len(proper_nouns)}")
 
-    tag_by_word: dict[str, str] = {}
-    bnc_by_word: dict[str, int] = {}
-    pos_by_word: dict[str, str] = {}
-    dict_rows: dict[str, tuple[dict, str, int]] = {}
-
-    for word, row, translation, rank, tag in read_ecdict(os.path.join(RAW, "ecdict.csv")):
-        if tag:
-            tag_by_word.setdefault(word, tag)
-        if rank > 0:
-            bnc_by_word.setdefault(word, rank)
-        # 詞性只存在釋義開頭（`n. 希望`），選詞要拿它判斷「值不值得學」
-        pos_by_word.setdefault(word, primary_pos(translation))
-
-        # 只有「要進字典」的字才留整列（77 萬列全留會吃掉幾百 MB）
-        if word in dict_rows:
-            continue
-        if (word in cefrj) or (word in octanove) or tag or (0 < rank <= limit):
-            dict_rows[word] = (row, translation, rank)
+    # 第一趟：標籤、BNC 排名、詞性（每字第一次出現為準）
+    ecdict_path = os.path.join(RAW, "ecdict.csv")
+    tag_by_word, bnc_by_word, pos_by_word = read_ecdict_stats(ecdict_path)
 
     level_words = set(cefrj) | set(octanove) | set(tag_by_word) | set(bnc_by_word)
 
@@ -507,6 +618,24 @@ def main() -> int:
         levels[word] = (corrected, source)
         raw_levels[word] = level
         source_counts[source] += 1
+
+    # 人工黑名單裡、卻完全不在等級表的字（例如 `cran`：沒有 BNC 排名、
+    # 也沒有任何考試標籤）→ 補一列 `U`，只為了讓「它是專有名詞」這個事實
+    # 進得了資料。少了這一列，App 會把它當「未收錄的生僻字」而**優先挖它**。
+    manual_only = sorted(manual - set(levels))
+    for word in manual_only:
+        levels[word] = (UNKNOWN_LEVEL, SRC_UNKNOWN)
+        raw_levels[word] = UNKNOWN_LEVEL
+        source_counts[SRC_UNKNOWN] += 1
+    if manual_only:
+        print(f"manual-only rows  : {len(manual_only)}  {manual_only[:8]}")
+
+    # 第二趟：只保留「等級表裡有」的整列 —— 含 BNC 尾段（>30,000）。
+    # 舊版用 `0 < rank <= limit`，尾段字有等級卻沒有字典，擁有者要求補滿。
+    dict_rows = collect_dict_rows(ecdict_path, set(levels))
+    missing_entries = sorted(set(levels) - set(dict_rows))
+    print(f"dict candidates   : {len(dict_rows)} / levels {len(levels)}"
+          f"  (ECDICT 沒收錄 {len(missing_entries)})")
 
     # ---------- dictionary shards ----------
     #
@@ -544,7 +673,7 @@ def main() -> int:
     # 這也是驗證 `respect` 真的從 B1 被壓到 A2 的唯一證據。
     level_lines = sorted(
         f"{w}\t{lv}\t{src}\t{bnc_by_word.get(w, 0)}\t{1 if w in proper_nouns else 0}"
-        f"\t{raw_levels.get(w, lv)}\t{pos_by_word.get(w, '')}"
+        f"\t{raw_levels.get(w, lv)}\t{pos_by_word.get(w, '')}\t{confidence_of(src)}"
         for w, (lv, src) in levels.items()
     )
     size_levels = write("levels.tsv", "\n".join(level_lines) + "\n")

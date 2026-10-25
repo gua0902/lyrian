@@ -73,7 +73,11 @@ object ExtensionPicker {
                 // 詞性已知但**不是實詞**（介系詞／代名詞…）→ 不值得推薦。
                 // 詞性未知（資料裡沒有）則保留，由分數決定。
                 val knownPos = info.partOfSpeech
-                if (knownPos != null && WordValue.posValue(knownPos) < 20) return@forEach
+                if (knownPos != null &&
+                    WordValue.posValue(info.allPartsOfSpeech.ifEmpty { setOf(knownPos) }) < 20
+                ) {
+                    return@forEach
+                }
 
                 val score = WordValue.score(
                     level = info.level,
@@ -84,6 +88,7 @@ object ExtensionPicker {
                     difficulty = difficulty,
                     capitalizedOnly = casing.isCapitalizedOnly(token),
                     occurrences = casing.occurrences(token),
+                    partsOfSpeech = info.allPartsOfSpeech,
                 )
                 if (score < MIN_SCORE) return@forEach
 

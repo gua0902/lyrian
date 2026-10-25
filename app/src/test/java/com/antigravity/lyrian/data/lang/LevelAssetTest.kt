@@ -134,7 +134,10 @@ class LevelAssetTest {
         assertTrue("Octanove 這一層不能空", (counts["o"] ?: 0) > 1_000)
         assertTrue("考試標籤這一層不能空", (counts["t"] ?: 0) > 5_000)
         assertTrue("BNC 這一層不能空", (counts["b"] ?: 0) > 20_000)
-        assertEquals("目前沒有任何字同時滿足「是實詞但四層都沒資料」", 0, unknown)
+        // `U` 列只該來自「人工專名清單裡、完全沒有任何等級資料」的字
+        // （例如 `cran`：沒有 BNC 排名也沒有考試標籤）。
+        // 若這個數字變大，代表又有字被當成「查得到但沒等級」而**優先被挖**。
+        assertTrue("U 列只允許人工補的專名，實際 $unknown", unknown <= 5)
     }
 
     @Test
@@ -143,5 +146,74 @@ class LevelAssetTest {
         assertEquals(CefrLevel.A1, data.lookup("hope").level)
         // 高頻的 B1/B2 字會被壓下來
         assertEquals(CefrLevel.A2, data.lookup("respect").level)
+    }
+
+    // ---------- 2026-10 重構：多詞性、可信度、字典覆蓋 ----------
+
+    @Test
+    fun `一個字的所有詞性都會被讀進來`() {
+        // `abandon` 的釋義是 `vt. 放棄` + `n. 放任` → 兩個詞性都要有
+        val word = data.lookup("abandon")
+
+        assertTrue(
+            "allParts=${word.allPartsOfSpeech}",
+            word.allPartsOfSpeech.containsAll(setOf("vt", "n")),
+        )
+        assertEquals("主要詞性保留原始寫法（顯示用）", "vt.", word.partOfSpeech)
+        assertEquals("集合版是去點小寫（比對用）", setOf("vt", "n"), word.allPartsOfSpeech)
+        assertTrue("CEFR-J 給的等級 → 權威", word.authoritative)
+    }
+
+    @Test
+    fun `推估來源的等級不算權威`() {
+        // `piercing` 只靠 gre 標籤 → 推估
+        assertFalse(data.lookup("piercing").authoritative)
+        // `blah` 只靠 BNC 詞頻 → 推估
+        assertFalse(data.lookup("blah").authoritative)
+    }
+
+    @Test
+    fun `中文標註名字的字被標成專有名詞`() {
+        // ECDICT 的釋義寫 `艾比（女子名）`；這種字不該被挖空
+        listOf("abby", "adele", "aaron").forEach { word ->
+            assertTrue("$word 應該被標成專有名詞", data.lookup(word).isProperNoun)
+        }
+        // 正常名詞不能被誤判（`abseil` 的釋義有「(登山运动中的)」）
+        assertFalse("abseil 不是專有名詞", data.lookup("abseil").isProperNoun)
+        assertFalse("velvet 不是專有名詞", data.lookup("velvet").isProperNoun)
+    }
+
+    @Test
+    fun `人工黑名單的專有名詞也生效`() {
+        // 擁有者回報：字典當普通名詞，但歌詞裡是名字
+        assertTrue("vega 應在人工黑名單", data.lookup("vega").isProperNoun)
+        assertTrue("cran 應在人工黑名單", data.lookup("cran").isProperNoun)
+    }
+
+    @Test
+    fun `每個有等級的字都查得到字典`() {
+        // 擁有者要求：字典覆蓋補到全部 47,064 字。
+        // 只有 ECDICT 完全沒收錄的 32 個字允許缺席。
+        val root = listOf("src/main/assets", "app/src/main/assets").map(::File).first { it.isDirectory }
+        val levelWords = File(root, "data/levels.tsv").readLines()
+            .map { it.split('\t').first() }
+            .filter { it.isNotEmpty() }
+            .toSet()
+
+        // 直接從分片檔抓 `"w":"…"`：47k 筆 JSON 逐筆反序列化在單元測試裡太慢
+        val dictWords = HashSet<String>(64_000)
+        File(root, "data/dict").listFiles { f -> f.extension == "json" }?.forEach { shard ->
+            Regex("\"w\":\"([^\"]+)\"").findAll(shard.readText()).forEach { match ->
+                dictWords += match.groupValues[1]
+            }
+        }
+
+        val missing = levelWords - dictWords
+        assertTrue(
+            "缺 ${missing.size} 個字（允許 32 個 ECDICT 沒收錄）：" +
+                missing.sorted().take(10),
+            missing.size <= 32,
+        )
+        assertTrue("字典應該有 4.7 萬筆，實際 ${dictWords.size}", dictWords.size >= 47_000)
     }
 }

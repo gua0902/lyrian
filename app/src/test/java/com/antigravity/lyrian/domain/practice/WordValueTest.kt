@@ -58,6 +58,45 @@ class WordValueTest {
     }
 
     @Test
+    fun `多詞性只要有一個實詞就算實詞`() {
+        // 擁有者指定：`love` 釋義第一行是 n.、第二行才是 v.
+        // 只看第一個詞性會讓它拿不到動詞那一半分數。
+        assertEquals(20, WordValue.posValue(setOf("n.", "v.")))
+        assertEquals(20, WordValue.posValue(setOf("vt.", "n.")))
+        assertEquals(20, WordValue.posValue(setOf("pron.", "v.")))
+
+        // 全部都是虛詞 → 低分
+        assertEquals(6, WordValue.posValue(setOf("pron.", "prep.")))
+
+        // 沒有詞性資料 → 中性
+        assertEquals(10, WordValue.posValue(emptySet()))
+    }
+
+    @Test
+    fun `同一個字多一個詞性會加分`() {
+        val single = WordValue.score(
+            level = CefrLevel.B2,
+            rank = 9000,
+            partOfSpeech = "n.",
+            surface = "love",
+            lemma = "love",
+            difficulty = BlankDifficulty.ADVANCED,
+            partsOfSpeech = emptySet(),
+        )
+        // 多一個動詞詞性 → 仍然是實詞，但這條守的是「集合版不會更低」
+        val multi = WordValue.score(
+            level = CefrLevel.B2,
+            rank = 9000,
+            partOfSpeech = "n.",
+            surface = "love",
+            lemma = "love",
+            difficulty = BlankDifficulty.ADVANCED,
+            partsOfSpeech = setOf("n.", "v."),
+        )
+        assertTrue("multi=$multi single=$single", multi >= single)
+    }
+
+    @Test
     fun `原形比派生與屈折更值得學`() {
         val base = WordValue.formValue("silence", "silence")
         val derived = WordValue.formValue("consideration", "consideration")

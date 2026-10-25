@@ -68,6 +68,7 @@ object WordValue {
      * @param partOfSpeech 詞性縮寫（`n.` / `a.` / `ad.`）；null = 未知
      * @param surface 字面形式
      * @param lemma 原形
+     * @param partsOfSpeech 這個字**所有**詞性（去點小寫）。非空時優先於 [partOfSpeech]
      * @param capitalizedOnly 每次都大寫（歌詞強調、或名字）→ 扣分
      * @param occurrences 這首歌出現幾次
      */
@@ -80,10 +81,11 @@ object WordValue {
         difficulty: BlankDifficulty,
         capitalizedOnly: Boolean = false,
         occurrences: Int = 1,
+        partsOfSpeech: Set<String> = emptySet(),
     ): Int {
         val raw = levelFit(level, difficulty) +
             rarity(rank) +
-            posValue(partOfSpeech) +
+            posValue(partsOfSpeech.ifEmpty { setOfNotNull(partOfSpeech) }) +
             formValue(surface, lemma) +
             contextValue(capitalizedOnly) -
             penalty(rank, capitalizedOnly, occurrences)
@@ -112,14 +114,35 @@ object WordValue {
     }
 
     /** 實詞才有學習價值（0–20）。 */
-    fun posValue(partOfSpeech: String?): Int {
-        val key = partOfSpeech?.trim()?.trimEnd('.')?.lowercase() ?: return 10
+    fun posValue(partOfSpeech: String?): Int =
+        posValue(if (partOfSpeech.isNullOrBlank()) emptySet() else setOf(partOfSpeech))
+
+    /**
+     * 同一件事，但看**整個詞性集合**（0–20）。
+     *
+     * 只要任一個詞性是實詞就給滿分：`love` 的第一行是 `n.`、第二行才是 `v.`，
+     * 只取第一個會讓它永遠拿不到動詞那一半分數。
+     *
+     * ```
+     * 有空集合（資料裡沒有詞性） → 10（中性，不獎不罰）
+     * 有任一實詞               → 20
+     * 全部都是虛詞／縮寫        → 6
+     * 其他（例如只有 pl.）      → 10
+     * ```
+     */
+    fun posValue(parts: Set<String>): Int {
+        val keys = parts.mapNotNull(::normalizePos).toSet()
+        if (keys.isEmpty()) return 10
         return when {
-            key in CONTENT_POS -> 20
-            key in LOW_VALUE_POS -> 6
+            keys.any { it in CONTENT_POS } -> 20
+            keys.all { it in LOW_VALUE_POS } -> 6
             else -> 10
         }
     }
+
+    /** `vt.` → `vt`；空白 → null。 */
+    internal fun normalizePos(raw: String?): String? =
+        raw?.trim()?.trimEnd('.')?.lowercase()?.takeIf { it.isNotEmpty() }
 
     /**
      * 詞形價值（0–15）：**原形 > 派生 > 屈折**。

@@ -286,6 +286,8 @@ object BlankSelector {
                 difficulty = difficulty,
                 capitalizedOnly = casing.isCapitalizedOnly(token),
                 occurrences = casing.occurrences(token),
+                // 看整個詞性集合：`love` 的釋義第一行是 n.、第二行才是 v.
+                partsOfSpeech = levelInfo.allPartsOfSpeech,
             )
 
             candidates += Candidate(
