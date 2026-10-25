@@ -111,17 +111,18 @@ data class PracticeUiState(
     val playbackError: String? = null,
 
     /**
-     * 開場狀態。
+     * 三點動畫：**只代替「目前還沒唱到的那一行」**，不是整頁載入狀態。
      *
-     * 擁有者指定的行為：進入練習頁**不可以**立刻要求作答——音訊還沒開始，
-     * 使用者連句子都沒聽到。因此：
      * ```
-     * LOADING（三點動畫）→ 音訊真的走了 + 位置進到第一句 → READY（淡入歌詞）
-     *                    → 15 秒或載入失敗 → FAILED（顯示重試）
+     * true  音訊還沒進到第一句（或還沒開始）→ 那一行顯示三點
+     * false 已經進到該行的時間範圍（或沒有時間軸／音訊失敗）→ 正常顯示歌詞
      * ```
-     * LOADING 期間：不顯示選項、不觸發暫停、不預先定位歌詞行。
+     *
+     * 擁有者明確要求：三點**不得**控制整個練習頁的生命週期——
+     * 歌詞、題目、選項、音訊、時間軸在進入頁面時就全部就緒，
+     * 三點只是那一行的視覺替身。
      */
-    val entryGate: EntryGate = EntryGate.LOADING,
+    val awaitingFirstLine: Boolean = false,
 
     /** 歌曲是否已經播完（**結果頁的唯一觸發條件**）。 */
     val songFinished: Boolean = false,
@@ -227,15 +228,15 @@ data class PracticeUiState(
 }
 
 /**
- * 練習頁的開場狀態。
+ * 三點動畫的顯示門檻。
  *
- * ```
- * LOADING  三點動畫；不顯示選項、不暫停、不定位歌詞行
- * READY    音訊已在走、位置進到第一句 → 動畫淡出、歌詞淡入，開始可作答
- * FAILED   載入失敗或超過 15 秒沒有音訊 → 停止動畫，顯示重試
- * ```
+ * 擁有者指定：若第一句歌詞**距離影片開頭不到 5 秒**，等一下就唱到了，
+ * 不需要倒數動畫——直接正常顯示歌詞（三點透明度拉到最低＝等於不顯示）。
  */
-enum class EntryGate { LOADING, READY, FAILED }
+private const val DOTS_MIN_WAIT_MS = 5_000L
+
+/** 三點最多顯示多久；超過就放棄等待、正常顯示歌詞（不得永遠停在三點）。 */
+private const val DOTS_MAX_MS = 20_000L
 
 /** 找不到練習資料。使用者唯一的出路是返回。 */
 private const val ERROR_NO_SESSION = "找不到這首歌的練習資料，請重新搜尋。"
@@ -282,18 +283,8 @@ private const val BOUNDARY_SNAP_TOLERANCE_MS = 250L
 /** 因為等作答而暫停時顯示的提示。 */
 private const val WAITING_FOR_ANSWER = "已暫停，補上這句的填空就會繼續播放。"
 
-/**
- * 進入練習頁後，等音訊開始的最長時間（擁有者指定 15 秒）。
- *
- * 超過就停止三點動畫、顯示「載入失敗」與重試——不可以一直轉下去。
- */
-private const val ENTRY_TIMEOUT_MS = 15_000L
-
 /** 判定「歌曲播完」的容差：`currentTime >= duration - 1 秒`（擁有者指定）。 */
 private const val SONG_END_TOLERANCE_MS = 1_000L
-
-/** 開場失敗時顯示的訊息。 */
-private const val ENTRY_FAILED = "載入失敗"
 
 /** 拖曳放手時，往前找未答挖空的容許誤差（避免差幾十毫秒就跳過該題）。 */
 private const val SNAP_TOLERANCE_MS = 1_500L
@@ -407,8 +398,8 @@ class PracticeViewModel @Inject constructor(
      */
     private val checkedLines = mutableSetOf<Int>()
 
-    /** 開場逾時的計時器（15 秒內等不到音訊就顯示重試）。 */
-    private var entryTimeoutJob: kotlinx.coroutines.Job? = null
+    /** 三點動畫的保底計時器（20 秒後無論如何都要顯示歌詞）。 */
+    private var dotsTimeoutJob: kotlinx.coroutines.Job? = null
 
     /**
      * 音量漸入的工作。
@@ -495,29 +486,19 @@ class PracticeViewModel @Inject constructor(
                     val lyricPosition = position + state.lyricOffsetMs
                     val currentLine = lineIndexAt(lyricPosition)
 
-                    // ---- 修正 1：開場閘門 ----
-                    // 音訊真的走了（currentTime 前進）而且位置進到第一句的時間範圍，
-                    // 才把三點動畫換成歌詞。在這之前**不檢查交界、不端選項**。
-                    if (state.entryGate == EntryGate.LOADING) {
-                        val reachedFirstLine = currentLine != null || !state.hasTimeline
-                        if (position > 0 && reachedFirstLine) {
-                            entryTimeoutJob?.cancel()
-                            checkedLines.clear()
-                            lastSeenLine = currentLine
-                            _uiState.update {
-                                it.copy(
-                                    entryGate = EntryGate.READY,
-                                    singingLineIndex = currentLine,
-                                    playbackPositionMs = position,
-                                )
-                            }
-                            android.util.Log.d(
-                                TAG,
-                                "entry ready：音訊已開始（${formatLogTime(position)}）→ 顯示歌詞",
-                            )
-                        }
-                        delay(POSITION_POLL_MS)
-                        continue
+                    // ---- 三點動畫：只影響「那一行」的呈現 ----
+                    // 音訊真的進到某一行的時間範圍（或根本沒有時間軸）就收掉三點。
+                    // ⚠️ 這一段**不 continue**：歌詞同步、交界檢查、結束判定
+                    // 全部照常跑，三點不得控制頁面生命週期。
+                    if (state.awaitingFirstLine &&
+                        (currentLine != null || !state.hasTimeline)
+                    ) {
+                        dotsTimeoutJob?.cancel()
+                        _uiState.update { it.copy(awaitingFirstLine = false) }
+                        android.util.Log.d(
+                            TAG,
+                            "lyrics revealed：音訊進到 line=$currentLine（${formatLogTime(position)}）",
+                        )
                     }
 
                     if (currentLine == null) {
@@ -793,18 +774,13 @@ class PracticeViewModel @Inject constructor(
         }
     }
 
-    /** 音源解析失敗：開場動畫要停下來，讓使用者看到「載入失敗／重試」。 */
+    /** 音源解析失敗：收掉三點、保留提示，其他功能完全不受影響。 */
     private fun failEntry(message: String) {
-        entryTimeoutJob?.cancel()
+        hideDots()
         _uiState.update {
             it.copy(
                 isAudioLoading = false,
                 audioNotice = message,
-                entryGate = if (it.entryGate == EntryGate.READY) {
-                    it.entryGate
-                } else {
-                    EntryGate.FAILED
-                },
             )
         }
     }
@@ -893,17 +869,24 @@ class PracticeViewModel @Inject constructor(
      * （但未答的題目**不會消失**，追回機制仍會在下一次 tick 把它拉回來。）
      */
     fun onTogglePlayPause() {
-        if (!_uiState.value.isAudioReady) {
+        val state = _uiState.value
+        if (!state.isAudioReady) {
+            // 上一次解析失敗（audioResolved 已 true）時，按播放＝重試。
+            // 不然按鈕會完全沒反應，而三點已經收掉了。
+            if (!state.isAudioLoading && audioResolved) {
+                audioResolved = false
+                _uiState.update { it.copy(audioNotice = null, playbackError = null) }
+            }
             prepareAudio()
             return
         }
 
         // 使用者手動暫停 → 立即中止還在跑的漸入（擁有者指定）。
-        if (_uiState.value.isPlaying) {
+        if (state.isPlaying) {
             stopFadeIn()
         }
 
-        if (_uiState.value.waitingForBlankIndex != null) {
+        if (state.waitingForBlankIndex != null) {
             _uiState.update {
                 it.copy(waitingForBlankIndex = null, audioNotice = null)
             }
@@ -1187,6 +1170,12 @@ class PracticeViewModel @Inject constructor(
             )
         }
 
+        val hasTimeline = dataset.lines.any { it.startMs > 0L }
+        val firstLineStart = dataset.lines.firstOrNull()?.startMs ?: 0L
+        // 三點只在「第一句離影片開頭夠遠」時才有意義；5 秒內就唱到的話
+        // 直接正常顯示（擁有者指定），否則會變成無謂的倒數。
+        val awaitingFirstLine = hasTimeline && firstLineStart > DOTS_MIN_WAIT_MS
+
         _uiState.update {
             it.copy(
                 isLoading = false,
@@ -1195,8 +1184,8 @@ class PracticeViewModel @Inject constructor(
                 coverUrl = source.head.coverUrl,
                 lines = dataset.lines,
                 questions = dataset.questions,
-                // 開場時**不端選項**（擁有者指定：豆豆期間不顯示挖空選項）
-                options = emptyList(),
+                // 選項**照常產生**，只是三點期間先不顯示（由 UI 依 awaitingFirstLine 控制）
+                options = optionsByBlank[0].orEmpty(),
                 // 換歌時把節奏狀態歸零，避免上一首的暫停／行號黏過來
                 isSongDriven = false,
                 singingLineIndex = null,
@@ -1209,7 +1198,7 @@ class PracticeViewModel @Inject constructor(
                 videoAspectRatio = null,
                 isAudioReady = false,
                 isAudioLoading = false,
-                entryGate = EntryGate.LOADING,
+                awaitingFirstLine = awaitingFirstLine,
                 songFinished = false,
                 // 結果頁的統計只存在這一次的 session，不落庫
                 sessionStartedAtMs = System.currentTimeMillis(),
@@ -1218,7 +1207,7 @@ class PracticeViewModel @Inject constructor(
                 extensionWords = emptyList(),
                 difficulty = difficulty,
                 maxBlanks = maxBlanks,
-                hasTimeline = dataset.lines.any { it.startMs > 0L },
+                hasTimeline = hasTimeline,
                 blankDecisions = dataset.debug,
                 extensionCandidates = ExtensionPicker.pick(
                     lines = source.lines,
@@ -1229,46 +1218,43 @@ class PracticeViewModel @Inject constructor(
             )
         }
 
-        // 進入練習頁就開始解析音源（擁有者要求「進頁即載入」）：
-        // 三點動畫蓋住搜尋＋緩衝的過程，音訊真的開始走才放開畫面。
-        startEntry()
+        // 進入練習頁就開始解析音源（擁有者要求「進頁即載入」）。
+        // 三點只是那一行的替身，任何失敗都會立刻收掉它（見 hideDots）。
+        if (awaitingFirstLine) {
+            android.util.Log.d(
+                TAG,
+                "awaiting first line：第一句在 ${formatLogTime(firstLineStart)}，顯示三點",
+            )
+            startEntry()
+        } else {
+            prepareAudio()
+        }
     }
 
     /**
-     * 開場：開始解析音源，並啟動 15 秒逾時。
+     * 開場：開始解析音源（擁有者要求「進頁即載入」）。
      *
-     * 逾時或失敗都只影響 [EntryGate]，不會把使用者丟回去——他仍然可以按重試。
+     * ⚠️ 這裡**不再有頁面層級的閘門**：三點動畫只代替還沒唱到的那一行。
+     * 解析失敗時收掉三點、正常顯示歌詞（提示文字仍然照舊顯示在 header）。
      */
     private fun startEntry() {
-        entryTimeoutJob?.cancel()
-        entryTimeoutJob = viewModelScope.launch {
-            delay(ENTRY_TIMEOUT_MS)
-            if (_uiState.value.entryGate == EntryGate.LOADING) {
-                android.util.Log.w(TAG, "entry timeout：15 秒內等不到音訊")
-                _uiState.update {
-                    it.copy(entryGate = EntryGate.FAILED, isAudioLoading = false)
-                }
+        dotsTimeoutJob?.cancel()
+        dotsTimeoutJob = viewModelScope.launch {
+            delay(DOTS_MAX_MS)
+            if (_uiState.value.awaitingFirstLine) {
+                android.util.Log.w(TAG, "三點超過 ${DOTS_MAX_MS}ms → 收掉，正常顯示歌詞")
+                _uiState.update { it.copy(awaitingFirstLine = false) }
             }
         }
         prepareAudio()
     }
 
-    /** 使用者按「重試」：重新解析音源，三點動畫重來一次。 */
-    fun retryEntry() {
-        if (_uiState.value.entryGate == EntryGate.READY) return
-
-        audioResolved = false
-        checkedLines.clear()
-        lastSeenLine = null
-        _uiState.update {
-            it.copy(
-                entryGate = EntryGate.LOADING,
-                audioNotice = null,
-                playbackError = null,
-                isAudioLoading = false,
-            )
+    /** 音源解析失敗：收掉三點，讓歌詞正常顯示（不影響任何其他功能）。 */
+    private fun hideDots() {
+        dotsTimeoutJob?.cancel()
+        if (_uiState.value.awaitingFirstLine) {
+            _uiState.update { it.copy(awaitingFirstLine = false) }
         }
-        startEntry()
     }
 
 

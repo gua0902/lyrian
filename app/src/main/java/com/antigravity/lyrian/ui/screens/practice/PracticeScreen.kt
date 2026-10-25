@@ -23,6 +23,7 @@ import androidx.compose.foundation.layout.aspectRatio
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
@@ -103,10 +104,10 @@ private const val WRONG_ANSWER_DELAY_MS = 900L
 /** 答對後的停頓：短一些，維持流暢的節奏。 */
 private const val CORRECT_ANSWER_DELAY_MS = 450L
 
-// ---------- 開場三點動畫（修正 1）----------
+// ---------- 三點動畫（修正 1）----------
 
-/** 開場閘門的淡入／淡出時長（擁有者指定 200ms）。 */
-private const val GATE_FADE_MS = 200
+/** 三點 ↔ 文字的交換時長（擁有者指定 200ms 平滑過渡）。 */
+private const val DOTS_FADE_MS = 200
 
 /** 圓點數量（擁有者指定 3 顆）。 */
 private const val DOT_COUNT = 3
@@ -115,6 +116,18 @@ private const val DOT_COUNT = 3
 private val DOT_SIZE = 8.dp
 private val DOT_GAP = 6.dp
 private val DOT_RISE = 6.dp
+
+/**
+ * 圓點相對文字中心的微調。
+ *
+ * 文字行高（31sp）比字母的視覺中心低一點，純置中會讓圓點看起來偏高——
+ * 擁有者回報上一版「太接近上方元件」，所以往下補 3dp 對齊字身中心。
+ */
+private val DOTS_CENTER_OFFSET = 3.dp
+
+/** 當前句／其他句的行高；三點要在同一條行高裡置中，版面才不會跳。 */
+private val CURRENT_LINE_HEIGHT = 31.dp
+private val OTHER_LINE_HEIGHT = 26.dp
 
 /**
  * 一輪動畫的週期（擁有者指定「較慢且放鬆」的 3.0 秒）。
@@ -275,7 +288,6 @@ fun PracticeScreen(
                 onSwitchVersion = viewModel::onSwitchVersion,
                 onAdjustOffset = viewModel::onAdjustOffset,
                 onResetOffset = viewModel::onResetOffset,
-                onRetryEntry = viewModel::retryEntry,
                 modifier = Modifier.padding(innerPadding),
             )
         }
@@ -295,7 +307,6 @@ private fun PracticeContent(
     onSwitchVersion: () -> Unit,
     onAdjustOffset: (Long) -> Unit,
     onResetOffset: () -> Unit,
-    onRetryEntry: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
     val haptics = LocalHapticFeedback.current
@@ -306,27 +317,10 @@ private fun PracticeContent(
     // 取不到（無封面／純灰階）時退回 M3 的 primary。
     val accent = rememberPlaybackAccent(state.coverUrl) ?: MaterialTheme.colorScheme.primary
 
-    // 歌曲驅動時跟著「正在唱的那句」；沒有音源時退回作答進度。
-    // 開場期間給 -1：擁有者要求「豆豆顯示期間不預先定位歌詞行」——
-    // -1 不在歌詞索引內，LyricsViewport 就不會捲動，也不會標記當前句。
-    val targetLineIndex = if (state.entryGate == EntryGate.READY) {
-        state.singingLineIndex ?: currentLineIndex
-    } else {
-        -1
-    }
-
-    // ---- 修正 1：開場閘門的淡入淡出（200ms）----
-    val gateReady = state.entryGate == EntryGate.READY
-    val contentAlpha by animateFloatAsState(
-        targetValue = if (gateReady) 1f else 0f,
-        animationSpec = tween(GATE_FADE_MS),
-        label = "gateContent",
-    )
-    val dotsAlpha by animateFloatAsState(
-        targetValue = if (state.entryGate == EntryGate.LOADING) 1f else 0f,
-        animationSpec = tween(GATE_FADE_MS),
-        label = "gateDots",
-    )
+    // 歌曲驅動時跟著「正在唱的那句」；還沒開始唱就是第一句（三點會代替它）。
+    val targetLineIndex = state.singingLineIndex
+        ?: state.lines.firstOrNull()?.index
+        ?: currentLineIndex
 
     // 答完自動前進（不分對錯）；依對錯給不同延遲。
     // **歌曲驅動時不自動前進**——題目由播放時間軸決定，硬跳會跟歌曲打架。
@@ -385,44 +379,19 @@ private fun PracticeContent(
             )
 
             Box(modifier = Modifier.weight(1f).fillMaxWidth()) {
-                // 未就緒時歌詞完全透明（但仍然先配置好，避免就緒瞬間版面跳動）
-                Box(
-                    modifier = Modifier
-                        .fillMaxSize()
-                        .graphicsLayer { alpha = contentAlpha },
-                ) {
-                    LyricsViewport(
-                        lines = state.lines,
-                        questions = state.questions,
-                        targetLineIndex = targetLineIndex,
-                        selections = state.selections,
-                        listState = listState,
-                    )
-                }
-
-                // 三點載入動畫：位於第一句歌詞上方、與歌詞一樣靠左對齊
-                if (dotsAlpha > 0f) {
-                    LoadingDots(
-                        alpha = dotsAlpha,
-                        modifier = Modifier
-                            .align(Alignment.TopStart)
-                            .padding(start = 20.dp, top = 6.dp),
-                    )
-                }
-
-                // 載入失敗：停止動畫，給重試按鈕（不得一直轉下去）
-                if (state.entryGate == EntryGate.FAILED) {
-                    LoadingFailedBlock(
-                        onRetry = onRetryEntry,
-                        modifier = Modifier
-                            .align(Alignment.TopStart)
-                            .padding(start = 20.dp, top = 6.dp),
-                    )
-                }
+                // 歌詞**立即完整顯示**（擁有者要求：三點只代替那一行，不是載入遮罩）
+                LyricsViewport(
+                    lines = state.lines,
+                    questions = state.questions,
+                    targetLineIndex = targetLineIndex,
+                    selections = state.selections,
+                    listState = listState,
+                    awaitingFirstLine = state.awaitingFirstLine,
+                )
             }
 
-            // 開場期間**不顯示任何挖空選項**（擁有者指定）
-            if (gateReady) {
+            // 三點期間先不顯示選項（選項本身已經算好、隨時可端上來）
+            if (!state.awaitingFirstLine) {
                 OptionGrid(
                     options = state.options,
                     answer = state.currentQuestion?.answer,
@@ -441,7 +410,7 @@ private fun PracticeContent(
 }
 
 /**
- * 三點跳動的載入動畫（修正 1）。
+ * 三點跳動動畫（Lyricify 風格的「這一句還沒到」提示）。
  *
  * 規格（擁有者指定）：
  * ```
@@ -450,6 +419,9 @@ private fun PracticeContent(
  * 整體週期 3.0 秒；三顆各錯開 1/3 週期 → 波浪交錯
  * ```
  * `sin` 本身就是簡諧運動的定義，配合線性推進的相位，不需要額外 easing。
+ *
+ * ⚠️ 這**不是**頁面載入指示器：它只代替「目前還沒唱到的那一行」的文字，
+ * 歌詞、題目、選項與時間軸在進入頁面時就已經全部就緒。
  */
 @Composable
 private fun LoadingDots(alpha: Float, modifier: Modifier = Modifier) {
@@ -484,22 +456,6 @@ private fun LoadingDots(alpha: Float, modifier: Modifier = Modifier) {
                     .clip(CircleShape)
                     .background(Color.White.copy(alpha = alpha)),
             )
-        }
-    }
-}
-
-/** 開場失敗：停止動畫，顯示「載入失敗」與重試（不得一直轉下去）。 */
-@Composable
-private fun LoadingFailedBlock(onRetry: () -> Unit, modifier: Modifier = Modifier) {
-    Column(modifier = modifier) {
-        Text(
-            text = stringResource(R.string.practice_load_failed),
-            style = MaterialTheme.typography.titleSmall,
-            color = ON_IMAGE_PRIMARY,
-        )
-        Spacer(Modifier.height(8.dp))
-        Button(onClick = onRetry) {
-            Text(stringResource(R.string.practice_retry))
         }
     }
 }
@@ -1004,6 +960,7 @@ private fun LyricsViewport(
     targetLineIndex: Int,
     selections: Map<Int, ChoiceRecord>,
     listState: LazyListState,
+    awaitingFirstLine: Boolean,
 ) {
     // 行序 → blankIndex 的對照（一行最多一題）
     val blankIndexByLine = androidx.compose.runtime.remember(questions) {
@@ -1036,10 +993,13 @@ private fun LyricsViewport(
         ) {
             itemsIndexed(items = lines, key = { _, line -> line.index }) { _, line ->
                 val blankIndex = blankIndexByLine[line.index]
+                val isCurrent = line.index == targetLineIndex
                 LyricRow(
                     line = line,
-                    isCurrent = line.index == targetLineIndex,
+                    isCurrent = isCurrent,
                     record = blankIndex?.let { selections[it] },
+                    // 三點只代替「目前這一行」的文字，其他行照常顯示
+                    showDots = isCurrent && awaitingFirstLine,
                 )
             }
         }
@@ -1059,12 +1019,19 @@ private fun LyricsViewport(
  *
  * **所有挖空的行都顯示底線**（整首歌一開始就挖好），
  * 未輪到的行只是變淡，不是等到輪到才挖。
+ *
+ * ## 三點代替文字（擁有者指定）
+ *
+ * 當音訊還沒進到**這一行**的時間範圍時，只有這一行以三點動畫代替文字；
+ * 到達時三點淡出、文字淡入（各 200ms）。整份歌詞、題目與選項仍然照常存在，
+ * 三點不是頁面載入遮罩。
  */
 @Composable
 private fun LyricRow(
     line: LyricLine,
     isCurrent: Boolean,
     record: ChoiceRecord?,
+    showDots: Boolean = false,
 ) {
     val alpha by animateFloatAsState(
         targetValue = if (isCurrent) 1f else LYRIC_DIM_ALPHA,
@@ -1073,6 +1040,13 @@ private fun LyricRow(
             easing = androidx.compose.animation.core.FastOutSlowInEasing,
         ),
         label = "lyricAlpha",
+    )
+
+    // 三點 ↔ 文字的交換（擁有者指定 200ms 平滑過渡，不得瞬間切換）
+    val dotsAlpha by animateFloatAsState(
+        targetValue = if (showDots) 1f else 0f,
+        animationSpec = tween(DOTS_FADE_MS),
+        label = "dotsAlpha",
     )
 
     val style = if (isCurrent) {
@@ -1114,14 +1088,32 @@ private fun LyricRow(
         append(line.suffix)
     }
 
-    Text(
-        text = text,
-        style = style,
-        color = ON_IMAGE_PRIMARY,
+    // 高度固定成該行文字的行高：三點才不會把版面撐開，
+    // 也才能對齊「歌詞文字的視覺中心」（擁有者指定：上一版太靠上）。
+    val lineHeight = if (isCurrent) CURRENT_LINE_HEIGHT else OTHER_LINE_HEIGHT
+
+    Box(
         modifier = Modifier
             .fillMaxWidth()
-            .graphicsLayer { this.alpha = alpha },
-    )
+            .heightIn(min = lineHeight),
+        contentAlignment = Alignment.CenterStart,
+    ) {
+        Text(
+            text = text,
+            style = style,
+            color = ON_IMAGE_PRIMARY,
+            modifier = Modifier
+                .fillMaxWidth()
+                .graphicsLayer { this.alpha = alpha * (1f - dotsAlpha) },
+        )
+
+        if (dotsAlpha > 0f) {
+            LoadingDots(
+                alpha = alpha * dotsAlpha,
+                modifier = Modifier.padding(top = DOTS_CENTER_OFFSET),
+            )
+        }
+    }
 }
 
 /** 2×2 選項網格。不用帶 border 的 Surface 的 onClick——那會讓點擊失效。 */
