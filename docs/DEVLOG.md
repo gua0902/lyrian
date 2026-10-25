@@ -1918,3 +1918,55 @@ TASK-21 的副作用正是擁有者看到的兩個故障：部分歌曲卡在三
 - 203 個單元測試全過、`assembleDebug` BUILD SUCCESSFUL
 - 尚未實機驗證（無裝置）：需要確認「歌詞立即出現」「三點只在目標行」
   「歌詞到點時是那一行淡入而不是整頁刷新」
+## TASK-23：三點獨立成一行 + 填答案後意外暫停
+
+### 問題 1：三點動畫改成獨立一行
+
+擁有者澄清：三點**不是**代替第一句，而是**獨立一行放在第一句之前**。
+上一版把它畫進 `LyricRow`（用三點取代那一行的文字），因此第一句在等待期間是看不到的。
+
+- 新增 `DotsLine(visible)`：歌詞區上方的一行（31dp），淡出時高度同步收到 0，
+  只收起自己這一行——歌詞、挖空、選項完全不動。
+- `LyricRow` 回到原本的純文字（移除 `showDots` / `dotsAlpha` / 行高包裹）。
+- 三點仍只在 `awaitingFirstLine` 時出現；進頁時歌詞與題目早就緒，
+  三點消失不會重建任何資料。
+
+### 問題 2：填答案後意外暫停（真因）
+
+`pauseAtBoundary` 的流程是：
+
+```
+fadeOut(500ms) → pause() → 位置校正
+```
+
+**漸出那 0.5 秒是空的**：如果使用者在漸出期間就補答，`onSelectOption`
+會把音量歸零、`play()`、漸入——但暫停協程還活著，`fadeOut` 回來後照樣
+呼叫 `player.pause()`，把剛恢復的播放停掉。
+
+不是交界判定錯，不是漸出錯，是**遲到的暫停指令**。
+
+修法（最小範圍）：
+
+1. 暫停協程存進 `pauseJob`；補答時先 `cancelPauseAttempt()`（取消協程 →
+   `pause()` 永遠不會執行；`finally` 復位 `pausing`）。
+2. `pause()` 之前再確認一次「還有人在等這一題」（`waitingForBlankIndex`），
+   防止在檢查與暫停之間的空窗。
+3. 等待中手動按播放：取消暫停協程、恢復播放並 `fadeToFull()`（從現值平滑回滿，
+   不經過 0）。原本用 `togglePlayPause`，但漸出期間播放器仍算「播放中」，
+   toggle 會變成暫停——這也是「按播放反而停住」的原因。
+4. `onCleared` 一併取消 `pauseJob` / `fadeInJob` / `dotsTimeoutJob`。
+
+**保留不動**：交界檢查點（`LineBoundary` + `checkedLines`）、漸出 0.5 秒後才 pause、
+漸入、換源保留位置、歌曲播完才結算。
+
+### 驗證
+
+- 203 個單元測試全過、`assembleDebug` BUILD SUCCESSFUL
+- **實機未驗證（無裝置）**。可重現步驟見回報內容。
+- 判斷是否修好的 log（`LyrianPractice`）：
+  ```
+  check line=12 answered=false → fadeOut 0.5s → pause
+  取消交界暫停（使用者已補答／已按播放）
+  resume@1:24.5 補答 line=12 blank=7 → volume=0 → play → fadeIn 0.5s
+  ```
+  若「取消交界暫停」之後仍出現 `pause@…`，就是沒修好。

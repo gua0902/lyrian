@@ -408,6 +408,9 @@ class PracticeViewModel @Inject constructor(
      */
     private var fadeInJob: kotlinx.coroutines.Job? = null
 
+    /** 進行中的「交界暫停」協程；補答或手動播放時要取消它（見 [pauseAtBoundary]）。 */
+    private var pauseJob: kotlinx.coroutines.Job? = null
+
     /**
      * ⚠️ **`init` 必須在所有欄位初始器之後**。
      *
@@ -607,6 +610,16 @@ class PracticeViewModel @Inject constructor(
      * 確保不會有突兀的截斷聲；暫停後只做「位移校正」回到交界，
      * **不回頭到句首**——回頭就等於要使用者先答再聽。
      *
+     * ## ⚠️ 為什麼要握著這個協程（修正：填答案後意外暫停）
+     *
+     * 漸出要 0.5 秒。如果使用者在**漸出期間**就填了答案，`onSelectOption`
+     * 會把音量歸零、`play()`、再漸入——但這個協程還活著，等 `fadeOut` 回來
+     * 就呼叫 `player.pause()`，把剛恢復的播放又停掉。這就是「填完答案反而暫停」
+     * 的真正原因（不是交界判定錯，是舊的暫停指令遲到）。
+     *
+     * 因此：協程存進 [pauseJob]，作答／手動播放時直接取消；並且在真正
+     * `pause()` 之前再確認一次「還有人在等這一題」。
+     *
      * @param reason 觸發原因（寫進 log，方便驗收時對照）
      */
     private fun pauseAtBoundary(question: FillChoiceQuestion, reason: String) {
@@ -616,46 +629,73 @@ class PracticeViewModel @Inject constructor(
         // 先把題目端上來：暫停的當下就要看得到這一句的選項。
         focusUnanswered(question, seekToStart = false)
 
-        viewModelScope.launch {
-            player.fadeOut(FADE_OUT_MS)
-            player.pause()
+        pauseJob?.cancel()
+        pauseJob = viewModelScope.launch {
+            try {
+                player.fadeOut(FADE_OUT_MS)
 
-            val state = _uiState.value
-            val boundary = LineBoundary.endMsOf(
-                lines = state.lines,
-                lineIndex = question.lineIndex,
-                durationMs = state.playbackDurationMs,
-            )
-
-            var snapMs = 0L
-            if (boundary != null) {
-                // 淡出的那 0.5 秒會多播一點，這裡把位置拉回交界。
-                val target = (boundary - state.lyricOffsetMs).coerceAtLeast(0L)
-                snapMs = (player.currentPositionMs() - target).coerceAtLeast(0L)
-                if (snapMs > BOUNDARY_SNAP_TOLERANCE_MS) {
-                    player.seekTo(target)
+                // 漸出這 0.5 秒內使用者可能已經補答（或按了播放）——
+                // 那就不該再暫停，直接把播放交回去。
+                if (_uiState.value.waitingForBlankIndex != question.blankIndex) {
+                    android.util.Log.d(TAG, "中止交界暫停：line=${question.lineIndex} 已補答／已恢復")
+                    return@launch
                 }
-            }
 
-            // 歌詞焦點留在**剛剛播完的那一行**，不要跳到下一行。
-            // isPlaying 也一併壓成 false：播放器的下一次 tick 才會回報暫停，
-            // 這段空窗若還留著 true，輪詢會多跑一輪並把焦點更新到下一行。
-            _uiState.update {
-                it.copy(
-                    isPlaying = false,
-                    playbackPositionMs = player.currentPositionMs(),
-                    singingLineIndex = question.lineIndex,
+                player.pause()
+
+                val state = _uiState.value
+                val boundary = LineBoundary.endMsOf(
+                    lines = state.lines,
+                    lineIndex = question.lineIndex,
+                    durationMs = state.playbackDurationMs,
                 )
-            }
 
-            android.util.Log.d(
-                TAG,
-                "pause@${formatLogTime(player.currentPositionMs())}" +
-                    " 行=${question.lineIndex} 交界=${boundary?.let(::formatLogTime) ?: "未知"}" +
-                    " 校正=${snapMs}ms（$reason）",
-            )
-            pausing = false
+                var snapMs = 0L
+                if (boundary != null) {
+                    // 淡出的那 0.5 秒會多播一點，這裡把位置拉回交界。
+                    val target = (boundary - state.lyricOffsetMs).coerceAtLeast(0L)
+                    snapMs = (player.currentPositionMs() - target).coerceAtLeast(0L)
+                    if (snapMs > BOUNDARY_SNAP_TOLERANCE_MS) {
+                        player.seekTo(target)
+                    }
+                }
+
+                // 歌詞焦點留在**剛剛播完的那一行**，不要跳到下一行。
+                // isPlaying 也一併壓成 false：播放器的下一次 tick 才會回報暫停，
+                // 這段空窗若還留著 true，輪詢會多跑一輪並把焦點更新到下一行。
+                _uiState.update {
+                    it.copy(
+                        isPlaying = false,
+                        playbackPositionMs = player.currentPositionMs(),
+                        singingLineIndex = question.lineIndex,
+                    )
+                }
+
+                android.util.Log.d(
+                    TAG,
+                    "pause@${formatLogTime(player.currentPositionMs())}" +
+                        " 行=${question.lineIndex} 交界=${boundary?.let(::formatLogTime) ?: "未知"}" +
+                        " 校正=${snapMs}ms（$reason）",
+                )
+            } finally {
+                pausing = false
+            }
         }
+    }
+
+    /**
+     * 取消「準備中的交界暫停」。
+     *
+     * 使用者在漸出期間補答、或手動按播放時呼叫：舊的暫停指令還沒執行到
+     * `player.pause()`，取消就不會再停。
+     */
+    private fun cancelPauseAttempt() {
+        if (pauseJob?.isActive == true) {
+            android.util.Log.d(TAG, "取消交界暫停（使用者已補答／已按播放）")
+        }
+        pauseJob?.cancel()
+        pauseJob = null
+        pausing = false
     }
 
     /** 把某一行尚未作答的題目端到 UI 上（暫停等待補答時使用）。 */
@@ -886,10 +926,19 @@ class PracticeViewModel @Inject constructor(
             stopFadeIn()
         }
 
+        // 正在等作答時按播放 ＝「先讓我聽」：取消還沒完成的交界暫停，
+        // 並恢復播放。這時**不能**用 toggle——播放器在漸出期間仍算「播放中」，
+        // toggle 會把它暫停，變成「按播放反而停住」。
         if (state.waitingForBlankIndex != null) {
+            cancelPauseAttempt()
             _uiState.update {
                 it.copy(waitingForBlankIndex = null, audioNotice = null)
             }
+            viewModelScope.launch {
+                player.play()
+                player.fadeToFull(FADE_OUT_MS)
+            }
+            return
         }
 
         player.togglePlayPause()
@@ -1017,6 +1066,9 @@ class PracticeViewModel @Inject constructor(
         super.onCleared()
         // 使用者真的離開練習頁（不是旋轉）→ 停掉播放。
         // WebView 本身由畫面的 DisposableEffect 解除綁定（見 PracticeScreen）。
+        pauseJob?.cancel()
+        fadeInJob?.cancel()
+        dotsTimeoutJob?.cancel()
         player.stop()
     }
 
@@ -1358,6 +1410,11 @@ class PracticeViewModel @Inject constructor(
         // 提前作答（該行還在播放中就填了）不會走到這裡：那時沒有在等待，
         // 交界檢查會直接通過，**不會有漸出、不會停**。
         if (wasWaitingForThis) {
+            // ⚠️ 順序很重要：先取消「還沒執行到 pause()」的交界暫停協程，
+            // 否則它會在漸出回來後把剛恢復的播放又停掉（擁有者回報的
+            // 「填完答案反而暫停」就是這個）。
+            cancelPauseAttempt()
+
             _uiState.update {
                 it.copy(waitingForBlankIndex = null, audioNotice = null)
             }

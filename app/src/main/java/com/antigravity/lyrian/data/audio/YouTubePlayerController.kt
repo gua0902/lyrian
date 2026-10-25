@@ -293,6 +293,15 @@ class YouTubePlayerController @Inject constructor() {
     suspend fun fadeIn(durationMs: Long = FADE_MS) = rampVolume(from = 0, to = 100, durationMs)
 
     /**
+     * 從**目前音量**平滑回到滿音量（不經 0）。
+     *
+     * 用在「漸出被中途取消、但還在播」的情況：直接設回 100 會有一聲爆音，
+     * 從現值拉回去才不會有斷點。
+     */
+    suspend fun fadeToFull(durationMs: Long = FADE_MS) =
+        rampVolume(from = null, to = 100, durationMs)
+
+    /**
      * 立刻設定音量（不漸層）。
      *
      * 用在「補答後恢復播放」的第一步：**先歸零才 play()**，

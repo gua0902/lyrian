@@ -3,6 +3,7 @@ package com.antigravity.lyrian.ui.screens.practice
 import androidx.compose.animation.animateColorAsState
 import androidx.compose.animation.core.LinearEasing
 import androidx.compose.animation.core.RepeatMode
+import androidx.compose.animation.core.animateDpAsState
 import androidx.compose.animation.core.animateFloat
 import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.infiniteRepeatable
@@ -23,7 +24,6 @@ import androidx.compose.foundation.layout.aspectRatio
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
-import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
@@ -126,8 +126,7 @@ private val DOT_RISE = 6.dp
 private val DOTS_CENTER_OFFSET = 3.dp
 
 /** 當前句／其他句的行高；三點要在同一條行高裡置中，版面才不會跳。 */
-private val CURRENT_LINE_HEIGHT = 31.dp
-private val OTHER_LINE_HEIGHT = 26.dp
+private val DOTS_ROW_HEIGHT = 31.dp
 
 /**
  * 一輪動畫的週期（擁有者指定「較慢且放鬆」的 3.0 秒）。
@@ -379,15 +378,20 @@ private fun PracticeContent(
             )
 
             Box(modifier = Modifier.weight(1f).fillMaxWidth()) {
-                // 歌詞**立即完整顯示**（擁有者要求：三點只代替那一行，不是載入遮罩）
-                LyricsViewport(
-                    lines = state.lines,
-                    questions = state.questions,
-                    targetLineIndex = targetLineIndex,
-                    selections = state.selections,
-                    listState = listState,
-                    awaitingFirstLine = state.awaitingFirstLine,
-                )
+                Column(modifier = Modifier.fillMaxSize()) {
+                    // 三點**獨立一行**，放在第一句歌詞之前（擁有者指定）：
+                    // 它不代替任何歌詞，只是「還沒唱到」的提示。
+                    DotsLine(visible = state.awaitingFirstLine)
+
+                    // 歌詞立即完整顯示；三點淡出時只移除那一行，不動歌詞與題目
+                    LyricsViewport(
+                        lines = state.lines,
+                        questions = state.questions,
+                        targetLineIndex = targetLineIndex,
+                        selections = state.selections,
+                        listState = listState,
+                    )
+                }
             }
 
             // 三點期間先不顯示選項（選項本身已經算好、隨時可端上來）
@@ -410,7 +414,43 @@ private fun PracticeContent(
 }
 
 /**
- * 三點跳動動畫（Lyricify 風格的「這一句還沒到」提示）。
+ * 三點動畫**獨立一行**，放在第一句歌詞之前（擁有者指定）。
+ *
+ * ```
+ * · · ·        ← 這一行（音訊還沒唱到第一句時出現）
+ * Hello, it's me
+ * ```
+ * 它不代替任何歌詞：歌詞、挖空、選項在進入頁面時就全部就緒，
+ * 三點淡出時只收起自己這一行（高度同步收到 0），不會重新載入歌詞或題目。
+ */
+@Composable
+private fun DotsLine(visible: Boolean) {
+    val alpha by animateFloatAsState(
+        targetValue = if (visible) 1f else 0f,
+        animationSpec = tween(DOTS_FADE_MS),
+        label = "dotsAlpha",
+    )
+    val rowHeight by animateDpAsState(
+        targetValue = if (visible) DOTS_ROW_HEIGHT else 0.dp,
+        animationSpec = tween(DOTS_FADE_MS),
+        label = "dotsRowHeight",
+    )
+
+    if (rowHeight > 0.dp) {
+        Box(
+            modifier = Modifier
+                .fillMaxWidth()
+                .height(rowHeight)
+                .padding(horizontal = 20.dp),
+            contentAlignment = Alignment.CenterStart,
+        ) {
+            LoadingDots(alpha = alpha, modifier = Modifier.padding(top = DOTS_CENTER_OFFSET))
+        }
+    }
+}
+
+/**
+ * 三點跳動動畫（Lyricify 風格的「還沒到」提示）。
  *
  * 規格（擁有者指定）：
  * ```
@@ -960,7 +1000,6 @@ private fun LyricsViewport(
     targetLineIndex: Int,
     selections: Map<Int, ChoiceRecord>,
     listState: LazyListState,
-    awaitingFirstLine: Boolean,
 ) {
     // 行序 → blankIndex 的對照（一行最多一題）
     val blankIndexByLine = androidx.compose.runtime.remember(questions) {
@@ -993,13 +1032,10 @@ private fun LyricsViewport(
         ) {
             itemsIndexed(items = lines, key = { _, line -> line.index }) { _, line ->
                 val blankIndex = blankIndexByLine[line.index]
-                val isCurrent = line.index == targetLineIndex
                 LyricRow(
                     line = line,
-                    isCurrent = isCurrent,
+                    isCurrent = line.index == targetLineIndex,
                     record = blankIndex?.let { selections[it] },
-                    // 三點只代替「目前這一行」的文字，其他行照常顯示
-                    showDots = isCurrent && awaitingFirstLine,
                 )
             }
         }
@@ -1020,18 +1056,14 @@ private fun LyricsViewport(
  * **所有挖空的行都顯示底線**（整首歌一開始就挖好），
  * 未輪到的行只是變淡，不是等到輪到才挖。
  *
- * ## 三點代替文字（擁有者指定）
- *
- * 當音訊還沒進到**這一行**的時間範圍時，只有這一行以三點動畫代替文字；
- * 到達時三點淡出、文字淡入（各 200ms）。整份歌詞、題目與選項仍然照常存在，
- * 三點不是頁面載入遮罩。
+ * 三點動畫**不在這裡**——它獨立佔一行、放在第一句之前（見 [DotsLine]），
+ * 不會遮住或替換任何歌詞。
  */
 @Composable
 private fun LyricRow(
     line: LyricLine,
     isCurrent: Boolean,
     record: ChoiceRecord?,
-    showDots: Boolean = false,
 ) {
     val alpha by animateFloatAsState(
         targetValue = if (isCurrent) 1f else LYRIC_DIM_ALPHA,
@@ -1040,13 +1072,6 @@ private fun LyricRow(
             easing = androidx.compose.animation.core.FastOutSlowInEasing,
         ),
         label = "lyricAlpha",
-    )
-
-    // 三點 ↔ 文字的交換（擁有者指定 200ms 平滑過渡，不得瞬間切換）
-    val dotsAlpha by animateFloatAsState(
-        targetValue = if (showDots) 1f else 0f,
-        animationSpec = tween(DOTS_FADE_MS),
-        label = "dotsAlpha",
     )
 
     val style = if (isCurrent) {
@@ -1088,32 +1113,14 @@ private fun LyricRow(
         append(line.suffix)
     }
 
-    // 高度固定成該行文字的行高：三點才不會把版面撐開，
-    // 也才能對齊「歌詞文字的視覺中心」（擁有者指定：上一版太靠上）。
-    val lineHeight = if (isCurrent) CURRENT_LINE_HEIGHT else OTHER_LINE_HEIGHT
-
-    Box(
+    Text(
+        text = text,
+        style = style,
+        color = ON_IMAGE_PRIMARY,
         modifier = Modifier
             .fillMaxWidth()
-            .heightIn(min = lineHeight),
-        contentAlignment = Alignment.CenterStart,
-    ) {
-        Text(
-            text = text,
-            style = style,
-            color = ON_IMAGE_PRIMARY,
-            modifier = Modifier
-                .fillMaxWidth()
-                .graphicsLayer { this.alpha = alpha * (1f - dotsAlpha) },
-        )
-
-        if (dotsAlpha > 0f) {
-            LoadingDots(
-                alpha = alpha * dotsAlpha,
-                modifier = Modifier.padding(top = DOTS_CENTER_OFFSET),
-            )
-        }
-    }
+            .graphicsLayer { this.alpha = alpha },
+    )
 }
 
 /** 2×2 選項網格。不用帶 border 的 Surface 的 onClick——那會讓點擊失效。 */
