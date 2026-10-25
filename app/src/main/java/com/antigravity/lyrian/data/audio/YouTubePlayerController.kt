@@ -3,6 +3,7 @@ package com.antigravity.lyrian.data.audio
 import android.annotation.SuppressLint
 import android.graphics.Color
 import android.os.Looper
+import android.view.View
 import android.webkit.ConsoleMessage
 import android.webkit.JavascriptInterface
 import android.webkit.WebChromeClient
@@ -87,6 +88,14 @@ class YouTubePlayerController @Inject constructor() {
     /** 靜音自救只做一次，避免每 200ms 重送同一道指令。 */
     private var triedUnmute = false
 
+    /**
+     * 「影片已就緒」的處理（解除靜音、必要時自動播放）只做一次。
+     *
+     * 尺寸回報會因為 `loadedmetadata`／`resize`／輪詢而**多次**發生
+     * （畫面比例可能中途才知道），每次重跑 `play()` 會打斷使用者自己按的暫停。
+     */
+    private var videoReadyHandled = false
+
     private data class LoadRequest(val videoId: String, val startAtMs: Long, val autoPlay: Boolean)
 
     // ---------- 生命週期 ----------
@@ -102,7 +111,15 @@ class YouTubePlayerController @Inject constructor() {
         webView = view
         injected = false
 
-        view.setBackgroundColor(Color.BLACK)
+        // 透明底 + 硬體層。
+        //
+        // 黑底是「有聲音但畫面全黑」的常見來源之一：WebView 的背景會蓋在
+        // video 合成層下面，一旦畫面來不及輸出（或比例對不上），看到的就整片黑。
+        // 改成透明之後，底下那張封面圖會透出來，過渡期看到的是封面而不是黑區。
+        view.setBackgroundColor(Color.TRANSPARENT)
+        // 明確指定硬體層：影片解碼後的畫面靠 GPU 合成，軟體層會直接變黑。
+        view.setLayerType(View.LAYER_TYPE_HARDWARE, null)
+
         view.settings.apply {
             javaScriptEnabled = true
             domStorageEnabled = true
@@ -125,6 +142,14 @@ class YouTubePlayerController @Inject constructor() {
             override fun onPageFinished(view: WebView?, url: String?) {
                 log("頁面載入完成：$url")
                 injectBridgeScript(view)
+
+                // 樣式**不能**只靠 onPageFinished 當下注入：那一刻播放器 DOM
+                // 往往還沒組完（`#movie_player` 是腳本後來插進去的），
+                // 選擇器會全部命中 0 個。延遲 300ms 再套一次，命中率才穩定。
+                view?.postDelayed({ applyOverlayCss(view) }, CSS_INJECT_DELAY_MS)
+
+                // 不接電腦也要拿得到的黑屏證據：1.5 秒後回報 video 的實際樣貌。
+                view?.postDelayed({ reportDiagnostics(view) }, DIAGNOSE_DELAY_MS)
             }
         }
 
@@ -166,15 +191,23 @@ class YouTubePlayerController @Inject constructor() {
         lastPositionMs = startAtMs
         seekPending = true
         tickLogs = 0
+        videoReadyHandled = false
         _state.value = PlayerState(positionMs = startAtMs)
 
         val start = if (startAtMs > 0) "&start=${startAtMs / 1000}" else ""
         // `origin` 必須與 Referer 對應的同一個來源，否則 YouTube 會以「缺少用戶端身分」拒絕
         // （2025-07 起新增的錯誤 153）。Referer 由 attach() 的
         // `loadUrl(url, extraHeaders = "Referer: ...")` 帶，兩者都指向本機的 app 來源。
+        //
+        // `controls=0&modestbranding=1&disablekb=1&fs=0` 等參數是**官方文件列的**
+        // 嵌入選項：關掉控制列、隱藏品牌、關鍵盤、關全螢幕。它們能少掉一半的
+        // YouTube 浮層；剩下的一半（標題、分享、結束畫面）由注入的 CSS 負責。
         val url = "https://www.youtube.com/embed/$videoId" +
-            "?autoplay=${if (autoPlay) 1 else 0}&playsinline=1" +
-            "&origin=$APP_ORIGIN&enablejsapi=1&rel=0$start"
+            "?autoplay=${if (autoPlay) 1 else 0}" +
+            "&playsinline=1&enablejsapi=1&rel=0" +
+            "&controls=0&modestbranding=1&showinfo=0" +
+            "&iv_load_policy=3&disablekb=1&fs=0" +
+            "&origin=$APP_ORIGIN$start"
 
         val view = webView
         if (view == null) {
@@ -268,6 +301,7 @@ class YouTubePlayerController @Inject constructor() {
     fun stop() {
         pendingLoad = null
         lastPositionMs = 0L
+        videoReadyHandled = false
         _state.value = PlayerState()
         evaluateCommand("stop") { """
             (function(){
@@ -286,51 +320,102 @@ class YouTubePlayerController @Inject constructor() {
     // ---------- JS 注入 ----------
 
     /**
-     * 要隱藏的 YouTube 浮層（模組 A-4）。
+     * 要隱藏的 YouTube 浮層。
      *
      * ## 只列「不會蓋住影片畫面」的浮層
      *
-     * 上一版連 `.ytp-gradient-top` 一起藏掉了。那個元素是**影片上緣的黑色漸層**，
-     * 同時也是 Chrome 頂部控制列的背景——藏掉它之後，有些情況下會連帶影響
-     * 播放器的合成層，症狀就是「有聲音但畫面全黑」。**這裡只留明確的浮出面板**，
-     * 不再碰任何與 video 同層的元素。
+     * 這裡的每一條都是**浮在 video 上層的面板**，藏掉它們不會動到 video 本身。
      *
-     * 廣告是播放器內容的一部分，不是 DOM 浮層，因此不受這份 CSS 影響。
+     * ## 漸層**不用** `display:none`
+     *
+     * `.ytp-gradient-top` / `.ytp-gradient-bottom` 是控制列的背景漸層，它們
+     * 與 video 處於同一個合成堆疊。上一版對它用 `display:none`，結果整個
+     * video 的合成層被連帶跳過——症狀就是「有聲音、UI 看得到、畫面全黑」。
+     * 現在改用 `opacity:0`：一樣看不見，但不改動版面結構。
      */
-    private val HIDE_OVERLAYS_CSS = listOf(
-        ".ytp-pause-overlay",          // 暫停時蓋在畫面中央的「更多影片」
-        ".ytp-cards-teaser",           // 右上角卡片提示
-        ".ytp-ce-element",             // 資訊卡
-        ".ytp-endscreen-content",      // 結束畫面推薦
-        ".ytp-show-cards-title",
-        ".ytp-title",                  // 左上角「在 YouTube 中開啟」
-        ".ytp-watermark",
-    ).joinToString(",") + "{display:none!important}"
+    private val HIDE_PANEL_CSS = CSS_HIDE_SELECTORS.joinToString(",") + "{display:none!important}"
+
+    /** 漸層：只降透明度，**不可以** display:none（見上面的註解）。 */
+    private val GRADIENT_CSS = ".ytp-gradient-top,.ytp-gradient-bottom{opacity:0!important}"
+
+    /**
+     * 頁面基礎樣式。
+     *
+     *  - 全部背景透明：任何縫隙都會露出底下的封面圖，而不是黑色
+     *  - `object-fit:cover` + 100%：容器已經等於影片比例，所以既不裁切也不留邊
+     *
+     * 上一版是 `object-fit:contain;background:#000`——contain 在比例不符的容器裡
+     * 就是「上下（或左右）補黑邊」，正是擁有者看到的黑框。
+     */
+    private val BASE_CSS =
+        "html,body,#movie_player,.html5-video-container{background:transparent!important;" +
+            "margin:0;padding:0;overflow:hidden}" +
+            "video{object-fit:cover!important;width:100%!important;height:100%!important;" +
+            "background:transparent!important}"
 
     /**
      * 注入監測腳本。
      *
-     * 每 200ms 回報一次 `<video>` 的狀態；找不到 `<video>` 時改查
+     * 每 100ms 回報一次 `<video>` 的狀態；找不到 `<video>` 時改查
      * `ytInitialPlayerResponse` 的 `playabilityStatus`，用來判斷「不能嵌入」。
+     *
+     * 另外做三件事：
+     *  1. `loadedmetadata` / `resize` → 立刻回報真實的 `videoWidth × videoHeight`
+     *     （Compose 要靠它算容器比例；只靠輪詢會慢半拍）
+     *  2. 定義 `window.__lyrianApplyCss()`，供 onPageFinished 與 MutationObserver 呼叫
+     *  3. `MutationObserver` 監看播放器被重建時把樣式補回去
      */
     private fun injectBridgeScript(view: WebView?) {
         view ?: return
         if (injected) return
         injected = true
 
+        val selectorsJs = CSS_HIDE_SELECTORS.joinToString(",") { "'$it'" }
+        val disableCss = if (DEBUG_DISABLE_CSS) "true" else "false"
+
         val script = """
             (function(){
               if (window.__lyrian) return 'already';
               window.__lyrian = true;
 
-              // 只隱藏浮動面板與提示；**不碰 video 本身、也不碰漸層**（見 Kotlin 端註解）。
-              var css = '$HIDE_OVERLAYS_CSS'
-                + ' html,body{margin:0;padding:0;background:#000;overflow:hidden}'
-                + ' body{height:100%}'
-                + ' video{object-fit:contain;background:#000}';
-              var st = document.createElement('style');
-              st.textContent = css;
-              (document.head || document.documentElement).appendChild(st);
+              var SELECTORS = [$selectorsJs];
+              var DISABLE = $disableCss;
+              var BASE = '$BASE_CSS';
+              var HIDE = '$HIDE_PANEL_CSS';
+              var GRAD = '$GRADIENT_CSS';
+
+              // 套用樣式並回報每個選擇器**實際命中幾個元素**。
+              // 命中 0 就代表選擇器對不上（YouTube 改版），這是最好用的線索。
+              window.__lyrianApplyCss = function(){
+                var st = document.getElementById('lyrian-style');
+                if (!st) {
+                  st = document.createElement('style');
+                  st.id = 'lyrian-style';
+                  (document.head || document.documentElement).appendChild(st);
+                }
+                st.textContent = DISABLE ? '' : (BASE + HIDE + GRAD);
+                var hits = [];
+                for (var i = 0; i < SELECTORS.length; i++) {
+                  hits.push(SELECTORS[i] + '=' + document.querySelectorAll(SELECTORS[i]).length);
+                }
+                Bridge.onCssHits(hits.join(' '));
+                return hits.length;
+              };
+              window.__lyrianApplyCss();
+
+              // 播放器重建（換影片、廣告結束）時 style 節點可能被整個換掉 →
+              // 補回去。只在節點真的不見時才重套，避免自己觸發自己無限迴圈。
+              try {
+                var pending = null;
+                var obs = new MutationObserver(function(){
+                  if (pending) return;
+                  pending = setTimeout(function(){
+                    pending = null;
+                    if (!document.getElementById('lyrian-style')) window.__lyrianApplyCss();
+                  }, 200);
+                });
+                obs.observe(document.documentElement, {childList: true, subtree: true});
+              } catch (e) { Bridge.onLog('observer failed: ' + e); }
 
               var reported = false;
               function reportUnavailable(){
@@ -352,16 +437,25 @@ class YouTubePlayerController @Inject constructor() {
                 return false;
               }
 
+              function reportSize(){
+                var v = document.querySelector('video');
+                if (!v) return;
+                Bridge.onVideoFound(v.videoWidth || 0, v.videoHeight || 0);
+              }
+              function hookVideo(v){
+                v.addEventListener('loadedmetadata', reportSize);
+                v.addEventListener('resize', reportSize);
+                reportSize();
+              }
+              var hooked = false;
+
               setInterval(function(){
                 var v = document.querySelector('video');
                 if (!v) {
                   if (!reported) { reported = reportUnavailable(); }
                   return;
                 }
-                if (!window.__lyrianVideo) {
-                  window.__lyrianVideo = true;
-                  Bridge.onVideoFound(v.videoWidth || 0, v.videoHeight || 0);
-                }
+                if (!hooked) { hooked = true; hookVideo(v); }
                 Bridge.onTick(
                   v.currentTime || 0,
                   v.duration || 0,
@@ -370,13 +464,65 @@ class YouTubePlayerController @Inject constructor() {
                   v.muted ? 1 : 0,
                   v.readyState
                 );
-              }, 200);
+              }, 100);
 
               return 'injected';
             })()
         """.trimIndent()
 
         view.evaluateJavascript(script) { result -> log("注入監測腳本：$result") }
+    }
+
+    /** 補套一次樣式（頁面剛載入、播放器重建後各需要一次）。 */
+    private fun applyOverlayCss(view: WebView?) {
+        view ?: return
+        val run = {
+            view.evaluateJavascript(
+                "(window.__lyrianApplyCss ? window.__lyrianApplyCss() : -1)",
+            ) { result -> log("套用樣式：$result") }
+        }
+        if (Looper.myLooper() == Looper.getMainLooper()) run() else view.post(run)
+    }
+
+    /**
+     * 回報 video 的實際渲染狀況（黑屏排查用）。
+     *
+     * 這一行 log 就能區分三種黑屏原因：
+     * ```
+     * D/LyrianPlayer: diagnose: {"size":"1280x720","rect":[96,54],"opacity":"1", ...}
+     * ```
+     *  - `size` 是 0x0 → 根本沒有解碼出畫面（不是 CSS 問題）
+     *  - `rect` 與容器差很多 → 版面問題
+     *  - `opacity`/`transform` 異常，或 `style:false` → CSS／注入問題
+     */
+    private fun reportDiagnostics(view: WebView?) {
+        view ?: return
+        val script = """
+            (function(){
+              var v = document.querySelector('video');
+              var st = document.getElementById('lyrian-style');
+              if (!v) {
+                Bridge.onDiagnostics('no-video style=' + (!!st));
+                return 'no-video';
+              }
+              var r = v.getBoundingClientRect();
+              var cs = getComputedStyle(v);
+              Bridge.onDiagnostics(JSON.stringify({
+                size: (v.videoWidth || 0) + 'x' + (v.videoHeight || 0),
+                rect: [Math.round(r.width), Math.round(r.height)],
+                opacity: cs.opacity,
+                visibility: cs.visibility,
+                display: cs.display,
+                transform: cs.transform,
+                objectFit: cs.objectFit,
+                readyState: v.readyState,
+                paused: v.paused,
+                style: !!st
+              }));
+              return 'diag';
+            })()
+        """.trimIndent()
+        evaluateCommand("diagnose", { script })
     }
 
     /** 執行一段 JS 並把回傳值寫進 log；這是「播放不動」時最重要的線索。 */
@@ -439,15 +585,27 @@ class YouTubePlayerController @Inject constructor() {
         /** 找到 `<video>` 了：回報尺寸（給 Compose 算長寬比）並確保解除靜音。 */
         @JavascriptInterface
         fun onVideoFound(width: Int, height: Int) {
-            log("找到 <video>：${width}x$height")
+            val ratio = if (width > 0 && height > 0) {
+                width.toFloat() / height.toFloat()
+            } else {
+                null
+            }
+
+            if (ratio != null && ratio != _state.value.videoAspectRatio) {
+                log("影片尺寸 ${width}x$height → 比例 ${js("%.3f", ratio)}")
+            }
+
             _state.value = _state.value.copy(
                 isReady = true,
-                videoAspectRatio = if (width > 0 && height > 0) {
-                    width.toFloat() / height.toFloat()
-                } else {
-                    null
-                },
+                videoAspectRatio = ratio ?: _state.value.videoAspectRatio,
             )
+
+            // 解除靜音／自動播放只做一次。
+            // 尺寸可能中途才確定（loadedmetadata → resize → 輪詢），
+            // 每次都重跑會把使用者自己按下的暫停又推回播放。
+            if (videoReadyHandled) return
+            videoReadyHandled = true
+
             val shouldPlay = pendingLoad?.autoPlay == true
             evaluateCommand("unmute") { """
                 (function(){
@@ -461,6 +619,18 @@ class YouTubePlayerController @Inject constructor() {
                   return 'ready state=' + v.readyState + ' muted=' + v.muted + ' paused=' + v.paused;
                 })()
             """ }
+        }
+
+        /** 樣式命中數量（每個選擇器抓到幾個元素）。 */
+        @JavascriptInterface
+        fun onCssHits(summary: String) {
+            log("css hits: $summary")
+        }
+
+        /** video 的實際渲染狀況（黑屏排查）。 */
+        @JavascriptInterface
+        fun onDiagnostics(json: String) {
+            log("diagnose: $json")
         }
 
         @JavascriptInterface
@@ -535,6 +705,37 @@ class YouTubePlayerController @Inject constructor() {
          */
         const val APP_ORIGIN = "https://lyrian.app"
 
+        /** 要藏起來的 YouTube 浮層（只列浮在 video 上層的面板）。 */
+        val CSS_HIDE_SELECTORS = listOf(
+            ".ytp-chrome-top",              // 上排控制列（標題、分享）
+            ".ytp-chrome-bottom",           // 下排控制列（進度、音量、齒輪）
+            ".ytp-large-play-button",       // 中央大播放鍵
+            ".ytp-pause-overlay",           // 暫停時蓋在畫面中央的「更多影片」
+            ".ytp-share-button",
+            ".ytp-watermark",
+            ".ytp-title",                   // 左上角「在 YouTube 中開啟」
+            ".ytp-youtube-button",
+            ".ytp-cued-thumbnail-overlay",  // 尚未播放時的封面 + 播放鍵
+            ".ytp-cards-teaser",            // 右上角卡片提示
+            ".ytp-ce-element",              // 資訊卡
+            ".ytp-endscreen-content",       // 結束畫面推薦
+            ".ytp-show-cards-title",
+        )
+
+        /**
+         * 除錯開關：只保留 autoplay 監測、**完全不注入樣式**。
+         *
+         * 黑屏排查步驟（擁有者指定的第 6 點）：把它改成 true 重跑一次。
+         * 有畫面 → 是某條 CSS 造成合成層異常，再逐條加回定位。
+         */
+        const val DEBUG_DISABLE_CSS = false
+
+        /** 頁面載入完成後延遲多久再套樣式（播放器 DOM 這時才組得完）。 */
+        const val CSS_INJECT_DELAY_MS = 300L
+
+        /** 頁面載入完成後延遲多久回報渲染診斷。 */
+        const val DIAGNOSE_DELAY_MS = 1_500L
+
         /**
          * 一般 Chrome 的 UA。刻意不含 `Version/4.0`（那是 WebView 的預設值）。
          *
@@ -545,10 +746,11 @@ class YouTubePlayerController @Inject constructor() {
             "Mozilla/5.0 (Linux; Android 14; Pixel 7) AppleWebKit/537.36 (KHTML, like Gecko) " +
                 "Chrome/126.0.0.0 Mobile Safari/537.36"
 
-        /** 淡入淡出的總時長（擁有者指定 0.3 秒）。 */
-        const val FADE_MS = 300L
+        /** 淡入淡出的總時長（擁有者指定 0.5 秒）。 */
+        const val FADE_MS = 500L
 
-        const val FADE_STEPS = 20
+        /** 分幾步調整音量；10 步 × 50ms 在聽感上是連續的，又不會把 JS 打爆。 */
+        const val FADE_STEPS = 10
 
         /** 位置「倒退」多少毫秒以上才視為異常（廣告／重置）。 */
         const val REWIND_TOLERANCE_MS = 1_500L

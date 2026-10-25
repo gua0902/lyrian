@@ -25,11 +25,17 @@
         android:name="android.permission.FOREGROUND_SERVICE_MEDIA_PLAYBACK"
         tools:node="remove" />
 
+    <!--
+      `android:hardwareAccelerated="true"` 是明示而非預設值：
+      練習頁的播放器是 WebView + `<video>`，影片畫面靠 GPU 合成。
+      一旦某個函式庫或主題把它關掉，症狀就是「有聲音但畫面全黑」。
+    -->
     <application
         android:name=".LyrianApplication"
         android:allowBackup="false"
         android:dataExtractionRules="@xml/data_extraction_rules"
         android:fullBackupContent="false"
+        android:hardwareAccelerated="true"
         android:icon="@mipmap/ic_launcher"
         android:label="@string/app_name"
         android:roundIcon="@mipmap/ic_launcher_round"

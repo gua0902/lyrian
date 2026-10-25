@@ -33,6 +33,7 @@ import com.antigravity.lyrian.domain.model.ResultWord
 import com.antigravity.lyrian.domain.practice.BlankDifficulty
 import com.antigravity.lyrian.domain.practice.CommonWordFilter
 import com.antigravity.lyrian.domain.practice.FillChoiceBuilder
+import com.antigravity.lyrian.domain.practice.LineBoundary
 import com.antigravity.lyrian.ui.navigation.Routes
 import com.antigravity.lyrian.util.toDayKey
 import dagger.hilt.android.lifecycle.HiltViewModel
@@ -231,8 +232,17 @@ private const val POSITION_POLL_MS = 50L
  * 短於此會來不及反應，長於此就失去「跟上歌曲」的壓力。
  */
 
-/** 音量淡出／淡入的時間。擁有者指定 0.3 秒。 */
-private const val FADE_OUT_MS = 300L
+/** 音量淡出／淡入的時間。擁有者指定 0.5 秒（先漸出完才 pause，避免突兀截斷）。 */
+private const val FADE_OUT_MS = 500L
+
+/**
+ * 交界暫停後，位置與「該行結束時間」的容許誤差。
+ *
+ * 淡出的 0.5 秒會讓播放多走一段，超過這個量才把時間拉回交界；
+ * 太小會頻繁 seek（播放器會抖），太大會讓下一句真的被播掉一小段。
+ */
+private const val BOUNDARY_SNAP_TOLERANCE_MS = 250L
+
 /** 因為等作答而暫停時顯示的提示。 */
 private const val WAITING_FOR_ANSWER = "已暫停，補上這句的填空就會繼續播放。"
 
@@ -335,9 +345,27 @@ class PracticeViewModel @Inject constructor(
     /**
      * 正在淡出／暫停的旗標。
      *
-     * 暫停要花 0.3 秒淡出，這段時間輪詢還會繼續跑；沒有這個旗標就會重複觸發暫停。
+     * 暫停要花 0.5 秒淡出，這段時間輪詢還會繼續跑；沒有這個旗標就會重複觸發暫停。
      */
     private var pausing = false
+
+    /**
+     * 上一次輪詢時「正在唱」的行。
+     *
+     * 交界檢查靠它判斷「剛剛離開的是哪一行」：時間軸一跨過 **A 的結束時間**
+     * （＝ B 的開始時間），這一輪的 `currentLine` 就變成 B，而 [lastSeenLine]
+     * 還是 A——那一刻正是我們要檢查 A 的時機。
+     */
+    private var lastSeenLine: Int? = null
+
+    /**
+     * 已經檢查過交界的行。
+     *
+     * 擁有者要求「每行只檢查一次」：淡出後的位移校正、使用者手動播放、
+     * 換版本的 `seekTo` 都會讓同一行的交界被反覆經過，沒有這個集合就會
+     * 反覆暫停。
+     */
+    private val checkedLines = mutableSetOf<Int>()
 
     /**
      * 把播放器的狀態同步進 UI 狀態。
@@ -376,48 +404,85 @@ class PracticeViewModel @Inject constructor(
         //
         // ```
         // 換行 → 只由播放時間決定（這裡）
-        // 暫停 → 只由「進入一行尚未作答的挖空」決定（enterUnansweredLine）
+        // 暫停 → 只由「剛播完的那一行還沒作答」決定（onLeftLine）
         // 作答 → 只解除暫停，不改換行（onSelectOption）
         // ```
+        //
+        // ## 檢查點在**句子交界**，不是句子開始（擁有者修正）
+        //
+        // ```
+        // A 播放中 → 顯示 A 的挖空，可邊聽邊填
+        // A→B 交界 → 檢查 A：答了就直接播 B；沒答才漸出 0.5 秒後停在交界
+        // ```
+        // 舊版是「一進入含挖空的新句子就暫停」，使用者還沒聽到就被要求作答。
+        // 差別只在檢查的對象：**離開的那一行**（= 剛播完的那句），不是進來的這一行。
         viewModelScope.launch {
             while (true) {
                 val state = _uiState.value
-                if (state.isPlaying && !pausing) {
+                // `waitingForBlankIndex != null` 也一起擋：暫停後播放器可能還有一兩次
+                // 在途的 tick 會回報「還在播」，那段空窗若不擋，交界檢查剛設好的
+                // 焦點（停在剛播完的那一行）會被下一行的資訊蓋掉。
+                if (state.isPlaying && !pausing && state.waitingForBlankIndex == null) {
                     val position = player.currentPositionMs()
                     val lyricPosition = position + state.lyricOffsetMs
                     val currentLine = lineIndexAt(lyricPosition)
 
-                    if (currentLine != null) {
-                        // ---- B-4 追回機制 ----
-                        // 有「比現在這行更早」的未答挖空 → 拉回該行開頭並暫停。
-                        // 觸發場景：卡頓、廣告、拖動、換版本、淡出那 0.3 秒跑過頭。
-                        val earliest = state.earliestUnanswered
-                        if (earliest != null && earliest.lineIndex < currentLine) {
-                            _uiState.update { it.copy(playbackPositionMs = position) }
-                            enterUnansweredLine(earliest, seekBack = true)
-                        } else {
-                            _uiState.update {
-                                it.copy(
-                                    playbackPositionMs = position,
-                                    singingLineIndex = currentLine,
-                                    isSongDriven = true,
-                                )
-                            }
-
-                            // ---- B-2 行進入驅動 ----
-                            // 進入新的一行時，只要該行有未答挖空就**立即**暫停。
-                            // 刻意不用「時間落在某區間內」判斷，避免 tick 間隔剛好跳過整句。
-                            if (currentLine != state.singingLineIndex) {
-                                val question = questionForLine(currentLine)
-                                if (question != null &&
-                                    !_uiState.value.selections.containsKey(question.blankIndex)
-                                ) {
-                                    enterUnansweredLine(question, seekBack = true)
-                                }
-                            }
-                        }
-                    } else {
+                    if (currentLine == null) {
                         _uiState.update { it.copy(playbackPositionMs = position) }
+                        delay(POSITION_POLL_MS)
+                        continue
+                    }
+
+                    // ---- 規則 7：追回機制 ----
+                    // 卡頓、廣告、拖動都可能讓我們**越過**某個未答的挖空行。
+                    // 這時 seek 回那一行的結束時間（不是行首）並暫停，等補答。
+                    //
+                    // ⚠️ 只追「沒檢查過」的行。已經在交界停過、使用者又手動按播放的行
+                    // 不可以再拉回去——那會變成「按播放立刻被彈回同一個點」的死鎖；
+                    // 而且那句的交界檢查已經做過了，只是使用者選擇先不答。
+                    val earliest = state.earliestUnanswered
+                    if (earliest != null &&
+                        earliest.lineIndex < currentLine &&
+                        earliest.lineIndex !in checkedLines
+                    ) {
+                        android.util.Log.d(
+                            TAG,
+                            "追回：未答 line=${earliest.lineIndex} 已越過（目前 line=$currentLine）",
+                        )
+                        checkedLines += earliest.lineIndex
+                        _uiState.update { it.copy(playbackPositionMs = position) }
+                        pauseAtBoundary(earliest, reason = "追回")
+                        delay(POSITION_POLL_MS)
+                        continue
+                    }
+
+                    // ---- 交界檢查：只檢查剛剛離開的那一行，而且每行只檢查一次 ----
+                    val previous = lastSeenLine
+                    lastSeenLine = currentLine
+                    if (previous != null && previous != currentLine) {
+                        onLeftLine(previous)
+                        // 剛剛停在交界：不要把焦點更新到下一行（擁有者要求
+                        // 「歌詞焦點停在已播完的那一行」）。
+                        if (pausing) {
+                            delay(POSITION_POLL_MS)
+                            continue
+                        }
+                    }
+
+                    // 播放中就把「當前這一句」的題目與選項端上來，讓使用者邊聽邊填。
+                    val question = LineBoundary.questionOf(currentLine, state.questions)
+
+                    _uiState.update {
+                        val focusBlank = question?.blankIndex
+                        it.copy(
+                            playbackPositionMs = position,
+                            singingLineIndex = currentLine,
+                            isSongDriven = true,
+                            activeBlankIndex = focusBlank ?: it.activeBlankIndex,
+                            options = focusBlank?.let { blank ->
+                                optionsByBlank[blank].orEmpty()
+                            } ?: it.options,
+                        )
                     }
                 }
                 delay(POSITION_POLL_MS)
@@ -426,17 +491,93 @@ class PracticeViewModel @Inject constructor(
     }
 
     /**
-     * 暫停在一個尚未作答的挖空上。
+     * 離開某一行的那一刻（＝該行結束時間到了）。
      *
-     * **這是唯一會暫停的地方**（使用者的播放鍵除外）。流程：
-     *  1. 把題目切到那一題（否則使用者補不到它）
-     *  2. 0.3 秒淡出後 pause
-     *  3. seek 回該行開頭——保證「播放不會越過該句」，也讓補答後能重聽整句
+     * **這裡是唯一會自動暫停的地方**。每行只檢查一次（[checkedLines]），
+     * 所以淡出後的位移校正、或使用者手動播放，都不會讓同一行反覆觸發。
      */
-    private fun enterUnansweredLine(question: FillChoiceQuestion, seekBack: Boolean) {
+    private fun onLeftLine(lineIndex: Int) {
+        if (!checkedLines.add(lineIndex)) return
+
+        val state = _uiState.value
+        val question = LineBoundary.questionOf(lineIndex, state.questions)
+        if (question == null) {
+            android.util.Log.d(TAG, "check line=$lineIndex 沒有挖空 → 通過")
+            return
+        }
+
+        if (LineBoundary.isAnswered(question, state.selections)) {
+            android.util.Log.d(TAG, "check line=$lineIndex answered=true → 直接進入下一句")
+            return
+        }
+
+        android.util.Log.d(
+            TAG,
+            "check line=$lineIndex answered=false → fadeOut 0.5s → pause",
+        )
+        pauseAtBoundary(question, reason = "交界")
+    }
+
+    /**
+     * 停在某一句的結尾（＝下一句的開頭），等待補答。
+     *
+     * 流程（擁有者指定）：先漸出 0.5 秒，**漸出完成後**才 `pause()`，
+     * 確保不會有突兀的截斷聲；暫停後只做「位移校正」回到交界，
+     * **不回頭到句首**——回頭就等於要使用者先答再聽。
+     *
+     * @param reason 觸發原因（寫進 log，方便驗收時對照）
+     */
+    private fun pauseAtBoundary(question: FillChoiceQuestion, reason: String) {
         if (pausing) return
         pausing = true
 
+        // 先把題目端上來：暫停的當下就要看得到這一句的選項。
+        focusUnanswered(question, seekToStart = false)
+
+        viewModelScope.launch {
+            player.fadeOut(FADE_OUT_MS)
+            player.pause()
+
+            val state = _uiState.value
+            val boundary = LineBoundary.endMsOf(
+                lines = state.lines,
+                lineIndex = question.lineIndex,
+                durationMs = state.playbackDurationMs,
+            )
+
+            var snapMs = 0L
+            if (boundary != null) {
+                // 淡出的那 0.5 秒會多播一點，這裡把位置拉回交界。
+                val target = (boundary - state.lyricOffsetMs).coerceAtLeast(0L)
+                snapMs = (player.currentPositionMs() - target).coerceAtLeast(0L)
+                if (snapMs > BOUNDARY_SNAP_TOLERANCE_MS) {
+                    player.seekTo(target)
+                }
+            }
+
+            // 歌詞焦點留在**剛剛播完的那一行**，不要跳到下一行。
+            // isPlaying 也一併壓成 false：播放器的下一次 tick 才會回報暫停，
+            // 這段空窗若還留著 true，輪詢會多跑一輪並把焦點更新到下一行。
+            _uiState.update {
+                it.copy(
+                    isPlaying = false,
+                    playbackPositionMs = player.currentPositionMs(),
+                    singingLineIndex = question.lineIndex,
+                )
+            }
+
+            android.util.Log.d(
+                TAG,
+                "pause@${formatLogTime(player.currentPositionMs())}" +
+                    " 行=${question.lineIndex} 交界=${boundary?.let(::formatLogTime) ?: "未知"}" +
+                    " 校正=${snapMs}ms（$reason）",
+            )
+            pausing = false
+        }
+    }
+
+    /** 把某一行尚未作答的題目端到 UI 上（暫停等待補答時使用）。 */
+    private fun focusUnanswered(question: FillChoiceQuestion, seekToStart: Boolean) {
         _uiState.update {
             it.copy(
                 activeBlankIndex = question.blankIndex,
@@ -447,25 +588,15 @@ class PracticeViewModel @Inject constructor(
             )
         }
 
-        viewModelScope.launch {
-            player.fadeOut(FADE_OUT_MS)
-            player.pause()
-
-            if (seekBack) {
-                val target = (question.startMs - _uiState.value.lyricOffsetMs).coerceAtLeast(0L)
-                player.seekTo(target)
-                _uiState.update {
-                    it.copy(playbackPositionMs = target, singingLineIndex = question.lineIndex)
-                }
-            }
-            pausing = false
+        if (seekToStart) {
+            val target = (question.startMs - _uiState.value.lyricOffsetMs).coerceAtLeast(0L)
+            player.seekTo(target)
+            _uiState.update { it.copy(playbackPositionMs = target) }
+            android.util.Log.d(
+                TAG,
+                "focus line=${question.lineIndex} blank=${question.blankIndex} @${formatLogTime(target)}",
+            )
         }
-    }
-
-    /** 目前這一行的題目；沒有挖空時回傳 null。 */
-    private fun questionForLine(lineIndex: Int?): FillChoiceQuestion? {
-        if (lineIndex == null) return null
-        return _uiState.value.questions.firstOrNull { it.lineIndex == lineIndex }
     }
 
     /**
@@ -538,6 +669,10 @@ class PracticeViewModel @Inject constructor(
 
         // 使用者是「按了播放鍵」才走到這裡的，所以要自動播
         player.load(videoId = chosen.video.videoId, startAtMs = 0L, autoPlay = true)
+
+        // 從 0 重新開始 → 交界檢查全部重來（換版本後仍要在同一個交界暫停）。
+        checkedLines.clear()
+        lastSeenLine = null
 
         _uiState.update {
             it.copy(
@@ -645,6 +780,10 @@ class PracticeViewModel @Inject constructor(
      *
      * 擁有者指定：「允許拖動，但到達後必須暫停在第一個未答挖空處，不得直接播過去」。
      * 因此放手時把位置對齊到「拖到的地方之後第一個未答的挖空」，並停在那裡。
+     *
+     * ⚠️ 這是**使用者手勢**，與交界檢查不同：手勢是「我要從這裡開始」，
+     * 所以直接停、對齊到**句首**（讓使用者能聽這一句），不需要 0.5 秒漸出。
+     * 交界檢查則是「這句已經唱完了」，所以停在**句尾**。
      */
     fun onTimelineSeekFinished() {
         val state = _uiState.value
@@ -655,7 +794,10 @@ class PracticeViewModel @Inject constructor(
             ?: return
 
         player.pause()
-        enterUnansweredLine(next, seekBack = true)
+        // 從這一句重新開始：交界檢查要在它的句尾再觸發一次。
+        checkedLines.remove(next.lineIndex)
+        lastSeenLine = next.lineIndex
+        focusUnanswered(next, seekToStart = true)
     }
 
     /**
@@ -775,6 +917,10 @@ class PracticeViewModel @Inject constructor(
         player.stop()
         audioResolved = false
         candidates = emptyList()
+
+        // 換歌 ＝ 全新的交界檢查狀態（同一個 ViewModel 可能被下一首歌重用）
+        checkedLines.clear()
+        lastSeenLine = null
 
         val dataset = FillChoiceBuilder.buildDataset(
             lines = source.lines,
@@ -905,6 +1051,16 @@ class PracticeViewModel @Inject constructor(
     }
 
     /**
+     * 毫秒 → `mm:ss.S`（給暫停時機的 log 用）。
+     *
+     * 帶到 0.1 秒是因為交界誤差就是幾百毫秒——只印 `mm:ss` 看不出「差 300ms」。
+     */
+    private fun formatLogTime(ms: Long): String {
+        val safe = ms.coerceAtLeast(0L)
+        return "%d:%02d.%d".format(safe / 60_000, (safe / 1_000) % 60, (safe % 1_000) / 100)
+    }
+
+    /**
      * 印出「每句選中的詞、原形、等級、詞頻、排序依據」，讓擁有者能直接驗證選詞。
      *
      * 輸出長這樣（可在 logcat 用 `LyrianPractice` 過濾）：
@@ -986,14 +1142,28 @@ class PracticeViewModel @Inject constructor(
         // 作答**只解除暫停**：淡入恢復播放。不碰 `singingLineIndex`、
         // 也不碰 `activeBlankIndex`——換行永遠只由播放時間決定。
         // 未答狀態本來就只增不減，所以「回到前面補答」永遠可行。
+        //
+        // 提前作答（該行還在播放中就填了）不會走到這裡：那時沒有在等待，
+        // 交界檢查會直接通過，**不會有漸出、不會停**。
         if (wasWaitingForThis) {
             _uiState.update {
                 it.copy(waitingForBlankIndex = null, audioNotice = null)
             }
+            android.util.Log.d(
+                TAG,
+                "resume@${formatLogTime(player.currentPositionMs())} 補答 line=${question.lineIndex}" +
+                    " blank=${question.blankIndex} → fadeIn 0.5s → play",
+            )
             viewModelScope.launch {
                 player.fadeIn(FADE_OUT_MS)
                 player.play()
             }
+        } else {
+            android.util.Log.d(
+                TAG,
+                "answer@${formatLogTime(player.currentPositionMs())} line=${question.lineIndex}" +
+                    " blank=${question.blankIndex} 播放中作答（不暫停）",
+            )
         }
 
         finishIfComplete()
@@ -1061,41 +1231,13 @@ class PracticeViewModel @Inject constructor(
         }
     }
 
-    /**
-     * 跳到指定題（進度條上點未答刻度、或補答入口）。
-     *
-     * 模組 B-6：「使用者任何時候都應能回到未答的題目補答」。
-     * 因此這裡會**暫停**並把時間對齊到該句開頭——不會只是換題目而繼續播。
-     */
-    fun onSeekTo(blankIndex: Int) {
-        val state = _uiState.value
-        val clamped = blankIndex.coerceIn(0, (state.questions.size - 1).coerceAtLeast(0))
-        val question = state.questions.getOrNull(clamped) ?: return
-
-        if (state.unansweredQuestions.any { it.blankIndex == clamped }) {
-            // 未答的題目：停下來讓使用者補答（不繼續往前播）
-            player.pause()
-            enterUnansweredLine(question, seekBack = true)
-            return
-        }
-
-        // 已答的題目：單純跳時間，不強制暫停
-        _uiState.update {
-            it.copy(
-                activeBlankIndex = clamped,
-                options = optionsByBlank[clamped].orEmpty(),
-            )
-        }
-
-        if (state.isAudioReady) {
-            // 歌詞位置 = 播放位置 + offset，所以跳回歌詞時間要反過來扣掉 offset
-            onSeekPlayback((question.startMs - state.lyricOffsetMs).coerceAtLeast(0L))
-        }
-    }
-
     fun onReplay() {
         val state = _uiState.value
         if (state.questions.isEmpty()) return
+
+        // 重玩＝全新的交界檢查：把「檢查過哪幾行／上次唱到哪一行」清掉。
+        checkedLines.clear()
+        lastSeenLine = null
 
         _uiState.update {
             it.copy(

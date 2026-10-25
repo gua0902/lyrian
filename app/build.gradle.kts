@@ -108,6 +108,8 @@ dependencies {
 
     // Image / Storage
     implementation(libs.coil.compose)
+    // 封面取色：從專輯封面抓主色／輔助色，套在播放鍵與進度條上（見 ui/theme/PlaybackColors.kt）
+    implementation(libs.androidx.palette)
     implementation(libs.androidx.datastore.preferences)
     implementation(libs.androidx.security.crypto)
 

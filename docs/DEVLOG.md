@@ -1588,3 +1588,118 @@ D/LyrianYouTubeSearch: 搜尋「Adele Hello」解析出 12 個候選（HTML 1346
 ```
 
 `實際主機` 必須是 `www.youtube.com`、候選數必須大於 0。
+## TASK-19：框適配影片、時間歸位、交界暫停、黑屏/UI 排查、封面取色、M3 Slider
+
+### 1. 容器適配影片比例（不再有黑邊）
+
+舊版把播放器塞進 **96×96 的方框**置中（`Box(size(frame), Center)`），
+16:9 的影片在框內只剩 96×54，上下各 21dp 的黑區。
+
+改成「**框去配合影片**」：
+
+```
+寬度 = COVER_FRAME（96dp，錨定封面寬度，不變）
+高度 = 寬度 × videoHeight / videoWidth
+```
+
+- JS 端新增 `loadedmetadata` / `resize` 監聽 → 立刻回報 `videoWidth × videoHeight`
+  （輪詢仍在，但只在尺寸變化時回報；解除靜音／自動播放改為只做一次）
+- `SongArtwork`：容器底層**永遠**是封面圖，播放器（透明背景）疊在上面。
+  過渡期（比例未知）看得到封面而不是黑塊；比例一到就換成真實比例。
+- 圓角 12dp（`COVER_CORNER`），與封面一致。
+- Header 的 `Row` 改 `wrapContentHeight` + `CenterVertically`，影片變矮後
+  歌名／歌手自動重新垂直居中（不再寫死 108dp）。
+- 移除死常數 `PLAYER_WIDTH`。
+
+### 2. 時間顯示歸位
+
+- **歌手行只剩歌手**：刪掉 `buildArtistLine()`（它把 `· 00:00 / 3:20` 拼接進行內，
+  而且總長沒拿到時 `/` 後面是空的）。
+- 進度條下方左右兩端顯示時間：
+  ```
+  00:00 ─────────●──────── 3:20
+  ```
+  左＝當前、右＝總長；總長未知顯示 `--:--`；字級 `labelSmall`（小於歌手名
+  `bodySmall`）＋次級文字色。
+
+### 3. 暫停機制：檢查點移到**句子交界**
+
+舊版是「一進入含挖空的新句子就暫停並回頭到句首」——使用者還沒聽到就被要求作答。
+
+新機制：
+
+```
+A 播放中 → 顯示 A 的挖空，可邊聽邊填
+A→B 交界 → 檢查 A：已答就無縫播 B；未答則 fadeOut 0.5s → pause 停在交界
+補答完成 → fadeIn 0.5s → play（不改任何行索引）
+```
+
+實作要點：
+
+- 新增 `domain/practice/LineBoundary.kt`（純函式，可測）：
+  `endMsOf()` ＝ 該行 `endMs` → 下一行 `startMs` → 曲目總長 → `startMs + 4s`；
+  `isAnswered()` ＝ 沒題目或 `selections` 有該 blankIndex（**答錯也算已作答**）。
+- tick 迴圈以「離開某一行」為觸發點（`currentLine != lastSeenLine`），
+  檢查對象是 **`lastSeenLine`**（剛播完的那一句），不是進來的那一句。
+- `checkedLines` 確保**每行只檢查一次**；淡出後的位移校正、手動播放、
+  換版本都不會讓同一行反覆觸發。
+- 暫停後把位置校正回「該行結束時間」（容差 250ms），**不回頭到句首**；
+  歌詞焦點留在剛播完的那一行。
+- 追回（規則 7）：只追「沒檢查過」的行——否則使用者在交界暫停後按播放，
+  會立刻被拉回同一個點，變成死鎖。
+- 廣告：沿用時間倒退夾制，時間凍結就不會穿越交界 → 不檢查、不暫停。
+- 漸層音量：`FADE_MS 300 → 500`、步數 20 → 10（50ms/步），**漸出完成才 pause**。
+- log（tag `LyrianPractice`）：
+  ```
+  check line=12 answered=false → fadeOut 0.5s → pause
+  pause@1:24.3 行=12 交界=1:24.5 校正=320ms（交界）
+  resume@1:24.5 補答 line=12 blank=7 → fadeIn 0.5s → play
+  answer@0:58.1 line=8 blank=5 播放中作答（不暫停）
+  ```
+
+### 4. 黑屏排查（有聲無影）
+
+| 檢查項 | 結果 |
+|---|---|
+| 祖先 alpha / graphicsLayer / blur | `blur` 與 `graphicsLayer` **只掛在背景 `AsyncImage`**；歌詞 `graphicsLayer` 只作用在 `Text`。WebView 路徑乾淨。 |
+| 遮罩 | 全專案只剩 `AlbumBackdrop` 的 `Color.Black(0.62)` scrim，它在 WebView **之下**（背景層），不是覆蓋層。 |
+| 硬體加速 | `AndroidManifest` 明示 `android:hardwareAccelerated="true"`；`WebView.setLayerType(LAYER_TYPE_HARDWARE)`；無任何 `LAYER_TYPE_SOFTWARE`。 |
+| CSS 元凶 | 舊版 `video{object-fit:contain;background:#000}` ＋ `html,body{background:#000}` ＋ `setBackgroundColor(BLACK)`。全部改成透明 + `object-fit:cover`。 |
+| 漸層 | `.ytp-gradient-top/.ytp-gradient-bottom` 用 `opacity:0`，**不再** `display:none`（上一版黑屏的嫌疑點）。 |
+| A/B 開關 | `YouTubePlayerController.DEBUG_DISABLE_CSS = true` → 完全不注入樣式，用來確認是不是某條 CSS。 |
+| 診斷 log | 載入 1.5s 後印 `diagnose: {"size":"1280x720","rect":[96,54],"opacity":"1",...}`。 |
+
+### 5. YouTube UI 元素
+
+- embed URL 補齊官方參數：`controls=0&modestbranding=1&showinfo=0&iv_load_policy=3&disablekb=1&fs=0`。
+- 樣式改在 `onPageFinished` **延遲 300ms** 再套（那一刻播放器 DOM 才組完），
+  並用 `MutationObserver` 監看 style 節點被換掉時補回。
+- 選擇器擴充為 13 條（chrome-top/bottom、large-play-button、share、watermark、
+  title、youtube-button、cued-thumbnail-overlay、cards、info cards、endscreen…）。
+- 每次套用都回報命中數量（tag `LyrianPlayer`）：`css hits: .ytp-chrome-top=1 ...`。
+
+### 6. 封面取色
+
+- 新依賴 `androidx.palette:palette-ktx:1.0.0`。
+- `ui/theme/PlaybackColors.kt`：Coil 取 96px **軟體**點陣圖
+  （`allowHardware(false)`——Palette 要讀像素），Vibrant → Muted → Dominant。
+- `ui/theme/AccentColor.kt`（純 Kotlin，可單元測試）：owner 指定「亮度 > 0.6 就處理」，
+  實作把**白色圖示的對比夾到 ≥ 3:1**（WCAG AA），二分搜尋等比壓暗 RGB。
+  0.6 只是「偏亮」的直覺值，亮度 0.5 的顏色仍然只有 2.3:1，所以門檻訂在 3:1。
+- 套用三處：播放鍵底色（圖示固定白）、Slider `activeTrackColor`、Slider `thumbColor`。
+  換歌（`coverUrl` 改變）自動重取。
+
+### 7. 進度條改 M3 Slider
+
+自畫的 4dp 灰線換成官方 `androidx.compose.material3.Slider`（軌道粗細＋圓角＋拖動點＋
+按壓回饋）。拖曳中的 seek 以 100ms 節流，放手時補一次精確 seek。
+
+### 驗證
+
+- 182 個單元測試全過（新增 `LineBoundaryTest` 11、`AccentColorTest` 6）
+- `assembleDebug` BUILD SUCCESSFUL
+
+### 尚未驗證（無裝置）
+
+1. 截圖（框內無黑）、2. 整首的暫停時機 log、3. 黑屏是否消失。
+   程式已印出對應的 log 行，需要實機跑一次貼回。

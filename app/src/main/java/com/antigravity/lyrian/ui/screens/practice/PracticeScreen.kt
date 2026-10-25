@@ -4,7 +4,6 @@ import androidx.compose.animation.animateColorAsState
 import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
-import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
@@ -42,6 +41,8 @@ import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Scaffold
+import androidx.compose.material3.Slider
+import androidx.compose.material3.SliderDefaults
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
@@ -53,15 +54,10 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.blur
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.geometry.Offset
-import androidx.compose.ui.input.pointer.pointerInput
-import androidx.compose.ui.layout.onSizeChanged
-import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.width
-import androidx.compose.ui.unit.IntOffset
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
-import kotlin.math.roundToInt
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.hapticfeedback.HapticFeedbackType
@@ -88,6 +84,7 @@ import com.antigravity.lyrian.R
 import com.antigravity.lyrian.data.settings.PlaybackOffsets
 import com.antigravity.lyrian.domain.model.ChoiceRecord
 import com.antigravity.lyrian.domain.model.LyricLine
+import com.antigravity.lyrian.ui.theme.rememberPlaybackAccent
 import kotlinx.coroutines.delay
 
 /** 答錯後的停頓：要讓使用者看清正確答案。 */
@@ -118,23 +115,33 @@ private val PREVIOUS_LINE_PEEK = 48.dp
 private val LYRIC_LINE_SPACING = 22.dp
 
 /**
- * 內嵌播放器的寬度（高 = 寬 × 9/16）。
+ * 封面／播放器容器的**寬度**（高度依影片比例算）。
  *
- * 擁有者要求「內嵌在封面區域且保持可見，不可縮成 1x1 隱藏」——
- * 所以它佔用的就是原本 48dp 封面縮圖的位置，只是放大到看得見的程度。
- */
-private val PLAYER_WIDTH = 112.dp
-
-/**
- * 封面框（正方形）。
- *
- * 播放器會**依影片長寬比塞進這個框**（模組 A.6）：`600x300` 的影片就變成
- * `96x48`，`300x600` 的直式影片就變成 `48x96`。框本身不變，影片不出框。
+ * 擁有者指定的規則：**框去配合影片**，不是影片塞進方框。
+ * ```
+ * 寬度 = COVER_FRAME（不變）
+ * 高度 = 寬度 × videoHeight / videoWidth
+ * ```
+ * 所以 16:9 的影片是 96×54、9:16 的直式是 96×171——容器內不會出現任何黑邊。
  */
 private val COVER_FRAME = 96.dp
 
-/** 封面與播放器共用的圓角（擁有者要求「套用與封面相同的圓角」）。 */
+/** 封面與播放器共用的圓角（擁有者要求「與封面相同的圓角」，12dp）。 */
 private val COVER_CORNER = 12.dp
+
+/** 影片比例還沒回報時的佔位比例（擁有者指定 16:9）。 */
+private const val DEFAULT_VIDEO_ASPECT = 16f / 9f
+
+/** 總時長未知時顯示的字串（擁有者指定 `--:--`）。 */
+private const val UNKNOWN_TIME = "--:--"
+
+/**
+ * 拖曳進度條時，兩次 seek 之間的最小間隔。
+ *
+ * Slider 每次移動都會回呼，若每一幀都丟一次 JS（`video.currentTime = …`），
+ * 播放器會忙著處理 seek 而卡頓。100ms 在聽感上仍是即時的。
+ */
+private const val SEEK_THROTTLE_MS = 100L
 
 /**
  * 除錯用：把播放器放大成 240×135dp。
@@ -254,6 +261,10 @@ private fun PracticeContent(
     val listState = rememberLazyListState()
     val currentLineIndex = state.currentQuestion?.lineIndex ?: 0
 
+    // 封面取色：套在播放鍵底色、進度條已播放段與拖動點（其餘 UI 不變）。
+    // 取不到（無封面／純灰階）時退回 M3 的 primary。
+    val accent = rememberPlaybackAccent(state.coverUrl) ?: MaterialTheme.colorScheme.primary
+
     // 歌曲驅動時跟著「正在唱的那句」；沒有音源時退回作答進度
     val targetLineIndex = state.singingLineIndex ?: currentLineIndex
 
@@ -281,6 +292,7 @@ private fun PracticeContent(
                 coverUrl = state.coverUrl,
                 player = player,
                 onBack = onBack,
+                accent = accent,
                 audio = AudioControls(
                     isReady = state.isAudioReady,
                     isLoading = state.isAudioLoading,
@@ -302,10 +314,12 @@ private fun PracticeContent(
             )
 
             // 模組 H：全曲只有**一條**進度條（時間軸），且不畫刻度。
+            // 時間顯示在條的左右兩端**下方**：左＝當前、右＝總長（未知時 --:--）。
             TimelineScrubber(
                 positionMs = state.playbackPositionMs,
-                durationMs = state.playbackDurationMs
-                    ?: state.lines.lastOrNull()?.startMs,
+                durationMs = state.playbackDurationMs,
+                fallbackDurationMs = state.lines.lastOrNull()?.startMs,
+                accent = accent,
                 onSeek = onSeekPlayback,
                 onSeekFinished = onTimelineSeekFinished,
             )
@@ -407,7 +421,15 @@ private data class AudioControls(
  * **這是整個練習頁唯一處理狀態列 inset 的地方**——之前重複疊加了三次，
  * 導致頂部出現大片空白。
  *
- * 進度條**不在這裡**：模組 H 之後全曲只剩一條時間軸，放在 header 下方。
+ * 版面（擁有者指定）：
+ * ```
+ * 第一行：返回｜封面/播放器（左） 歌名（右上） 播放鍵（最右）
+ *        歌手（右下，只有歌手名——時間已經移到進度條兩端）
+ * 第三行：進度條（在 header 下方，見 TimelineScrubber）
+ * ```
+ *
+ * 高度**不再寫死 108dp**：影片容器會依長寬比變矮（16:9 只有 54dp），
+ * 寫死高度會讓文字浮空；改用 `wrapContentHeight` + 垂直置中。
  */
 @Composable
 private fun PlayerHeader(
@@ -416,6 +438,7 @@ private fun PlayerHeader(
     coverUrl: String?,
     player: com.antigravity.lyrian.data.audio.YouTubePlayerController,
     onBack: () -> Unit,
+    accent: Color,
     audio: AudioControls,
 ) {
     // 背景已經是模糊封面 → header 改用透明底，讓圖透上來（其餘元件仍是 M3）
@@ -427,8 +450,7 @@ private fun PlayerHeader(
             Row(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .height(if (DEBUG_LARGE_PLAYER) 148.dp else 108.dp)
-                    .padding(horizontal = 8.dp),
+                    .padding(horizontal = 8.dp, vertical = 6.dp),
                 verticalAlignment = Alignment.CenterVertically,
             ) {
                 IconButton(onClick = onBack) {
@@ -440,42 +462,19 @@ private fun PlayerHeader(
                 }
 
                 // 封面位置 = 播放器位置。
-                // 擁有者要求播放器「內嵌在封面區域且保持可見，不可縮成 1x1 隱藏」，
-                // 所以音源就緒時這裡直接放官方播放器，沒就緒時放封面縮圖。
-                // 播放器依影片長寬比塞進封面框（模組 A.6）。
-                Box(
-                    modifier = Modifier
-                        .size(if (DEBUG_LARGE_PLAYER) 240.dp else COVER_FRAME)
-                        .clip(RoundedCornerShape(COVER_CORNER))
-                        .background(Color.White.copy(alpha = 0.16f)),
-                    contentAlignment = Alignment.Center,
-                ) {
-                    if (audio.isReady) {
-                        YouTubePlayerBox(
-                            player = player,
-                            aspectRatio = audio.videoAspectRatio,
-                            modifier = Modifier.clip(RoundedCornerShape(COVER_CORNER)),
-                        )
-                    } else if (coverUrl != null) {
-                        AsyncImage(
-                            model = coverUrl,
-                            contentDescription = null,
-                            contentScale = ContentScale.Crop,
-                            modifier = Modifier.fillMaxSize(),
-                        )
-                    } else {
-                        Icon(
-                            imageVector = Icons.Filled.MusicNote,
-                            contentDescription = null,
-                            tint = ON_IMAGE_SECONDARY,
-                        )
-                    }
-                }
+                // **框去配合影片**：寬度固定（等於封面寬），高度依 videoWidth:videoHeight。
+                SongArtwork(
+                    coverUrl = coverUrl,
+                    aspectRatio = audio.videoAspectRatio,
+                    isPlayerReady = audio.isReady,
+                    player = player,
+                )
 
                 Column(
                     modifier = Modifier
                         .weight(1f)
                         .padding(horizontal = 12.dp),
+                    verticalArrangement = Arrangement.Center,
                 ) {
                     Text(
                         text = title,
@@ -484,15 +483,17 @@ private fun PlayerHeader(
                         maxLines = 1,
                         overflow = TextOverflow.Ellipsis,
                     )
+                    // 只有歌手。**不得**再拼接任何時間或斜線（擁有者指定）。
                     Text(
-                        text = buildArtistLine(artist, audio),
+                        text = artist,
                         style = MaterialTheme.typography.bodySmall,
                         color = ON_IMAGE_SECONDARY,
                         maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
                     )
                 }
 
-                PlayPauseButton(audio = audio)
+                PlayPauseButton(audio = audio, accent = accent)
             }
 
             if (audio.isReady) {
@@ -520,115 +521,176 @@ private fun PlayerHeader(
  * 兩條**對得上但不成比例**——第 3 題可能在 12 秒，第 4 題在 3 分半，
  * 下面的滑桿卻把兩者畫成等距。使用者看到的「進度」是假的。
  *
- * 現在以**時間**為軸：點一下就 seek 到那裡。
+ * ## 樣式：官方 M3 Slider
  *
- * ## 為什麼沒有刻度（擁有者要求拿掉）
+ * 舊版是自畫的 4dp 灰線，擁有者說「太細、缺乏層次」。改用
+ * `androidx.compose.material3.Slider`：軌道有粗細與圓角、附拖動圓點，
+ * 按壓有回饋，就是 Google 自己的進度條樣子。顏色取自封面（[accent]），
+ * 取不到才用 M3 的 primary。
  *
- * 上一版在長條上畫了「每題一個小圓點」（未答空心、已答實心）。
- * 48 句的歌會在 4dp 的長條上擠出幾十個點，看起來像雜訊，
- * 也把進度條本身壓得看不清——**視覺上就是醜**。點擊 seek 的功能保留。
+ * ## 時間顯示在條的兩端下方
+ *
+ * ```
+ * 00:00 ─────────────●──────── 3:20
+ * ```
+ * 左＝當前位置、右＝總長；**總長未取得時顯示 `--:--`**（擁有者指定）。
+ * 這兩個標籤取代了原本拼在歌手名後面的 `· 00:00 / 3:20`。
  */
 @Composable
 private fun TimelineScrubber(
     positionMs: Long,
     durationMs: Long?,
+    fallbackDurationMs: Long?,
+    accent: Color,
     onSeek: (Long) -> Unit,
     onSeekFinished: () -> Unit,
 ) {
-    val duration = durationMs?.takeIf { it > 0 } ?: return
-    var widthPx by remember { mutableStateOf(0) }
-    val density = LocalDensity.current
-    val progress = fractionOf(positionMs, duration)
+    // 幾何用的總長：真實總長優先；還沒拿到時退到「最後一句的時間」，
+    // 至少讓條子畫得出來。但**標籤**只認真實總長（否則會謊報一個假的總長）。
+    val geometryMs = (durationMs ?: fallbackDurationMs)?.takeIf { it > 0 }
+    val totalLabel = durationMs?.takeIf { it > 0 }?.let(::formatTime) ?: UNKNOWN_TIME
 
-    Box(
+    // 拖曳中不要讓播放器的更新把圓點拉回去
+    var dragging by remember { mutableStateOf(false) }
+    var dragValue by remember { mutableStateOf(0f) }
+    var lastSeekAt by remember { mutableStateOf(0L) }
+
+    val shownPosition = if (dragging) dragValue.toLong() else positionMs
+
+    Column(
         modifier = Modifier
             .fillMaxWidth()
-            .padding(horizontal = 16.dp)
-            // 40dp 是**觸控高度**，不是視覺高度：長條本身只有 4dp。
-            .height(40.dp)
-            .onSizeChanged { widthPx = it.width }
-            .pointerInput(duration, widthPx) {
-                detectTapGestures { offset ->
-                    if (widthPx > 0) {
-                        onSeek((offset.x / widthPx * duration).toLong())
-                        onSeekFinished()
-                    }
-                }
-            },
-        contentAlignment = Alignment.CenterStart,
+            .padding(horizontal = 16.dp),
     ) {
-        // 底軌
-        Box(
+        if (geometryMs != null) {
+            val range = geometryMs.toFloat()
+
+            Slider(
+                value = (if (dragging) dragValue else positionMs.toFloat()).coerceIn(0f, range),
+                modifier = Modifier.fillMaxWidth(),
+                onValueChange = { value ->
+                    dragging = true
+                    dragValue = value
+                    // 拖曳中的 seek 要節流：每一幀都丟一次 JS 會讓播放器卡住。
+                    val now = android.os.SystemClock.elapsedRealtime()
+                    if (now - lastSeekAt >= SEEK_THROTTLE_MS) {
+                        lastSeekAt = now
+                        onSeek(value.toLong())
+                    }
+                },
+                onValueChangeFinished = {
+                    dragging = false
+                    // 放手時補一次精確 seek，後續的「對齊未答句」才不會差一截
+                    onSeek(dragValue.toLong())
+                    onSeekFinished()
+                },
+                valueRange = 0f..range,
+                colors = SliderDefaults.colors(
+                    thumbColor = accent,
+                    activeTrackColor = accent,
+                    inactiveTrackColor = Color.White.copy(alpha = 0.24f),
+                ),
+            )
+        }
+
+        Row(
             modifier = Modifier
                 .fillMaxWidth()
-                .height(4.dp)
-                .clip(RoundedCornerShape(2.dp))
-                .background(Color.White.copy(alpha = 0.24f)),
-        )
-
-        // 已播放
-        Box(
-            modifier = Modifier
-                .fillMaxWidth(progress)
-                .height(4.dp)
-                .clip(RoundedCornerShape(2.dp))
-                .background(MaterialTheme.colorScheme.primary),
-        )
-
-        // 目前位置
-        Box(
-            modifier = Modifier
-                .offset {
-                    IntOffset(
-                        (progress * widthPx).roundToInt() - with(density) { 1.dp.roundToPx() },
-                        0,
-                    )
-                }
-                .width(2.dp)
-                .height(16.dp)
-                .background(Color.White),
-        )
+                .padding(horizontal = 4.dp),
+            horizontalArrangement = Arrangement.SpaceBetween,
+        ) {
+            // 時間字級刻意小於歌手名（bodySmall），並用次級文字色
+            Text(
+                text = formatTime(shownPosition),
+                style = MaterialTheme.typography.labelSmall,
+                color = ON_IMAGE_SECONDARY,
+            )
+            Text(
+                text = totalLabel,
+                style = MaterialTheme.typography.labelSmall,
+                color = ON_IMAGE_SECONDARY,
+            )
+        }
     }
 }
 
-/** 位置 → 0..1。 */
-private fun fractionOf(ms: Long, duration: Long): Float =
-    if (duration <= 0) 0f else (ms.toFloat() / duration).coerceIn(0f, 1f)
-
 /**
- * 官方 YouTube 播放器。
+ * 封面／播放器容器。
  *
- * ⚠️ **必須保持可見**：擁有者明訂不可縮成 1x1 隱藏，也不可攔截廣告。
- * 這裡把它塞進封面框，並依影片長寬比置中（模組 A.6）：
- * 框是 96×96，16:9 的影片就是 96×54，1:1 的影片就是 96×96。
+ * ## 框配合影片，不是影片配合框（擁有者修正）
+ *
+ * ```
+ * 寬度 = COVER_FRAME（錨定封面寬度，不變）
+ * 高度 = 寬度 × videoHeight / videoWidth
+ * ```
+ * 舊版是「固定 96×96 的方框，把影片依比例縮進去置中」——比例一不符，
+ * 框內就多出兩塊黑邊（16:9 的影片上下各 21dp）。現在容器本身就是影片比例，
+ * 影片以 `fillMaxSize` 填滿，**容器內不存在非影片像素**。
+ *
+ * ## 比例還沒拿到之前
+ *
+ * 先用 16:9 佔位，並**顯示封面圖**（影片層是透明的，見
+ * `YouTubePlayerController` 的透明底設定）。所以過渡期看到的是封面，
+ * 不是黑畫面；拿到 `loadedmetadata` 之後容器立刻換成真實比例。
  */
 @Composable
-private fun YouTubePlayerBox(
-    player: com.antigravity.lyrian.data.audio.YouTubePlayerController,
+private fun SongArtwork(
+    coverUrl: String?,
     aspectRatio: Float?,
-    modifier: Modifier = Modifier,
+    isPlayerReady: Boolean,
+    player: com.antigravity.lyrian.data.audio.YouTubePlayerController,
 ) {
-    val aspect = aspectRatio?.takeIf { it > 0.1f && it < 10f } ?: (16f / 9f)
-    val frame = if (DEBUG_LARGE_PLAYER) 240.dp else COVER_FRAME
+    // 16:9 是「還不知道」時的佔位；異常比例（螢幕錄影、極端直式）也退回 16:9
+    val aspect = aspectRatio?.takeIf { it in 0.3f..4f } ?: DEFAULT_VIDEO_ASPECT
+    val width = if (DEBUG_LARGE_PLAYER) 240.dp else COVER_FRAME
+    val height = width / aspect
 
-    val width = if (aspect >= 1f) frame else frame * aspect
-    val height = if (aspect >= 1f) frame / aspect else frame
+    Box(
+        modifier = Modifier
+            .width(width)
+            .height(height)
+            .clip(RoundedCornerShape(COVER_CORNER)),
+        contentAlignment = Alignment.Center,
+    ) {
+        // 底層**永遠**是封面。
+        // 影片還沒輸出、或頁面有 1px 縫隙時，露出來的是封面而不是黑色
+        // ——擁有者要求「容器內每個像素都是影片內容，上下左右皆無黑色」。
+        if (coverUrl != null) {
+            AsyncImage(
+                model = coverUrl,
+                contentDescription = null,
+                contentScale = ContentScale.Crop,
+                modifier = Modifier.fillMaxSize(),
+            )
+        } else {
+            Box(
+                modifier = Modifier
+                    .fillMaxSize()
+                    .background(Color.White.copy(alpha = 0.16f)),
+                contentAlignment = Alignment.Center,
+            ) {
+                Icon(
+                    imageVector = Icons.Filled.MusicNote,
+                    contentDescription = null,
+                    tint = ON_IMAGE_SECONDARY,
+                )
+            }
+        }
 
-    Box(modifier = Modifier.size(frame), contentAlignment = Alignment.Center) {
-        androidx.compose.ui.viewinterop.AndroidView(
-            modifier = modifier.size(width = width, height = height),
-            factory = { context ->
-                WebView(context).also { webView ->
+        if (isPlayerReady) {
+            androidx.compose.ui.viewinterop.AndroidView(
+                modifier = Modifier.fillMaxSize(),
+                factory = { context ->
                     // WebView 不能放在單例裡（會洩漏 Activity），所以由這裡建立、
                     // 交給控制器驅動；旋轉螢幕重建時控制器會把同一部影片載回來。
-                    player.attach(webView)
-                }
-            },
-        )
-    }
+                    WebView(context).also(player::attach)
+                },
+            )
 
-    androidx.compose.runtime.DisposableEffect(player) {
-        onDispose { player.detach() }
+            androidx.compose.runtime.DisposableEffect(player) {
+                onDispose { player.detach() }
+            }
+        }
     }
 }
 
@@ -701,12 +763,6 @@ private fun formatOffsetSeconds(offsetMs: Long): String {
     }
 }
 
-/** 歌手 · 已播 / 總長。音源未就緒時只顯示歌手。 */
-private fun buildArtistLine(artist: String, audio: AudioControls): String {
-    if (!audio.isReady || audio.durationMs == null) return artist
-    return "$artist · ${formatTime(audio.positionMs)} / ${formatTime(audio.durationMs)}"
-}
-
 /** 毫秒 → `mm:ss`。 */
 private fun formatTime(ms: Long): String {
     val totalSeconds = (ms.coerceAtLeast(0L)) / 1000
@@ -718,9 +774,12 @@ private fun formatTime(ms: Long): String {
  *
  * 尚未解析音源時，按下去會先解析（顯示轉圈），而不是沒反應——
  * 空有外觀的按鈕是最糟的體驗。
+ *
+ * 底色用封面取到的 [accent]（取不到時由呼叫端給 M3 primary）；
+ * 圖示固定白色——[AccentColor] 已經保證亮度壓到白色讀得出來。
  */
 @Composable
-private fun PlayPauseButton(audio: AudioControls) {
+private fun PlayPauseButton(audio: AudioControls, accent: Color) {
     val enabled = !audio.isLoading
 
     Box(
@@ -729,7 +788,7 @@ private fun PlayPauseButton(audio: AudioControls) {
             .clip(RoundedCornerShape(22.dp))
             .background(
                 if (audio.isReady) {
-                    MaterialTheme.colorScheme.primary
+                    accent
                 } else {
                     MaterialTheme.colorScheme.surfaceContainerHighest
                 },
@@ -747,14 +806,15 @@ private fun PlayPauseButton(audio: AudioControls) {
             audio.isPlaying || audio.isBuffering -> Icon(
                 imageVector = Icons.Filled.Pause,
                 contentDescription = stringResource(R.string.practice_pause),
-                tint = MaterialTheme.colorScheme.onPrimary,
+                tint = Color.White,
             )
 
             else -> Icon(
                 imageVector = Icons.Filled.PlayArrow,
                 contentDescription = stringResource(R.string.practice_play),
                 tint = if (audio.isReady) {
-                    MaterialTheme.colorScheme.onPrimary
+                    // 白圖示：accent 的亮度已被 AccentColor 壓到 3:1 以上
+                    Color.White
                 } else {
                     MaterialTheme.colorScheme.onSurfaceVariant
                 },
