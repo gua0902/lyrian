@@ -1703,3 +1703,48 @@ A→B 交界 → 檢查 A：已答就無縫播 B；未答則 fadeOut 0.5s → pa
 
 1. 截圖（框內無黑）、2. 整首的暫停時機 log、3. 黑屏是否消失。
    程式已印出對應的 log 行，需要實機跑一次貼回。
+## TASK-20：修「點進練習頁閃退」＋搜尋變慢
+
+### 1. 閃退：ViewModel 的欄位初始順序（真因，不是猜的）
+
+`PracticeViewModel` 的 `init` 寫在欄位中間，而它啟動的協程用的是
+`Dispatchers.Main.immediate`：
+
+```
+init { viewModelScope.launch { load(songId) } }      // ← 在主執行緒會「同步」跑完
+...
+private var pausing = false
+private var lastSeenLine: Int? = null
+private val checkedLines = mutableSetOf<Int>()       // ← 宣告在 init 之後
+```
+
+`load()` 只有在**語言資料還沒快取**時才會掛起（`withContext(IO)`）。
+所以：
+
+- 第一次進練習頁：`languageData.get()` 掛起 → 欄位都初始化完了 → 正常
+- 第二次以後：`cached?.let { return it }` 立刻回傳 → 整條
+  `load → applySource` **同步**執行 → 碰到還是 `null` 的 `checkedLines`
+  → `NullPointerException` → 閃退
+
+同一條路徑上 `observePlayback()` 也有第二個坑：`StateFlow` 會**立刻**回放目前值，
+如果播放器單例還帶著上一首的 `embedBlocked`，會呼叫 `onSwitchVersion()` →
+讀到尚未初始化的 `candidates` → 同樣 NPE。
+
+修法：把 `init` 移到**所有欄位初始器之後**，並在 `load()` 外面包一層
+`try/catch`（`CancellationException` 照樣往外丟），出錯時退到錯誤畫面而不是殺掉 App。
+
+### 2. 搜尋變慢
+
+兩個原因，一起處理：
+
+1. **iTunes 與 LRCLIB 序列化**：兩者互不依賴，卻一個等完再等另一個
+   → 改成 `coroutineScope { async { iTunes } + LRCLIB }`，省掉一個往返。
+2. **轉換與算題數跑在 Main**：LRCLIB 用 `track_name` 是模糊比對，老歌常回
+   上百筆（實測「Just the Two of Us」200 KB），每一筆都要解析歌詞 + 跑挖空
+   選擇 + 查 6 萬筆等級表 → 整個畫面卡住，看起來就是「搜尋變慢」
+   → 搬到 `Dispatchers.Default`，並把處理上限收斂到 60 筆。
+
+### 驗證
+
+- 182 個單元測試全過、`assembleDebug` BUILD SUCCESSFUL
+- 閃退**尚未實機驗證**（無裝置），但成因是確定的初始化順序問題

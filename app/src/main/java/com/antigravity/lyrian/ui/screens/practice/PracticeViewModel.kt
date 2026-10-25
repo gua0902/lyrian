@@ -210,6 +210,9 @@ private const val ERROR_NO_SESSION = "找不到這首歌的練習資料，請重
 /** 有歌詞，但沒有任何一行可以挖空（純演奏曲、或全是很短的虛詞）。 */
 private const val ERROR_NO_BLANKS = "這首歌沒有可挖空的歌詞。"
 
+/** 載入過程中發生未預期的錯誤（例外已被攔下，不讓它殺掉 App）。 */
+private const val ERROR_LOAD_FAILED = "載入這首歌時發生問題，請按返回重新選擇。"
+
 /** 在 YouTube Music 上搜尋不到可配對的版本。 */
 private const val NO_AUDIO_MATCH = "找不到這首歌對應的錄音版本，只能純歌詞練習。"
 
@@ -328,12 +331,6 @@ class PracticeViewModel @Inject constructor(
     /** 全部題目的選項**預先算好**，避免每次換題重算（也讓上下題的選項穩定）。 */
     private var optionsByBlank: Map<Int, List<String>> = emptyMap()
 
-    init {
-        val songId = savedStateHandle.get<String>(Routes.ARG_SONG_ID)?.toLongOrNull()
-        viewModelScope.launch { load(songId) }
-        observePlayback()
-    }
-
     // ---------- 音訊 ----------
 
     /** 是否已經搜尋過音源（避免每次按播放都重打 YouTube）。 */
@@ -366,6 +363,24 @@ class PracticeViewModel @Inject constructor(
      * 反覆暫停。
      */
     private val checkedLines = mutableSetOf<Int>()
+
+    /**
+     * ⚠️ **`init` 必須在所有欄位初始器之後**。
+     *
+     * `viewModelScope` 用的是 `Dispatchers.Main.immediate`：只要建立 ViewModel 時
+     * 已經在主執行緒，`launch` 會**同步**跑完。而 `load()` 在語言資料已快取時
+     * 不會有任何掛起點（`languageData.get()` 立刻回傳），於是整條
+     * `load → applySource` 會在欄位還沒初始化完時執行。
+     *
+     * 這是實機閃退的真因：`applySource` 碰到宣告在 `init` 之後的 `checkedLines`
+     * 時它還是 null → `NullPointerException`。第一次進練習頁不會當（首次載入
+     * 語言資料一定會掛起），**第二次以後必當**，所以看起來像「有時會閃退」。
+     */
+    init {
+        val songId = savedStateHandle.get<String>(Routes.ARG_SONG_ID)?.toLongOrNull()
+        viewModelScope.launch { load(songId) }
+        observePlayback()
+    }
 
     /**
      * 把播放器的狀態同步進 UI 狀態。
@@ -828,6 +843,20 @@ class PracticeViewModel @Inject constructor(
             return
         }
 
+        // 這一整段**不可以讓例外冒出去**：它在 `init` 啟動的協程裡執行，
+        // 未捕捉的例外會直接殺掉 App（使用者看到的就是「點進去閃退」）。
+        // 出錯時退到錯誤畫面，至少能按返回重來。
+        try {
+            loadInternal(songId)
+        } catch (cancelled: kotlinx.coroutines.CancellationException) {
+            throw cancelled
+        } catch (error: Throwable) {
+            android.util.Log.e(TAG, "載入練習資料失敗（songId=$songId）", error)
+            failWith(ERROR_LOAD_FAILED)
+        }
+    }
+
+    private suspend fun loadInternal(songId: Long) {
         // 語言資料（等級／原形／詞頻）約 6 萬筆，第一次載入要解析 0.9 MB，
         // 因此在 IO 執行緒完成後才組題——否則第一次進練習頁會掉一格畫面。
         val language = languageData.get()

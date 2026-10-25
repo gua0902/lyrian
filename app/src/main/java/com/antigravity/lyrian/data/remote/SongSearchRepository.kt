@@ -7,6 +7,10 @@ import com.antigravity.lyrian.domain.practice.BlankDifficulty
 import com.antigravity.lyrian.domain.practice.FillChoiceBuilder
 import javax.inject.Inject
 import javax.inject.Singleton
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.async
+import kotlinx.coroutines.coroutineScope
+import kotlinx.coroutines.withContext
 
 /**
  * 搜尋結果中的一首歌。
@@ -51,6 +55,15 @@ class SongSearchRepository @Inject constructor(
     companion object {
         /** 重試前的等待。一次搜尋對使用者是可感知的等待，不宜太久。 */
         private const val RETRY_DELAY_MS = 700L
+
+        /**
+         * 一次最多處理幾筆 LRCLIB 結果。
+         *
+         * LRCLIB 用 `track_name` 搜尋時是模糊比對，老歌常回上百筆（實測
+         * 「Just the Two of Us」200 KB）。每一筆都要解析歌詞 + 跑挖空選擇，
+         * 全部算完會讓搜尋明顯變慢；清單一次也看不完 60 筆。
+         */
+        private const val MAX_CANDIDATES = 60
     }
 
     /**
@@ -96,7 +109,13 @@ class SongSearchRepository @Inject constructor(
         difficulty: BlankDifficulty = BlankDifficulty.DEFAULT,
         maxBlanks: Int = FillChoiceBuilder.DEFAULT_MAX_BLANKS,
         levelSource: WordLevelSource = WordLevelSource.None,
-    ): List<SongSearchResult> {
+    ): List<SongSearchResult> = coroutineScope {
+        // ---- 兩個外呼同時打 ----
+        // LRCLIB（歌詞）與 iTunes（封面／曲風／長度）**互不依賴**，
+        // 序列化等於白白多等一個往返。iTunes 失敗會被吞掉（加分資訊），
+        // 所以這裡放心讓它與 LRCLIB 並行。
+        val itunesDeferred = async { fetchItunesTracks("$artist $track") }
+
         val entries = retryOnceOnTransient {
             lrclibApi.search(
                 artistName = artist.trim().ifEmpty { null },
@@ -109,14 +128,25 @@ class SongSearchRepository @Inject constructor(
             )
         }
 
-        if (entries.isEmpty()) return emptyList()
+        if (entries.isEmpty()) {
+            itunesDeferred.cancel()
+            return@coroutineScope emptyList()
+        }
 
-        // 一次 iTunes 查詢覆蓋整批，避免 N 次請求
-        val itunesTracks = fetchItunesTracks("$artist $track")
+        val itunesTracks = itunesDeferred.await()
 
-        return dedupe(
-            entries.map { toSearchResult(it, itunesTracks, difficulty, maxBlanks, levelSource) },
-        ).filter { it.blankCount > 0 }
+        // ---- 轉換與算題數搬到背景執行緒 ----
+        // 這段是純 CPU：逐筆解析歌詞、跑挖空選擇、查 6 萬筆等級表。
+        // LRCLIB 一次可能回上百筆（實測 `track_name=Just the Two of Us` 就 200 KB），
+        // 留在呼叫端的 Main 執行緒上會讓整個畫面卡住——使用者感受到的就是
+        // 「搜尋變慢了」。同時把筆數上限收斂，避免極端回應拖垮手機。
+        withContext(Dispatchers.Default) {
+            dedupe(
+                entries.take(MAX_CANDIDATES).map {
+                    toSearchResult(it, itunesTracks, difficulty, maxBlanks, levelSource)
+                },
+            ).filter { it.blankCount > 0 }
+        }
     }
 
     /**
