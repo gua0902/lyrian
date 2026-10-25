@@ -2070,3 +2070,53 @@ Yellow 只有 3 題是資料現實（該首歌幾乎全是功能詞與前 500 �
 - **實機未驗證（無裝置）**：三點的視覺位置、補答不暫停、選詞體感都要你跑一次。
 - 三首新歌是**新增的測試素材**（`build/datagen/lyrics` 不進版控），不是 App 功能。
 - `MIN_BLANKS` 在「重複字很多」的歌上仍可能不足 5（Yellow 3 題）：可挖句少 + 原形去重。
+## TASK-25：第一句不得提前亮起、影片外框改成固定 16:9
+
+### 一、三點與第一句「同時亮起」
+
+真因不是三點的條件，而是**捲動與高亮共用一個值**：
+
+```
+targetLineIndex = singingLineIndex ?: 第一句     // 歌曲一進來、音訊還沒到
+```
+
+`singingLineIndex` 是 null 時退回第一句，於是第一行被當成「正在唱」而高亮。
+
+修法（最小）：抽出 `LyricViewportTargets`，把兩件事分開：
+
+```
+scrollTo  = singingLineIndex ?: fallbackHighlight ?: 第一句
+highlight = singingLineIndex ?: fallbackHighlight
+```
+
+- 有時間軸：`fallbackHighlight = null` → 音訊沒到之前**沒有任何一行亮**。
+- 沒有時間軸（純文字歌詞）：`fallbackHighlight = 作答題目所在行`，維持舊行為。
+- 三點的顯示條件（`awaitingFirstLine`）完全不動。
+
+新增 `LyricViewportTargetsTest`（5 個案例，含「有前奏」「沒有時間軸」）。
+
+### 二、影片外框改成固定 16:9
+
+擁有者第二次修正：上一版讓「框配合影片」，結果**封面墊在影片下面遮住影片**，
+而且每個來源的框大小不一。現在：
+
+```
+寬度 = COVER_FRAME（96dp）
+高度 = 寬度 × 9 / 16（固定，不隨影片比例變）
+```
+
+- 影片用 `object-fit: cover` 填滿這個框（比例不符時裁切邊緣，不留黑邊）。
+- 封面**只在播放器尚未就緒時存在**；播放器一就緒就從合成樹移除，
+  結構上不可能遮住影片。暫停時顯示的是播放器自己的畫面。
+- `videoAspectRatio` 不再參與版面（狀態仍保留，供診斷）。
+
+### 驗證
+
+- 226 個單元測試全過（新增 `LyricViewportTargetsTest` 5）
+- `assembleDebug` BUILD SUCCESSFUL，APK 22.34 MB
+- **實機未驗證（無裝置）**：三點的視覺位置、第一行亮度、外框固定大小與封面遮擋
+
+### 這輪之後暫停選詞系統的修改
+
+擁有者要求在討論新設計之前不得再改選詞規則；現況（分數、兩把鑰匙、
+分段選句、延伸詞彙）已凍結在 `c3a509d`。

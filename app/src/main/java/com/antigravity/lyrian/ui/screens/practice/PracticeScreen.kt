@@ -20,7 +20,6 @@ import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.WindowInsets
-import androidx.compose.foundation.layout.aspectRatio
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
@@ -180,9 +179,6 @@ private val COVER_FRAME = 96.dp
 /** 封面與播放器共用的圓角（擁有者要求「與封面相同的圓角」，12dp）。 */
 private val COVER_CORNER = 12.dp
 
-/** 影片比例還沒回報時的佔位比例（擁有者指定 16:9）。 */
-private const val DEFAULT_VIDEO_ASPECT = 16f / 9f
-
 /** 總時長未知時顯示的字串（擁有者指定 `--:--`）。 */
 private const val UNKNOWN_TIME = "--:--"
 
@@ -316,10 +312,19 @@ private fun PracticeContent(
     // 取不到（無封面／純灰階）時退回 M3 的 primary。
     val accent = rememberPlaybackAccent(state.coverUrl) ?: MaterialTheme.colorScheme.primary
 
-    // 歌曲驅動時跟著「正在唱的那句」；還沒開始唱就是第一句（三點會代替它）。
-    val targetLineIndex = state.singingLineIndex
-        ?: state.lines.firstOrNull()?.index
-        ?: currentLineIndex
+    // ⚠️ 高亮與捲動**必須分開**（擁有者修正）：
+    //   highlight = 音訊真的唱到哪一行；還沒開始唱時是 null → 沒有任何一行亮起
+    //   scroll    = 畫面要對到哪一行；還沒開始唱時先對到第一句，三點就在它上方
+    // 舊版把兩者綁在同一個值（`singingLineIndex ?: 第一句`），於是歌曲一進來
+    // 第一句就跟三點一起亮 —— 明明音訊還沒到它的時間戳。
+    val targets = LyricViewportTargets.of(
+        singingLineIndex = state.singingLineIndex,
+        firstLineIndex = state.lines.firstOrNull()?.index,
+        // 純文字歌詞（沒有時間軸）才由作答進度決定亮哪一行；
+        // 有時間軸時一律等音訊——預先亮第一行就是擁有者回報的 bug。
+        fallbackHighlight = if (state.hasTimeline) null else currentLineIndex,
+        fallbackLineIndex = currentLineIndex,
+    )
 
     // 答完自動前進（不分對錯）；依對錯給不同延遲。
     // **歌曲驅動時不自動前進**——題目由播放時間軸決定，硬跳會跟歌曲打架。
@@ -387,7 +392,8 @@ private fun PracticeContent(
                     LyricsViewport(
                         lines = state.lines,
                         questions = state.questions,
-                        targetLineIndex = targetLineIndex,
+                        scrollTargetIndex = targets.scrollTo,
+                        highlightLineIndex = targets.highlight,
                         selections = state.selections,
                         listState = listState,
                     )
@@ -615,7 +621,6 @@ private fun PlayerHeader(
                 // **框去配合影片**：寬度固定（等於封面寬），高度依 videoWidth:videoHeight。
                 SongArtwork(
                     coverUrl = coverUrl,
-                    aspectRatio = audio.videoAspectRatio,
                     isPlayerReady = audio.isReady,
                     player = player,
                 )
@@ -767,33 +772,31 @@ private fun TimelineScrubber(
 /**
  * 封面／播放器容器。
  *
- * ## 框配合影片，不是影片配合框（擁有者修正）
+ * ## 固定外框（擁有者第二次修正，這是設計需求不是 bug）
  *
  * ```
- * 寬度 = COVER_FRAME（錨定封面寬度，不變）
- * 高度 = 寬度 × videoHeight / videoWidth
+ * 寬度 = COVER_FRAME（96dp，不變）
+ * 高度 = 寬度 × 9 / 16（固定 16:9）
  * ```
- * 舊版是「固定 96×96 的方框，把影片依比例縮進去置中」——比例一不符，
- * 框內就多出兩塊黑邊（16:9 的影片上下各 21dp）。現在容器本身就是影片比例，
- * 影片以 `fillMaxSize` 填滿，**容器內不存在非影片像素**。
+ * 上一版讓「框配合影片」：框的比例跟著 `videoWidth:videoHeight` 變。
+ * 結果是**封面圖墊在影片下面就遮住了影片內容**，而且每個來源的框都不一樣大。
+ * 現在改成**固定 16:9**：不論來源是 16:9、1:1 還是直式，顯示區域都一樣大；
+ * 影片用 `object-fit: cover` 填滿這個框（比例不符時裁切邊緣，不留黑邊）。
  *
- * ## 比例還沒拿到之前
+ * ## 封面只在還沒開始播時出現
  *
- * 先用 16:9 佔位，並**顯示封面圖**（影片層是透明的，見
- * `YouTubePlayerController` 的透明底設定）。所以過渡期看到的是封面，
- * 不是黑畫面；拿到 `loadedmetadata` 之後容器立刻換成真實比例。
+ * 封面不再「永遠墊在底下」——播放器一就緒就**完全移除**它，
+ * 所以不可能遮住影片。暫停時也只顯示播放器本身（暫停的畫面就是影片畫面）。
  */
 @Composable
 private fun SongArtwork(
     coverUrl: String?,
-    aspectRatio: Float?,
     isPlayerReady: Boolean,
     player: com.antigravity.lyrian.data.audio.YouTubePlayerController,
 ) {
-    // 16:9 是「還不知道」時的佔位；異常比例（螢幕錄影、極端直式）也退回 16:9
-    val aspect = aspectRatio?.takeIf { it in 0.3f..4f } ?: DEFAULT_VIDEO_ASPECT
     val width = if (DEBUG_LARGE_PLAYER) 240.dp else COVER_FRAME
-    val height = width / aspect
+    // 固定 16:9，不隨影片比例改變
+    val height = width * 9f / 16f
 
     Box(
         modifier = Modifier
@@ -802,10 +805,22 @@ private fun SongArtwork(
             .clip(RoundedCornerShape(COVER_CORNER)),
         contentAlignment = Alignment.Center,
     ) {
-        // 底層**永遠**是封面。
-        // 影片還沒輸出、或頁面有 1px 縫隙時，露出來的是封面而不是黑色
-        // ——擁有者要求「容器內每個像素都是影片內容，上下左右皆無黑色」。
-        if (coverUrl != null) {
+        if (isPlayerReady) {
+            // 播放器就緒 → 只畫播放器，封面**不在合成樹裡**（不可能遮住影片）
+            androidx.compose.ui.viewinterop.AndroidView(
+                modifier = Modifier.fillMaxSize(),
+                factory = { context ->
+                    // WebView 不能放在單例裡（會洩漏 Activity），所以由這裡建立、
+                    // 交給控制器驅動；旋轉螢幕重建時控制器會把同一部影片載回來。
+                    WebView(context).also(player::attach)
+                },
+            )
+
+            androidx.compose.runtime.DisposableEffect(player) {
+                onDispose { player.detach() }
+            }
+        } else if (coverUrl != null) {
+            // 只有「還沒開始播」才顯示封面
             AsyncImage(
                 model = coverUrl,
                 contentDescription = null,
@@ -824,21 +839,6 @@ private fun SongArtwork(
                     contentDescription = null,
                     tint = ON_IMAGE_SECONDARY,
                 )
-            }
-        }
-
-        if (isPlayerReady) {
-            androidx.compose.ui.viewinterop.AndroidView(
-                modifier = Modifier.fillMaxSize(),
-                factory = { context ->
-                    // WebView 不能放在單例裡（會洩漏 Activity），所以由這裡建立、
-                    // 交給控制器驅動；旋轉螢幕重建時控制器會把同一部影片載回來。
-                    WebView(context).also(player::attach)
-                },
-            )
-
-            androidx.compose.runtime.DisposableEffect(player) {
-                onDispose { player.detach() }
             }
         }
     }
@@ -992,12 +992,21 @@ private fun PlayPauseButton(audio: AudioControls, accent: Color) {
  *
  * `LaunchedEffect` 的 key 一變，前一個協程就會被**取消**，
  * 正在跑的捲動動畫因此立刻中止，再從目前位置跑向新目標——不會疊加、不會抖動。
+ *
+ * ## 高亮與捲動是兩件事（擁有者修正）
+ *
+ * ```
+ * scrollTargetIndex  畫面要對到哪一行（還沒開始唱 → 第一句，三點就在它上方）
+ * highlightLineIndex 音訊真的唱到哪一行（還沒開始唱 → null，**沒有任何一行亮**）
+ * ```
+ * 兩者綁在一起就是「歌曲開頭第一句跟三點一起亮」的原因。
  */
 @Composable
 private fun LyricsViewport(
     lines: List<LyricLine>,
     questions: List<com.antigravity.lyrian.domain.model.FillChoiceQuestion>,
-    targetLineIndex: Int,
+    scrollTargetIndex: Int,
+    highlightLineIndex: Int?,
     selections: Map<Int, ChoiceRecord>,
     listState: LazyListState,
 ) {
@@ -1011,11 +1020,11 @@ private fun LyricsViewport(
         // 之間不會再出現一整片空白（舊版用 maxHeight）。
         val peekPx = with(LocalDensity.current) { PREVIOUS_LINE_PEEK.roundToPx() }
 
-        LaunchedEffect(targetLineIndex) {
-            if (targetLineIndex !in lines.indices) return@LaunchedEffect
+        LaunchedEffect(scrollTargetIndex) {
+            if (scrollTargetIndex !in lines.indices) return@LaunchedEffect
             // key 變更 = 前一次動畫已被取消，這裡直接從現況捲向新目標
             listState.animateScrollToItem(
-                index = targetLineIndex,
+                index = scrollTargetIndex,
                 scrollOffset = -peekPx,
             )
         }
@@ -1034,7 +1043,7 @@ private fun LyricsViewport(
                 val blankIndex = blankIndexByLine[line.index]
                 LyricRow(
                     line = line,
-                    isCurrent = line.index == targetLineIndex,
+                    isCurrent = highlightLineIndex != null && line.index == highlightLineIndex,
                     record = blankIndex?.let { selections[it] },
                 )
             }
