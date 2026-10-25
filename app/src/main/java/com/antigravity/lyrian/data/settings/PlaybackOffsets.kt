@@ -30,6 +30,26 @@ class PlaybackOffsets @Inject constructor(
         prefs.getLong(key(songId), 0L).coerceIn(-MAX_OFFSET_MS, MAX_OFFSET_MS)
 
     /**
+     * 這首歌是否**明確調過**偏移。
+     *
+     * 與 [offsetMs] 的差別：沒調過（回傳 false）時才應該套用「預設偏移」；
+     * 使用者按過「歸零」也算調過（值是 0，但那是他的選擇）。
+     */
+    fun hasOffset(songId: Long): Boolean = prefs.contains(key(songId))
+
+    /** 目前存了幾首歌的自訂偏移。 */
+    fun savedCount(): Int = prefs.all.keys.count { it.startsWith(KEY_PREFIX) }
+
+    /** 清掉所有歌曲的偏移（設定頁的「重設」）。 */
+    fun clearAll() {
+        val keys = prefs.all.keys.filter { it.startsWith(KEY_PREFIX) }
+        if (keys.isEmpty()) return
+        prefs.edit().apply {
+            keys.forEach { remove(it) }
+        }.apply()
+    }
+
+    /**
      * 設定偏移。會夾在 ±[MAX_OFFSET_MS] 之內——超過這個範圍代表歌詞根本配錯歌，
      * 不是「微調」能救的。
      */
@@ -39,11 +59,14 @@ class PlaybackOffsets @Inject constructor(
             .apply()
     }
 
-    private fun key(songId: Long) = "lyric_offset_$songId"
+    private fun key(songId: Long) = "$KEY_PREFIX$songId"
 
     companion object {
         /** 與其他設定共用同一個 prefs 檔（`MainActivity` 的 onboarding 旗標也在這裡）。 */
         private const val PREFS_NAME = "lyrian_prefs"
+
+        /** 每首歌的鍵前綴；[clearAll] 靠它辨識哪些鍵是偏移。 */
+        private const val KEY_PREFIX = "lyric_offset_"
 
         /** 微調的級距：0.5 秒（擁有者指定）。 */
         const val STEP_MS = 500L

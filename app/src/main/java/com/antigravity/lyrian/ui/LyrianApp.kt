@@ -1,5 +1,9 @@
 package com.antigravity.lyrian.ui
 
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
+import androidx.compose.animation.slideInHorizontally
+import androidx.compose.animation.slideOutHorizontally
 import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.WindowInsets
@@ -23,16 +27,23 @@ import androidx.navigation.compose.composable
 import androidx.navigation.compose.currentBackStackEntryAsState
 import androidx.navigation.compose.rememberNavController
 import androidx.navigation.navArgument
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.antigravity.lyrian.data.active.PracticeSessionStore
+import com.antigravity.lyrian.data.ai.AiSettings
 import com.antigravity.lyrian.ui.navigation.LyrianNavigationBar
 import com.antigravity.lyrian.ui.navigation.LyrianNavigationRail
 import com.antigravity.lyrian.ui.navigation.Routes
 import com.antigravity.lyrian.ui.navigation.TopLevelDestination
+import com.antigravity.lyrian.ui.theme.LyrianMotion
 import com.antigravity.lyrian.ui.theme.SystemBarIcons
 import com.antigravity.lyrian.ui.screens.my.MyScreen
 import com.antigravity.lyrian.ui.screens.onboarding.OnboardingScreen
 import com.antigravity.lyrian.ui.screens.practice.PracticeScreen
 import com.antigravity.lyrian.ui.screens.search.SearchScreen
+import com.antigravity.lyrian.ui.screens.settings.AboutScreen
+import com.antigravity.lyrian.ui.screens.settings.AppearanceSettingsScreen
+import com.antigravity.lyrian.ui.screens.settings.DataSettingsScreen
+import com.antigravity.lyrian.ui.screens.settings.PlaybackSettingsScreen
 import com.antigravity.lyrian.ui.screens.settings.SettingsScreen
 import com.antigravity.lyrian.ui.screens.wordbank.WordbankScreen
 
@@ -44,11 +55,19 @@ import com.antigravity.lyrian.ui.screens.wordbank.WordbankScreen
  *  - 三個頂層目的地（首頁／字庫／我的）共用同一個 Scaffold 與導覽列
  *  - 寬度 >= Medium 時自動改用 [LyrianNavigationRail]（MD3 適應性原則）
  *  - 練習頁與設定頁是**全螢幕**的（不顯示導覽列）
+ *
+ * ## 轉場
+ *
+ * 前進／返回都用「淡入淡出 + 畫面寬度 1/12 的水平位移」：
+ *  - 位移很小，但在慢速滑動時看得出方向（誰蓋在誰上面）
+ *  - 用 M3 的 emphasized 曲線，不是預設的線性
+ *  - 出場比進場快（200ms vs 400ms），這是 M3 的標準比例
  */
 @Composable
 fun LyrianApp(
     windowSizeClass: WindowSizeClass?,
     sessionStore: PracticeSessionStore,
+    aiSettings: AiSettings,
     onboardingCompleted: Boolean,
     onOnboardingCompleted: () -> Unit,
 ) {
@@ -61,6 +80,7 @@ fun LyrianApp(
 
     // 這些畫面是全螢幕的，不顯示底部導覽
     val isFullScreen = currentRoute == Routes.ONBOARDING ||
+        currentRoute == Routes.ABOUT ||
         currentRoute?.startsWith("practice/") == true ||
         currentRoute?.startsWith("settings") == true ||
         currentRoute?.startsWith("vocab/") == true ||
@@ -124,6 +144,22 @@ fun LyrianApp(
                     Routes.ONBOARDING
                 },
                 modifier = Modifier.padding(innerPadding),
+                enterTransition = {
+                    fadeIn(animationSpec = LyrianMotion.enter()) +
+                        slideInHorizontally(animationSpec = LyrianMotion.enter()) { it / 12 }
+                },
+                exitTransition = {
+                    fadeOut(animationSpec = LyrianMotion.exit()) +
+                        slideOutHorizontally(animationSpec = LyrianMotion.exit()) { -it / 12 }
+                },
+                popEnterTransition = {
+                    fadeIn(animationSpec = LyrianMotion.enter()) +
+                        slideInHorizontally(animationSpec = LyrianMotion.enter()) { -it / 12 }
+                },
+                popExitTransition = {
+                    fadeOut(animationSpec = LyrianMotion.exit()) +
+                        slideOutHorizontally(animationSpec = LyrianMotion.exit()) { it / 12 }
+                },
             ) {
                 composable(Routes.ONBOARDING) {
                     OnboardingScreen(
@@ -143,7 +179,11 @@ fun LyrianApp(
                 }
 
                 composable(TopLevelDestination.HOME.route) {
+                    // AI 設定是單例：有沒有金鑰決定「翻譯模式」能不能選。
+                    // 這裡只讀，不寫；設定頁改完回來會立刻反映。
+                    val aiConfig by aiSettings.config.collectAsStateWithLifecycle()
                     SearchScreen(
+                        aiConfigured = aiConfig.isUsable,
                         onSongSelected = { song, mode ->
                             sessionStore.put(
                                 PracticeSessionStore.Session(
@@ -227,9 +267,21 @@ fun LyrianApp(
                 composable(Routes.SETTINGS) {
                     SettingsScreen(
                         onBack = { navController.popBackStack() },
+                        onOpenAppearance = { navController.navigate(Routes.SETTINGS_APPEARANCE) },
+                        onOpenPlayback = { navController.navigate(Routes.SETTINGS_PLAYBACK) },
+                        onOpenLearning = { navController.navigate(Routes.SETTINGS_LEARNING) },
                         onOpenAiSettings = { navController.navigate(Routes.SETTINGS_AI) },
-                        onOpenLearningSettings = { navController.navigate(Routes.SETTINGS_LEARNING) },
+                        onOpenData = { navController.navigate(Routes.SETTINGS_DATA) },
+                        onOpenAbout = { navController.navigate(Routes.ABOUT) },
                     )
+                }
+
+                composable(Routes.SETTINGS_APPEARANCE) {
+                    AppearanceSettingsScreen(onBack = { navController.popBackStack() })
+                }
+
+                composable(Routes.SETTINGS_PLAYBACK) {
+                    PlaybackSettingsScreen(onBack = { navController.popBackStack() })
                 }
 
                 composable(Routes.SETTINGS_LEARNING) {
@@ -242,6 +294,14 @@ fun LyrianApp(
                     com.antigravity.lyrian.ui.screens.settings.AiSettingsScreen(
                         onBack = { navController.popBackStack() },
                     )
+                }
+
+                composable(Routes.SETTINGS_DATA) {
+                    DataSettingsScreen(onBack = { navController.popBackStack() })
+                }
+
+                composable(Routes.ABOUT) {
+                    AboutScreen(onBack = { navController.popBackStack() })
                 }
             }
         }

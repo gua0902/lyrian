@@ -45,6 +45,14 @@ interface SongDao {
 
     @Query("DELETE FROM song WHERE id = :songId")
     suspend fun deleteById(songId: Long)
+
+    /** 歌曲快取總數（資料設定頁要顯示「佔用多少」）。 */
+    @Query("SELECT COUNT(*) FROM song")
+    fun observeCount(): Flow<Int>
+
+    /** 清空歌曲快取。歌詞行會隨外鍵 CASCADE 一起消失。 */
+    @Query("DELETE FROM song")
+    suspend fun deleteAll()
 }
 
 @Dao
@@ -239,6 +247,10 @@ interface VocabDao {
         // 併發寫入時 insert 會被 IGNORE 掉，改回查一次
         return findByLemma(lemma)?.id ?: id
     }
+
+    /** 清空字庫。排程（`vocab_schedule`）隨外鍵 CASCADE 一起消失。 */
+    @Query("DELETE FROM vocab")
+    suspend fun deleteAll()
 }
 
 @Dao
@@ -265,6 +277,10 @@ interface AttemptDao {
 
     @Query("SELECT COUNT(*) FROM attempt WHERE isCorrect = 1")
     fun observeCorrectCount(): Flow<Int>
+
+    /** 清空作答紀錄（資料設定頁）。 */
+    @Query("DELETE FROM attempt")
+    suspend fun deleteAll()
 }
 
 @Dao
@@ -306,6 +322,10 @@ interface DailyStatDao {
         insertIfAbsent(DailyStatEntity(day = day))
         bump(day, score, attempts, correct, newWords)
     }
+
+    /** 清空每日統計（資料設定頁的「清除練習紀錄」會連作答一起清）。 */
+    @Query("DELETE FROM daily_stat")
+    suspend fun deleteAll()
 }
 
 @Dao

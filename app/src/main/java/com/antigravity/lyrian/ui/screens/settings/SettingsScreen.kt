@@ -1,156 +1,115 @@
 package com.antigravity.lyrian.ui.screens.settings
 
-import androidx.compose.foundation.clickable
-import androidx.compose.foundation.layout.Column
-import androidx.compose.foundation.layout.fillMaxSize
-import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
-import androidx.compose.foundation.rememberScrollState
-import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.automirrored.filled.ArrowBack
-import androidx.compose.material.icons.filled.ChevronRight
 import androidx.compose.material.icons.filled.ColorLens
 import androidx.compose.material.icons.filled.Info
 import androidx.compose.material.icons.filled.PlayCircle
 import androidx.compose.material.icons.filled.School
 import androidx.compose.material.icons.filled.Storage
 import androidx.compose.material.icons.filled.VpnKey
-import androidx.compose.material3.ExperimentalMaterial3Api
-import androidx.compose.material3.Icon
-import androidx.compose.material3.IconButton
-import androidx.compose.material3.ListItem
-import androidx.compose.material3.ListItemDefaults
-import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.Scaffold
-import androidx.compose.material3.Text
-import androidx.compose.material3.TopAppBar
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.res.stringResource
-import androidx.compose.ui.unit.dp
 import com.antigravity.lyrian.R
 
 /**
- * 設定頁（PRD v2 的六類）。
+ * 設定首頁（PRD v2 的六類，全部可用）。
  *
- * 「學習與複習」現在可以進入（挖空等級，模組 4）；「AI 與內容」可儲存 BYOK 設定。
- * 其餘顯示「即將推出」——**明確標示而非隱藏**，讓使用者知道有哪些設定存在。
+ * ## 版面
+ *
+ * 依 M3 的設定頁慣例分成三組：
+ * ```
+ * 個人化   外觀與語言
+ * 播放     播放與音源
+ * 學習     學習與複習、AI 與內容
+ * 資料     資料與儲存、關於
+ * ```
+ * 每一列只有一個箭頭（進入子頁），**沒有把開關直接塞在首頁**——
+ * 首頁只用來「找得到」，實際操作在子頁，子頁才有足夠空間寫說明。
  */
-@OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun SettingsScreen(
     onBack: () -> Unit,
+    onOpenAppearance: () -> Unit,
+    onOpenPlayback: () -> Unit,
+    onOpenLearning: () -> Unit,
     onOpenAiSettings: () -> Unit,
-    onOpenLearningSettings: () -> Unit,
+    onOpenData: () -> Unit,
+    onOpenAbout: () -> Unit,
 ) {
-    Scaffold(
-        topBar = {
-            TopAppBar(
-                title = { Text(stringResource(R.string.settings_title)) },
-                navigationIcon = {
-                    IconButton(onClick = onBack) {
-                        Icon(
-                            imageVector = Icons.AutoMirrored.Filled.ArrowBack,
-                            contentDescription = stringResource(R.string.action_back),
-                        )
-                    }
-                },
-            )
-        },
-    ) { innerPadding ->
-        Column(
-            modifier = Modifier
-                .fillMaxSize()
-                .padding(innerPadding)
-                .verticalScroll(rememberScrollState()),
-        ) {
-            SettingRow(
-                icon = Icons.Filled.ColorLens,
-                title = stringResource(R.string.settings_appearance),
-                subtitle = stringResource(R.string.settings_coming_soon),
-                enabled = false,
-            )
-            SettingRow(
-                icon = Icons.Filled.PlayCircle,
-                title = stringResource(R.string.settings_playback),
-                subtitle = stringResource(R.string.settings_coming_soon),
-                enabled = false,
-            )
-            SettingRow(
-                icon = Icons.Filled.School,
-                title = stringResource(R.string.settings_learning),
-                subtitle = stringResource(R.string.settings_learning_level),
-                enabled = true,
-                onClick = onOpenLearningSettings,
-            )
-            SettingRow(
-                icon = Icons.Filled.VpnKey,
-                title = stringResource(R.string.settings_ai),
-                subtitle = stringResource(R.string.ai_description),
-                enabled = true,
-                onClick = onOpenAiSettings,
-            )
-            SettingRow(
-                icon = Icons.Filled.Storage,
-                title = stringResource(R.string.settings_data),
-                subtitle = stringResource(R.string.settings_coming_soon),
-                enabled = false,
-            )
-            SettingRow(
-                icon = Icons.Filled.Info,
-                title = stringResource(R.string.settings_about),
-                subtitle = stringResource(R.string.settings_privacy_line),
-                enabled = false,
-            )
+    SettingsScaffold(
+        title = stringResource(R.string.settings_title),
+        onBack = onBack,
+    ) { padding ->
+        SettingsList(modifier = Modifier.padding(padding)) {
+            item {
+                SettingsSection(title = stringResource(R.string.settings_group_personal)) {
+                    SettingsActionRow(
+                        title = stringResource(R.string.settings_appearance),
+                        subtitle = stringResource(R.string.settings_appearance_subtitle),
+                        icon = Icons.Filled.ColorLens,
+                        trailingChevron = true,
+                        onClick = onOpenAppearance,
+                    )
+                }
+            }
+
+            item {
+                SettingsSection(title = stringResource(R.string.settings_group_playback)) {
+                    SettingsActionRow(
+                        title = stringResource(R.string.settings_playback),
+                        subtitle = stringResource(R.string.settings_playback_subtitle),
+                        icon = Icons.Filled.PlayCircle,
+                        trailingChevron = true,
+                        onClick = onOpenPlayback,
+                    )
+                }
+            }
+
+            item {
+                SettingsSection(title = stringResource(R.string.settings_group_learning)) {
+                    SettingsActionRow(
+                        title = stringResource(R.string.settings_learning),
+                        subtitle = stringResource(R.string.settings_learning_level),
+                        icon = Icons.Filled.School,
+                        trailingChevron = true,
+                        onClick = onOpenLearning,
+                    )
+                    SettingsDivider()
+                    SettingsActionRow(
+                        title = stringResource(R.string.settings_ai),
+                        subtitle = stringResource(R.string.ai_description),
+                        icon = Icons.Filled.VpnKey,
+                        trailingChevron = true,
+                        onClick = onOpenAiSettings,
+                    )
+                }
+            }
+
+            item {
+                SettingsSection(title = stringResource(R.string.settings_group_data)) {
+                    SettingsActionRow(
+                        title = stringResource(R.string.settings_data),
+                        subtitle = stringResource(R.string.settings_data_subtitle),
+                        icon = Icons.Filled.Storage,
+                        trailingChevron = true,
+                        onClick = onOpenData,
+                    )
+                    SettingsDivider()
+                    SettingsActionRow(
+                        title = stringResource(R.string.settings_about),
+                        subtitle = stringResource(R.string.settings_privacy_line),
+                        icon = Icons.Filled.Info,
+                        trailingChevron = true,
+                        onClick = onOpenAbout,
+                    )
+                }
+            }
+
+            item {
+                SettingsHint(stringResource(R.string.settings_privacy_note))
+            }
         }
     }
-}
-
-@Composable
-private fun SettingRow(
-    icon: ImageVector,
-    title: String,
-    subtitle: String,
-    enabled: Boolean,
-    onClick: () -> Unit = {},
-) {
-    ListItem(
-        headlineContent = { Text(title) },
-        supportingContent = {
-            Text(
-                text = subtitle,
-                maxLines = 2,
-            )
-        },
-        leadingContent = {
-            Icon(
-                imageVector = icon,
-                contentDescription = null,
-                tint = if (enabled) {
-                    MaterialTheme.colorScheme.primary
-                } else {
-                    MaterialTheme.colorScheme.onSurfaceVariant
-                },
-            )
-        },
-        trailingContent = if (enabled) {
-            { Icon(Icons.Filled.ChevronRight, contentDescription = null) }
-        } else {
-            null
-        },
-        colors = ListItemDefaults.colors(
-            containerColor = MaterialTheme.colorScheme.surface,
-        ),
-        modifier = Modifier
-            .fillMaxWidth()
-            .then(
-                if (enabled) {
-                    Modifier.clickable(onClick = onClick)
-                } else {
-                    Modifier
-                },
-            ),
-    )
 }

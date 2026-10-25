@@ -204,4 +204,106 @@
     <string name="player_diagnose">播放器診斷</string>
 
     <!-- 模組 A：手動兜底 -->
+
+    <!-- 設定首頁：分組 -->
+    <string name="settings_group_personal">個人化</string>
+    <string name="settings_group_playback">播放</string>
+    <string name="settings_group_learning">學習</string>
+    <string name="settings_group_data">資料與關於</string>
+    <string name="settings_appearance_subtitle">主題、動態配色</string>
+    <string name="settings_playback_subtitle">自動播放、淡入淡出、歌詞偏移</string>
+    <string name="settings_data_subtitle">本機資料用量與清除</string>
+    <string name="settings_privacy_note">沒有帳號、沒有上傳；所有資料都在這台裝置上。</string>
+
+    <!-- 外觀設定 -->
+    <string name="appearance_theme_section">主題</string>
+    <string name="appearance_theme_title">主題模式</string>
+    <string name="appearance_theme_system">跟隨系統</string>
+    <string name="appearance_theme_light">淺色</string>
+    <string name="appearance_theme_dark">深色</string>
+    <string name="appearance_theme_hint">「跟隨系統」會隨裝置的深色模式切換；其餘兩項固定不變。</string>
+    <string name="appearance_color_section">顏色</string>
+    <string name="appearance_dynamic_color">動態配色（Material You）</string>
+    <string name="appearance_dynamic_color_hint">從桌布產生整組色票，Android 12 以上支援。</string>
+    <string name="appearance_dynamic_color_unsupported">這台裝置的 Android 版本不支援（需要 12 以上）。</string>
+    <string name="appearance_cover_color_hint">練習頁的背景與強調色另外取自專輯封面，不受這裡的設定影響。</string>
+    <string name="appearance_note_section">設計說明</string>
+    <string name="appearance_note_color">顏色一律取自 Material 3 的角色（primary、surfaceContainer…），不寫死色碼；淺色與深色會自動配對。</string>
+    <string name="appearance_note_shape">圓角採用 M3 Expressive 級距：卡片 12、對話框與底部彈窗 28、按鈕全圓。</string>
+
+    <!-- 播放設定 -->
+    <string name="playback_behaviour_section">播放行為</string>
+    <string name="playback_autoplay">進入練習就自動播放</string>
+    <string name="playback_autoplay_hint">關閉後只載入音源，按播放才開始。</string>
+    <string name="playback_fade">音量淡入淡出</string>
+    <string name="playback_fade_hint">播放與暫停時用 0.5 秒漸變，避免突然出聲。</string>
+    <string name="playback_sync_section">歌詞同步</string>
+    <string name="playback_default_offset">預設歌詞偏移</string>
+    <string name="playback_default_offset_value">目前 %1$s 秒</string>
+    <string name="playback_default_offset_hint">這只是新歌的起點；在練習頁調過的那首歌會記住自己的值。</string>
+    <string name="playback_reset_offsets">重設所有歌曲的偏移</string>
+    <string name="playback_reset_offsets_count">%1$d 首歌有自訂偏移</string>
+    <string name="playback_reset_offsets_none">目前沒有自訂偏移</string>
+    <string name="playback_reset_offsets_message">所有歌曲都會回到預設偏移。單字庫與練習紀錄不受影響。</string>
+    <string name="playback_offsets_reset">已重設所有歌曲的歌詞偏移</string>
+    <string name="playback_offset_explainer">偏移來自「音源開頭靜音」與「歌詞檔」的差異；同一個音源每次都會差一樣的秒數。</string>
+
+    <!-- 資料與儲存 -->
+    <string name="data_storage_section">這台裝置上的資料</string>
+    <string name="data_songs">歌曲快取</string>
+    <string name="data_words">字庫單字</string>
+    <string name="data_attempts">作答紀錄</string>
+    <string name="data_database_size">資料庫大小</string>
+    <string name="data_clear_section">清除資料</string>
+    <string name="data_clear_history">清除練習紀錄</string>
+    <string name="data_clear_history_hint">刪除作答紀錄與每日統計，字庫保留。</string>
+    <string name="data_clear_wordbank">清空單字庫</string>
+    <string name="data_clear_wordbank_hint">刪除所有收藏的單字與複習排程。</string>
+    <string name="data_clear_songs">清除歌曲快取</string>
+    <string name="data_clear_songs_hint">刪除歌詞與歌曲資訊；下次進歌會重新下載。</string>
+    <string name="data_clear_all">清除所有本機資料</string>
+    <string name="data_clear_all_hint">字庫、紀錄、歌曲快取全部刪除，無法復原。</string>
+    <string name="data_danger_section">無法復原</string>
+    <string name="data_local_only_hint">沒有雲端備份：刪除後只能在其他裝置重新累積。</string>
+    <string name="data_ai_keys_note_title">AI 金鑰不在這裡</string>
+    <string name="data_ai_keys_note">金鑰存在 Android Keystore，請到「AI 與內容」更換或清除。</string>
+    <string name="data_clear_confirm">刪除</string>
+    <string name="data_clear_history_message">要刪除所有作答紀錄與每日統計嗎？字庫不會被刪除。</string>
+    <string name="data_clear_wordbank_message">要清空字庫嗎？所有收藏的單字與複習排程都會刪除。</string>
+    <string name="data_clear_songs_message">要清除歌曲快取嗎？歌詞與歌曲資訊會刪除，字庫與紀錄保留。</string>
+    <string name="data_clear_all_message">這會刪除字庫、練習紀錄與歌曲快取，且無法復原。確定要繼續嗎？</string>
+    <string name="data_cleared_history">已清除練習紀錄</string>
+    <string name="data_cleared_wordbank">已清空字庫</string>
+    <string name="data_cleared_songs">已清除歌曲快取</string>
+    <string name="data_cleared_all">已清除所有本機資料</string>
+    <string name="data_clear_failed">清除失敗，請再試一次</string>
+
+    <!-- 關於 -->
+    <string name="about_tagline">用歌詞學會英文</string>
+    <string name="about_version_section">版本</string>
+    <string name="about_version">版本</string>
+    <string name="about_build">建置</string>
+    <string name="about_build_debug">除錯版</string>
+    <string name="about_build_release">正式版</string>
+    <string name="about_package">套件</string>
+    <string name="about_privacy_section">隱私</string>
+    <string name="about_privacy_no_account_title">沒有帳號</string>
+    <string name="about_privacy_no_account_body">不需要註冊、不需要登入；換裝置不會帶走資料。</string>
+    <string name="about_privacy_local_title">資料只在本地</string>
+    <string name="about_privacy_local_body">字庫、練習紀錄、歌詞快取都存放在這台裝置的資料庫，不會上傳到我們的伺服器。</string>
+    <string name="about_privacy_byok_title">AI 金鑰是你自己的</string>
+    <string name="about_privacy_byok_body">只有在你設定並啟用之後，才會用你的金鑰呼叫你選擇的供應商。</string>
+    <string name="about_sources_section">資料來源</string>
+    <string name="about_source_lyrics">歌詞與時間軸</string>
+    <string name="about_source_lyrics_detail">LRCLIB（開放歌詞庫）</string>
+    <string name="about_source_artwork">專輯封面</string>
+    <string name="about_source_artwork_detail">iTunes Search API</string>
+    <string name="about_source_dictionary">字典與音標</string>
+    <string name="about_source_dictionary_detail">ECDICT（CC BY-SA）</string>
+    <string name="about_source_levels">單字等級</string>
+    <string name="about_source_levels_detail">CEFR-J、Octanove、BNC 詞頻</string>
+    <string name="about_source_audio">音源</string>
+    <string name="about_source_audio_detail">YouTube 官方嵌入播放器</string>
+    <string name="about_licenses">開源授權</string>
+    <string name="about_footer">歌詞版權屬於原作者與出版方；本 App 只用於個人學習。</string>
 </resources>

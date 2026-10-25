@@ -1,7 +1,13 @@
 package com.antigravity.lyrian.ui.screens.practice
 
+import androidx.compose.animation.AnimatedContent
+import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.animateColorAsState
 import androidx.compose.animation.core.LinearEasing
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
+import androidx.compose.animation.slideInVertically
+import androidx.compose.animation.togetherWith
 import androidx.compose.animation.core.RepeatMode
 import androidx.compose.animation.core.animateDpAsState
 import androidx.compose.animation.core.animateFloat
@@ -94,6 +100,8 @@ import com.antigravity.lyrian.R
 import com.antigravity.lyrian.data.settings.PlaybackOffsets
 import com.antigravity.lyrian.domain.model.ChoiceRecord
 import com.antigravity.lyrian.domain.model.LyricLine
+import com.antigravity.lyrian.ui.theme.LyrianCorner
+import com.antigravity.lyrian.ui.theme.LyrianMotion
 import com.antigravity.lyrian.ui.theme.rememberPlaybackAccent
 import kotlinx.coroutines.delay
 
@@ -175,9 +183,6 @@ private val LYRIC_LINE_SPACING = 22.dp
  * 所以 16:9 的影片是 96×54、9:16 的直式是 96×171——容器內不會出現任何黑邊。
  */
 private val COVER_FRAME = 96.dp
-
-/** 封面與播放器共用的圓角（擁有者要求「與封面相同的圓角」，12dp）。 */
-private val COVER_CORNER = 12.dp
 
 /** 總時長未知時顯示的字串（擁有者指定 `--:--`）。 */
 private const val UNKNOWN_TIME = "--:--"
@@ -400,14 +405,30 @@ private fun PracticeContent(
                 }
             }
 
-            // 三點期間先不顯示選項（選項本身已經算好、隨時可端上來）
-            if (!state.awaitingFirstLine) {
-                OptionGrid(
-                    options = state.options,
-                    answer = state.currentQuestion?.answer,
-                    record = state.currentRecord,
-                    onSelect = onSelectOption,
-                )
+            // 三點期間先不顯示選項（選項本身已經算好、隨時可端上來）。
+            // 三點收掉時，選項是**淡入 + 微微上飄**，不是突然出現。
+            AnimatedVisibility(
+                visible = !state.awaitingFirstLine,
+                enter = fadeIn(animationSpec = LyrianMotion.enter()) +
+                    slideInVertically(animationSpec = LyrianMotion.enter()) { it / 8 },
+                exit = fadeOut(animationSpec = LyrianMotion.exit()),
+            ) {
+                // 換題時整組選項淡出／淡入（左右不位移，避免和歌詞捲動打架）
+                AnimatedContent(
+                    targetState = state.activeBlankIndex,
+                    transitionSpec = {
+                        fadeIn(animationSpec = LyrianMotion.enter()) togetherWith
+                            fadeOut(animationSpec = LyrianMotion.exit())
+                    },
+                    label = "options",
+                ) {
+                    OptionGrid(
+                        options = state.options,
+                        answer = state.currentQuestion?.answer,
+                        record = state.currentRecord,
+                        onSelect = onSelectOption,
+                    )
+                }
             }
 
             BottomStats(
@@ -779,14 +800,26 @@ private fun TimelineScrubber(
  * 高度 = 寬度 × 9 / 16（固定 16:9）
  * ```
  * 上一版讓「框配合影片」：框的比例跟著 `videoWidth:videoHeight` 變。
- * 結果是**封面圖墊在影片下面就遮住了影片內容**，而且每個來源的框都不一樣大。
- * 現在改成**固定 16:9**：不論來源是 16:9、1:1 還是直式，顯示區域都一樣大；
- * 影片用 `object-fit: cover` 填滿這個框（比例不符時裁切邊緣，不留黑邊）。
+ * 結果是每個來源的框都不一樣大。現在改成**固定 16:9**：不論來源是 16:9、
+ * 1:1 還是直式，顯示區域都一樣大。
  *
- * ## 封面只在還沒開始播時出現
+ * ## 封面永遠在底層（擁有者第三次修正）
  *
- * 封面不再「永遠墊在底下」——播放器一就緒就**完全移除**它，
- * 所以不可能遮住影片。暫停時也只顯示播放器本身（暫停的畫面就是影片畫面）。
+ * 實機上 WebView 的影像合成是透明的：只有我們自己的控制項會出現，
+ * 影片畫面看不到。因此**封面不再是「載入前的替代品」，而是這一格的底**：
+ *
+ * ```
+ * ┌──────────────┐
+ * │ 封面（Crop）  │ ← 永遠在
+ * │   ＋ 影片層   │ ← WebView，背景透明；真的渲染出畫面時就蓋住封面
+ * └──────────────┘
+ * ```
+ *
+ * ## 比例怎麼處理
+ *
+ * 封面幾乎都是正方形，框是 16:9。這裡用 `ContentScale.Crop`：
+ * **等比放大到填滿，多的部分裁掉**（正方形的上下各裁掉約 22%）。
+ * 不拉伸（會變形）、不留黑邊（比例不符時的黑邊就是之前回報的「黑框」）。
  */
 @Composable
 private fun SongArtwork(
@@ -797,32 +830,23 @@ private fun SongArtwork(
     val width = if (DEBUG_LARGE_PLAYER) 240.dp else COVER_FRAME
     // 固定 16:9，不隨影片比例改變
     val height = width * 9f / 16f
+    val context = LocalContext.current
 
     Box(
         modifier = Modifier
             .width(width)
             .height(height)
-            .clip(RoundedCornerShape(COVER_CORNER)),
+            .clip(MaterialTheme.shapes.medium),
         contentAlignment = Alignment.Center,
     ) {
-        if (isPlayerReady) {
-            // 播放器就緒 → 只畫播放器，封面**不在合成樹裡**（不可能遮住影片）
-            androidx.compose.ui.viewinterop.AndroidView(
-                modifier = Modifier.fillMaxSize(),
-                factory = { context ->
-                    // WebView 不能放在單例裡（會洩漏 Activity），所以由這裡建立、
-                    // 交給控制器驅動；旋轉螢幕重建時控制器會把同一部影片載回來。
-                    WebView(context).also(player::attach)
-                },
-            )
-
-            androidx.compose.runtime.DisposableEffect(player) {
-                onDispose { player.detach() }
-            }
-        } else if (coverUrl != null) {
-            // 只有「還沒開始播」才顯示封面
+        // ---- 底層：封面 ----
+        if (coverUrl != null) {
             AsyncImage(
-                model = coverUrl,
+                model = ImageRequest.Builder(context)
+                    .data(coverUrl)
+                    // 換歌時封面淡入，不要「啪」一下換圖
+                    .crossfade(LyrianMotion.MEDIUM_4)
+                    .build(),
                 contentDescription = null,
                 contentScale = ContentScale.Crop,
                 modifier = Modifier.fillMaxSize(),
@@ -831,14 +855,30 @@ private fun SongArtwork(
             Box(
                 modifier = Modifier
                     .fillMaxSize()
-                    .background(Color.White.copy(alpha = 0.16f)),
+                    .background(MaterialTheme.colorScheme.surfaceContainerHighest),
                 contentAlignment = Alignment.Center,
             ) {
                 Icon(
                     imageVector = Icons.Filled.MusicNote,
                     contentDescription = null,
-                    tint = ON_IMAGE_SECONDARY,
+                    tint = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
+            }
+        }
+
+        // ---- 上層：影片 ----
+        if (isPlayerReady) {
+            androidx.compose.ui.viewinterop.AndroidView(
+                modifier = Modifier.fillMaxSize(),
+                factory = { ctx ->
+                    // WebView 不能放在單例裡（會洩漏 Activity），所以由這裡建立、
+                    // 交給控制器驅動；旋轉螢幕重建時控制器會把同一部影片載回來。
+                    WebView(ctx).also(player::attach)
+                },
+            )
+
+            androidx.compose.runtime.DisposableEffect(player) {
+                onDispose { player.detach() }
             }
         }
     }
@@ -935,7 +975,7 @@ private fun PlayPauseButton(audio: AudioControls, accent: Color) {
     Box(
         modifier = Modifier
             .size(44.dp)
-            .clip(RoundedCornerShape(22.dp))
+            .clip(CircleShape)
             .background(
                 if (audio.isReady) {
                     accent
@@ -1205,12 +1245,12 @@ private fun OptionChip(
     Box(
         modifier = modifier
             .height(56.dp)
-            .clip(RoundedCornerShape(20.dp))
+            .clip(LyrianCorner.full)
             .background(containerColor)
             .then(
                 Modifier.border(
                     BorderStroke(2.dp, borderColor),
-                    RoundedCornerShape(20.dp),
+                    LyrianCorner.full,
                 ),
             )
             .clickable(enabled = record == null, onClick = onClick),

@@ -52,12 +52,14 @@ import com.antigravity.lyrian.domain.practice.PracticeMode
  * 版面依 `UI/references/Lyrian · 搜尋.png`：
  * 歌手／歌名輸入 → 搜尋鈕 → 「找到你的下一首」+ 歌曲數 → 歌曲卡片。
  *
- * @param onSongSelected 點歌後的回呼（目前尚未接上模式選擇）
+ * @param onSongSelected 點歌後的回呼
+ * @param aiConfigured 使用者的 BYOK 設定是否可用（決定翻譯模式能不能選）
  */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun SearchScreen(
     onSongSelected: (SongSearchResult, PracticeMode) -> Unit = { _, _ -> },
+    aiConfigured: Boolean = false,
     viewModel: SearchViewModel = hiltViewModel(),
 ) {
     val state by viewModel.uiState.collectAsStateWithLifecycle()
@@ -127,7 +129,12 @@ fun SearchScreen(
                     items = state.results,
                     key = { it.lrclibId },
                 ) { song ->
-                    SongCard(song = song, onClick = { pendingSong = song })
+                    SongCard(
+                        song = song,
+                        onClick = { pendingSong = song },
+                        // 搜尋結果換一批時，卡片是淡入＋位移，不是瞬間跳出來
+                        modifier = Modifier.animateItem(),
+                    )
                 }
             }
         }
@@ -135,8 +142,9 @@ fun SearchScreen(
         pendingSong?.let { song ->
             PracticeModeSheet(
                 questionCount = song.blankCount,
-                // BYOK 尚未實作，一律視為未設定——讓 UI 的停用狀態可以被驗證
-                aiConfigured = false,
+                // 只有真的設好 provider + 金鑰而且啟用時才算「能用」。
+                // 之前這裡寫死 false，導致就算使用者設好了、翻譯模式仍然是鎖住的。
+                aiConfigured = aiConfigured,
                 onDismiss = { pendingSong = null },
                 onSelect = { mode ->
                     pendingSong = null
@@ -211,10 +219,14 @@ private fun ResultsHeader(count: Int, isLoading: Boolean) {
 }
 
 @Composable
-private fun SongCard(song: SongSearchResult, onClick: () -> Unit) {
+private fun SongCard(
+    song: SongSearchResult,
+    onClick: () -> Unit,
+    modifier: Modifier = Modifier,
+) {
     Card(
         onClick = onClick,
-        modifier = Modifier.fillMaxWidth(),
+        modifier = modifier.fillMaxWidth(),
         colors = CardDefaults.cardColors(
             containerColor = MaterialTheme.colorScheme.surfaceContainerHigh,
         ),
@@ -229,7 +241,7 @@ private fun SongCard(song: SongSearchResult, onClick: () -> Unit) {
             Box(
                 modifier = Modifier
                     .size(64.dp)
-                    .clip(RoundedCornerShape(12.dp)),
+                    .clip(MaterialTheme.shapes.medium),
                 contentAlignment = Alignment.Center,
             ) {
                 if (song.coverUrl != null) {

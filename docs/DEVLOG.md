@@ -2120,3 +2120,110 @@ highlight = singingLineIndex ?: fallbackHighlight
 
 擁有者要求在討論新設計之前不得再改選詞規則；現況（分數、兩把鑰匙、
 分段選句、延伸詞彙）已凍結在 `c3a509d`。
+
+## TASK-26：封面蓋在影片上、設定頁四個分頁完成、MD3 Expressive 校正、動效
+
+### 一、影片透明 → 封面改成「永遠在底層」
+
+實機上 WebView 的影片畫面沒有合成出來（有聲音、只有我們自己的控制項看得見），
+所以上一版「播放器就緒就把封面移除」等於**整格變透明**。
+
+現在這一格的圖層固定是：
+
+```
+┌──────────────┐
+│ 封面（Crop）  │ ← 永遠在
+│   ＋ 影片層   │ ← WebView 背景透明；真的渲染出畫面時就蓋住封面
+└──────────────┘
+```
+
+- 外框仍是 **96 × 54dp（固定 16:9）**。
+- 封面幾乎都是正方形 → `ContentScale.crop`：等比放大到填滿，上下各裁掉約 22%。
+  **不拉伸**（會變形）、**不留黑邊**（黑邊就是之前回報的「黑框」）。
+- Coil 加 `crossfade(400ms)`，換歌時封面不會「啪」一下跳圖。
+- 影片真的出現時，畫面蓋住封面，兩者同一個圓角（`shapes.medium` = 12dp）。
+
+### 二、設定頁：四個「即將推出」全部做完
+
+| 分頁 | 內容 | 接到哪裡 |
+|---|---|---|
+| 外觀與語言 | 主題三選一（跟隨系統／淺色／深色）＋ 動態配色開關 | `AppearanceSettings` → `MainActivity` → `LyrianTheme` |
+| 播放與音源 | 自動播放、音量淡入淡出、預設歌詞偏移（±2 秒）、重設所有自訂偏移 | `PlaybackSettings` → `PracticeViewModel` |
+| 資料與儲存 | 歌曲／單字／作答數量、資料庫大小、三種分開清除＋全部清除（都經確認框） | `UserDataRepository`（跨表 transaction） |
+| 關於 | 版本、建置、套件、隱私三條、資料來源、開源授權（可展開） | `BuildConfig` |
+
+設定首頁改成 M3 的**分組清單**（個人化／播放／學習／資料與關於），
+每一列一個箭頭；開關都放在子頁，子頁才有空間寫「這個設定會影響什麼」。
+
+行為細節：
+
+- **自動播放關閉** → 只載入音源不發聲，而且**不顯示三點**（音樂不會開始，
+  三點只會轉到 20 秒的安全上限才消失，看起來像壞掉）。
+- **淡入淡出關閉** → 交界暫停直接停、作答恢復直接 `setVolumePercent(100)` 再播。
+  關掉時音量可能還停在 0，這兩處都必須補回滿音量。
+- **預設偏移** 只是新歌的起點；某首歌調過就以那首為準（`PlaybackSettings.offsetFor`）。
+- **清除練習紀錄 / 清空字庫 / 清除歌曲快取 / 全部清除** 各自一個 transaction，
+  副標題明寫「會刪什麼、不會刪什麼」。這個 App 沒有雲端備份，所以一律要確認。
+
+順手修掉一個實際的錯誤：`SearchScreen` 的 `aiConfigured` 原本**寫死 false**，
+就算使用者設好了 BYOK，翻譯模式也永遠是鎖住的。現在由 `AiConfig.isUsable`
+（啟用＋有金鑰＋有端點＋有模型）決定。
+
+### 三、MD3 校正（Expressive，2025 之後的級距）
+
+新增 `LyrianShapes.kt` / `LyrianMotion.kt`，並接到 `MaterialTheme(shapes = …)`。
+
+圓角改為八級（原本畫面裡散落 `RoundedCornerShape(6/8/12/16/20/22.dp)`）：
+
+| token | dp | 用在哪 |
+|---|---|---|
+| extraSmall | 4 | 詞性徽章、輸入框 |
+| small | 8 | 等級徽章 |
+| medium | 12 | 卡片、歌詞區塊、封面與播放器 |
+| large | 16 | FAB、結果頁封面 |
+| largeIncreased | 20 | （保留） |
+| extraLarge | 28 | 對話框、底部彈窗 |
+| extraLargeIncreased | 32 | 大螢幕卡片 |
+| extraExtraLarge | 48 | （保留） |
+| full | 50% | 按鈕、選項 chip、播放鍵 |
+
+改到的畫面：`PracticeScreen`（播放鍵、選項 chip、封面框）、`PracticeResultScreen`、
+`SearchScreen`、`WordbankScreen`（卡片改用 `Card(onClick=)`，漣漪才畫在圓角內）、
+`WordDetailScreen`、設定各頁。
+
+另外修掉兩個 deprecation：`Modifier.menuAnchor()` → `menuAnchor(MenuAnchorType.PrimaryNotEditable)`、
+`Icons.Filled.VolumeUp` → `Icons.AutoMirrored.Filled.VolumeUp`。
+
+### 四、動效（「不要過於花俏」）
+
+原則：**只有淡入淡出 + 很小的位移**，沒有縮放、沒有旋轉、沒有彈跳。
+
+| 位置 | 動效 | 曲線／時長 |
+|---|---|---|
+| 畫面轉場（NavHost） | 淡入淡出 ＋ 寬度 1/12 水平位移 | emphasized decelerate 400ms 進 / accelerate 200ms 出 |
+| 三點收掉 → 選項出現 | 淡入 ＋ 高度 1/8 上飄 | enter 400ms |
+| 換題 | 整組選項交叉淡入淡出 | 400ms / 200ms |
+| 搜尋結果、字庫、結果頁字表 | `animateItem()` | M3 預設 |
+| 「我的」統計數字 | `animateIntAsState` | 300ms emphasized |
+| 難度卡片選取 | 容器色與文字色漸變 | 300ms emphasized |
+| 設定群組展開（授權清單） | 展開＋淡入，箭頭旋轉 180° | 400ms |
+| 封面換圖 | Coil crossfade | 400ms |
+
+`LyrianMotion` 裡的曲線數值直接取自規格（`cubic-bezier(0.2,0,0,1)` 等），
+不是憑感覺調的。
+
+### 驗證
+
+- 230 個單元測試全過（新增 `SizesTest` 4 個：位元組格式化）
+- `assembleDebug` BUILD SUCCESSFUL，APK 22.34 MB
+- **實機未驗證（無裝置）**：設定各分頁的操作、主題切換、清除資料、封面疊在影片上的實際視覺
+
+### 明確沒做
+
+- 沒有升級 Compose BOM（仍是 2025.01.00 / material3 1.3.1）。
+  Expressive 的新元件（FAB menu、split button、carousel、expressive 版的
+  app bar／list）需要升級到 material3 1.4 / BOM 2026.x，而且幾乎都還是
+  alpha API。**要用就得先確認版本升級與 alpha 光譜這兩件事。**
+- 「我的」頁的每日提醒與學習紀錄仍顯示「即將推出」——它們需要通知權限與
+  歷史頁，不在這次「設定頁」的範圍內。
+- 選詞系統完全沒有動（擁有者要求討論後才改）。

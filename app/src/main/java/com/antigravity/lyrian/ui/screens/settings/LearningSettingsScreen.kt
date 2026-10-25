@@ -1,5 +1,6 @@
 package com.antigravity.lyrian.ui.screens.settings
 
+import androidx.compose.animation.animateColorAsState
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
@@ -37,6 +38,7 @@ import com.antigravity.lyrian.R
 import com.antigravity.lyrian.data.settings.UserSettings
 import com.antigravity.lyrian.domain.practice.BlankDifficulty
 import com.antigravity.lyrian.domain.practice.BlankSelector
+import com.antigravity.lyrian.ui.theme.LyrianMotion
 import dagger.hilt.android.lifecycle.HiltViewModel
 import javax.inject.Inject
 import kotlinx.coroutines.flow.StateFlow
@@ -138,17 +140,32 @@ private fun DifficultyOption(
     selected: Boolean,
     onSelect: () -> Unit,
 ) {
+    // 選取狀態是「淡入另一個顏色」，不是瞬間換底
+    val containerColor by animateColorAsState(
+        targetValue = if (selected) {
+            MaterialTheme.colorScheme.secondaryContainer
+        } else {
+            MaterialTheme.colorScheme.surfaceContainerHigh
+        },
+        animationSpec = LyrianMotion.emphasized(),
+        label = "difficultyContainer",
+    )
+
+    val contentColor by animateColorAsState(
+        targetValue = if (selected) {
+            MaterialTheme.colorScheme.onSecondaryContainer
+        } else {
+            MaterialTheme.colorScheme.onSurface
+        },
+        animationSpec = LyrianMotion.emphasized(),
+        label = "difficultyContent",
+    )
+
     Card(
         modifier = Modifier
             .fillMaxWidth()
             .selectable(selected = selected, role = Role.RadioButton, onClick = onSelect),
-        colors = CardDefaults.cardColors(
-            containerColor = if (selected) {
-                MaterialTheme.colorScheme.secondaryContainer
-            } else {
-                MaterialTheme.colorScheme.surfaceContainerHigh
-            },
-        ),
+        colors = CardDefaults.cardColors(containerColor = containerColor),
     ) {
         Row(
             modifier = Modifier
@@ -159,7 +176,11 @@ private fun DifficultyOption(
             // onClick = null：整張卡片已經是點擊目標，讀屏才不會重複宣告
             RadioButton(selected = selected, onClick = null)
             Column(modifier = Modifier.padding(start = 8.dp)) {
-                Text(text = difficulty.label, style = MaterialTheme.typography.titleMedium)
+                Text(
+                    text = difficulty.label,
+                    style = MaterialTheme.typography.titleMedium,
+                    color = contentColor,
+                )
                 Text(
                     text = difficulty.description,
                     style = MaterialTheme.typography.bodySmall,

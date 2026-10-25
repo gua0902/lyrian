@@ -1,4 +1,4 @@
-﻿package com.antigravity.lyrian.ui.screens.practice
+package com.antigravity.lyrian.ui.screens.practice
 
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
@@ -13,7 +13,6 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
-import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.Add
@@ -154,6 +153,8 @@ fun PracticeResultScreen(
                         word = word,
                         onClick = { onOpenWord(word.word) },
                         onAdd = { onAddToWordbank(word) },
+                        // 換頁回來或加入字庫時，列的高度/位置是滑順變化的
+                        modifier = Modifier.animateItem(),
                     )
                 }
             }
@@ -184,6 +185,7 @@ fun PracticeResultScreen(
                         word = word,
                         onClick = { onOpenWord(word.word) },
                         onAdd = { onAddToWordbank(word) },
+                        modifier = Modifier.animateItem(),
                     )
                 }
 
@@ -221,7 +223,7 @@ private fun SongSummary(title: String, artist: String, coverUrl: String?) {
         Box(
             modifier = Modifier
                 .size(72.dp)
-                .clip(RoundedCornerShape(16.dp)),
+                .clip(MaterialTheme.shapes.large),
             contentAlignment = Alignment.Center,
         ) {
             if (coverUrl != null) {
@@ -351,11 +353,16 @@ private fun PlaceholderCard(text: String) {
  * A1/A2 的字不會自動入庫，使用者要就得自己按。整列可點，最小高度 48dp。
  */
 @Composable
-private fun WordRow(word: ResultWord, onClick: () -> Unit, onAdd: () -> Unit) {
+private fun WordRow(
+    word: ResultWord,
+    onClick: () -> Unit,
+    onAdd: () -> Unit,
+    modifier: Modifier = Modifier,
+) {
     Row(
-        modifier = Modifier
+        modifier = modifier
             .fillMaxWidth()
-            .clip(RoundedCornerShape(12.dp))
+            .clip(MaterialTheme.shapes.medium)
             .clickable(onClick = onClick)
             .padding(start = 8.dp, top = 4.dp, bottom = 4.dp, end = 0.dp),
         verticalAlignment = Alignment.CenterVertically,

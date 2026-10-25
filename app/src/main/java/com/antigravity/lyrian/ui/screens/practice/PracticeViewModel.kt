@@ -22,6 +22,7 @@ import com.antigravity.lyrian.data.lang.LanguageData
 import com.antigravity.lyrian.data.lang.LanguageDataStore
 import com.antigravity.lyrian.data.lyrics.LyricsParser
 import com.antigravity.lyrian.data.settings.PlaybackOffsets
+import com.antigravity.lyrian.data.settings.PlaybackSettings
 import com.antigravity.lyrian.data.settings.UserSettings
 import com.antigravity.lyrian.domain.model.CefrLevel
 import com.antigravity.lyrian.domain.model.ChoiceRecord
@@ -340,6 +341,7 @@ class PracticeViewModel @Inject constructor(
     private val dailyStatDao: DailyStatDao,
     private val youTubeSearch: YouTubeWebSearch,
     private val playbackOffsets: PlaybackOffsets,
+    private val playbackSettings: PlaybackSettings,
     private val languageData: LanguageDataStore,
     private val userSettings: UserSettings,
     private val dictionary: DictionaryRepository,
@@ -632,7 +634,10 @@ class PracticeViewModel @Inject constructor(
         pauseJob?.cancel()
         pauseJob = viewModelScope.launch {
             try {
-                player.fadeOut(FADE_OUT_MS)
+                // 淡入淡出可以在設定頁關掉：關掉時直接停，不要多等 0.5 秒。
+                if (playbackSettings.fadeAudioValue) {
+                    player.fadeOut(FADE_OUT_MS)
+                }
 
                 // 漸出這 0.5 秒內使用者可能已經補答（或按了播放）——
                 // 那就不該再暫停，直接把播放交回去。
@@ -763,7 +768,8 @@ class PracticeViewModel @Inject constructor(
             }
 
             candidates = ranked
-            playCandidate(index = 0)
+            // 設定頁可以關掉自動播放：仍然載入音源（播放鍵才有效），但先不發聲。
+            playCandidate(index = 0, autoPlay = playbackSettings.autoPlayValue)
 
             android.util.Log.d(
                 TAG,
@@ -936,7 +942,12 @@ class PracticeViewModel @Inject constructor(
             }
             viewModelScope.launch {
                 player.play()
-                player.fadeToFull(FADE_OUT_MS)
+                if (playbackSettings.fadeAudioValue) {
+                    player.fadeToFull(FADE_OUT_MS)
+                } else {
+                    // 淡出關掉時音量可能還停在 0，這裡一定要補回滿音量
+                    player.setVolumePercent(100)
+                }
             }
             return
         }
@@ -955,6 +966,16 @@ class PracticeViewModel @Inject constructor(
      */
     private fun startFadeIn() {
         fadeInJob?.cancel()
+
+        // 淡入淡出關掉：直接滿音量播放（播放器可能還停在漸出後的 0，要先補回來）
+        if (!playbackSettings.fadeAudioValue) {
+            fadeInJob = viewModelScope.launch {
+                player.setVolumePercent(100)
+                player.play()
+            }
+            return
+        }
+
         fadeInJob = viewModelScope.launch {
             player.setVolumePercent(0)
             player.play()
@@ -1227,7 +1248,11 @@ class PracticeViewModel @Inject constructor(
         val firstLineStart = dataset.lines.firstOrNull()?.startMs ?: 0L
         // 三點只在「第一句離影片開頭夠遠」時才有意義；5 秒內就唱到的話
         // 直接正常顯示（擁有者指定），否則會變成無謂的倒數。
-        val awaitingFirstLine = hasTimeline && firstLineStart > DOTS_MIN_WAIT_MS
+        //
+        // 自動播放關掉時也**不顯示**三點：音樂不會開始，三點只會一直轉
+        // 到 20 秒的安全上限才消失——那看起來像壞掉，不像等待。
+        val awaitingFirstLine = playbackSettings.autoPlayValue &&
+            hasTimeline && firstLineStart > DOTS_MIN_WAIT_MS
 
         _uiState.update {
             it.copy(
@@ -1244,8 +1269,8 @@ class PracticeViewModel @Inject constructor(
                 singingLineIndex = null,
                 waitingForBlankIndex = null,
                 playbackPositionMs = 0L,
-                // 每首歌有自己的歌詞偏移（存在本地，下次進來仍然有效）
-                lyricOffsetMs = playbackOffsets.offsetMs(source.head.songId),
+                // 每首歌有自己的歌詞偏移；沒調過就用設定頁的預設值
+                lyricOffsetMs = playbackSettings.offsetFor(source.head.songId),
                 playerVersionIndex = 0,
                 playerVersionCount = 0,
                 videoAspectRatio = null,

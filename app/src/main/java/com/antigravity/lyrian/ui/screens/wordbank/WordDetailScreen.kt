@@ -15,7 +15,7 @@ import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.automirrored.filled.OpenInNew
-import androidx.compose.material.icons.filled.VolumeUp
+import androidx.compose.material.icons.automirrored.filled.VolumeUp
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.CircularProgressIndicator
@@ -250,7 +250,7 @@ private fun Headline(
                     ),
                 ) {
                     Icon(
-                        imageVector = Icons.Filled.VolumeUp,
+                        imageVector = Icons.AutoMirrored.Filled.VolumeUp,
                         contentDescription = stringResource(R.string.wordbank_detail_pronounce),
                     )
                 }
@@ -274,7 +274,7 @@ private fun prettyFormsHint(surface: String, matched: String): String =
 private fun LevelBadge(level: CefrLevel?) {
     if (level == null) return
     Surface(
-        shape = RoundedCornerShape(8.dp),
+        shape = MaterialTheme.shapes.small,
         color = MaterialTheme.colorScheme.onPrimaryContainer,
         contentColor = MaterialTheme.colorScheme.primaryContainer,
     ) {
@@ -332,7 +332,7 @@ private fun SenseSection(senses: List<DictionarySense>) {
 @Composable
 private fun PosBadge(pos: String?) {
     Surface(
-        shape = RoundedCornerShape(6.dp),
+        shape = MaterialTheme.shapes.extraSmall,
         color = MaterialTheme.colorScheme.secondaryContainer,
         contentColor = MaterialTheme.colorScheme.onSecondaryContainer,
     ) {

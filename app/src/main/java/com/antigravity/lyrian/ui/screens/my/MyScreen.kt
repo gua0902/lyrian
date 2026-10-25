@@ -1,5 +1,6 @@
 package com.antigravity.lyrian.ui.screens.my
 
+import androidx.compose.animation.core.animateIntAsState
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -41,6 +42,7 @@ import androidx.compose.ui.unit.dp
 import androidx.hilt.navigation.compose.hiltViewModel
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.antigravity.lyrian.R
+import com.antigravity.lyrian.ui.theme.LyrianMotion
 
 /**
  * 「我的」頁。
@@ -73,19 +75,19 @@ fun MyScreen(
 
             Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
                 StatCard(
-                    value = state.totalScore.toString(),
+                    value = state.totalScore,
                     label = stringResource(R.string.my_total_score),
                     modifier = Modifier.weight(1f),
                 )
                 StatCard(
-                    value = state.masteredWords.toString(),
+                    value = state.masteredWords,
                     label = stringResource(R.string.my_mastered_words),
                     modifier = Modifier.weight(1f),
                 )
             }
 
             StatCard(
-                value = state.dueForReview.toString(),
+                value = state.dueForReview,
                 label = stringResource(R.string.my_due_today),
                 modifier = Modifier.fillMaxWidth(),
             )
@@ -190,7 +192,14 @@ private fun StreakCard(streakDays: Int, week: List<Boolean>) {
 }
 
 @Composable
-private fun StatCard(value: String, label: String, modifier: Modifier = Modifier) {
+private fun StatCard(value: Int, label: String, modifier: Modifier = Modifier) {
+    // 數字變動時用滑動的（例如練習完回到這一頁），不是直接跳到新值
+    val animated by animateIntAsState(
+        targetValue = value,
+        animationSpec = LyrianMotion.emphasized(),
+        label = "statValue",
+    )
+
     Card(
         modifier = modifier,
         colors = CardDefaults.cardColors(
@@ -199,7 +208,7 @@ private fun StatCard(value: String, label: String, modifier: Modifier = Modifier
     ) {
         Column(modifier = Modifier.padding(16.dp)) {
             Text(
-                text = value,
+                text = animated.toString(),
                 style = MaterialTheme.typography.headlineMedium,
                 fontWeight = FontWeight.Bold,
                 color = MaterialTheme.colorScheme.primary,

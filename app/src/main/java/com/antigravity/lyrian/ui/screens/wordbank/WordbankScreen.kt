@@ -85,7 +85,12 @@ fun WordbankScreen(
                 item { EmptyState(filter = state.filter) }
             } else {
                 items(items = state.items, key = { it.id }) { vocab ->
-                    VocabCard(vocab = vocab, onClick = { onOpenDetail(vocab.id) })
+                    VocabCard(
+                        vocab = vocab,
+                        onClick = { onOpenDetail(vocab.id) },
+                        // 切換篩選或加入新字時，卡片是滑順移動而不是瞬間重排
+                        modifier = Modifier.animateItem(),
+                    )
                 }
             }
         }
@@ -159,11 +164,14 @@ private fun FilterRow(current: WordbankFilter, onChange: (WordbankFilter) -> Uni
  * 顯示 `surfaceContainerLow`——依 PRD 指定的色調層級。
  */
 @Composable
-private fun VocabCard(vocab: VocabEntity, onClick: () -> Unit) {
+private fun VocabCard(
+    vocab: VocabEntity,
+    onClick: () -> Unit,
+    modifier: Modifier = Modifier,
+) {
     Card(
-        modifier = Modifier
-            .fillMaxWidth()
-            .clickable(onClick = onClick),
+        onClick = onClick,
+        modifier = modifier.fillMaxWidth(),
         colors = CardDefaults.cardColors(
             containerColor = MaterialTheme.colorScheme.surfaceContainerLow,
         ),
