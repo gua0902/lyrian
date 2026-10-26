@@ -50,7 +50,7 @@ import com.antigravity.lyrian.R
 import com.antigravity.lyrian.domain.model.ResultWord
 
 /** 延伸詞彙預設顯示幾條，其餘收在「展開」後面。 */
-private const val EXTENSION_PREVIEW_COUNT = 8
+
 
 /**
  * 練習結果頁（模組 2）。
@@ -73,7 +73,7 @@ fun PracticeResultScreen(
     onAddToWordbank: (ResultWord) -> Unit,
     modifier: Modifier = Modifier,
 ) {
-    var extensionExpanded by remember { mutableStateOf(false) }
+
 
     Scaffold(
         modifier = modifier,
@@ -129,7 +129,6 @@ fun PracticeResultScreen(
             }
 
             // 片語／諺語區塊：本輪**不產生內容**，等 AiService 接上才顯示。
-            // AI 未啟用時整塊隱藏（擁有者指定），所以現在不會出現在畫面上。
             if (state.aiConfigured) {
                 item { SectionTitle(stringResource(R.string.result_accent_title)) }
                 item {
@@ -137,80 +136,34 @@ fun PracticeResultScreen(
                 }
             }
 
-            item { SectionTitle(stringResource(R.string.result_wrong_title)) }
-
-            if (state.wrongWords.isEmpty()) {
-                item {
-                    Text(
-                        text = stringResource(R.string.result_wrong_empty),
-                        style = MaterialTheme.typography.bodyMedium,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    )
-                }
-            } else {
-                items(items = state.wrongWords, key = { "wrong-${it.word}" }) { word ->
-                    WordRow(
-                        word = word,
-                        onClick = { onOpenWord(word.word) },
-                        onAdd = { onAddToWordbank(word) },
-                        // 換頁回來或加入字庫時，列的高度/位置是滑順變化的
-                        modifier = Modifier.animateItem(),
-                    )
-                }
-            }
-
+            // 本首歌的 B1+ 單字：**只顯示，不自動寫入字庫**
             item {
                 SectionTitle(
-                    title = stringResource(R.string.result_extend_title),
-                    hint = stringResource(R.string.result_extend_hint, state.difficulty.label),
+                    title = stringResource(R.string.result_hard_words_title),
+                    hint = if (state.shortfall > 0) {
+                        stringResource(R.string.result_shortfall, state.shortfall)
+                    } else {
+                        stringResource(R.string.result_hard_words_hint)
+                    },
                 )
             }
 
-            if (state.extensionWords.isEmpty()) {
+            if (state.difficultWords.isEmpty()) {
                 item {
                     Text(
-                        text = stringResource(R.string.result_extend_empty),
+                        text = stringResource(R.string.result_hard_words_empty),
                         style = MaterialTheme.typography.bodyMedium,
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                     )
                 }
             } else {
-                val visible = if (extensionExpanded) {
-                    state.extensionWords
-                } else {
-                    state.extensionWords.take(EXTENSION_PREVIEW_COUNT)
-                }
-                items(items = visible, key = { "ext-${it.word}" }) { word ->
+                items(items = state.difficultWords, key = { "hard-${it.lemma}" }) { word ->
                     WordRow(
                         word = word,
                         onClick = { onOpenWord(word.word) },
                         onAdd = { onAddToWordbank(word) },
                         modifier = Modifier.animateItem(),
                     )
-                }
-
-                if (state.extensionWords.size > EXTENSION_PREVIEW_COUNT) {
-                    item {
-                        val hidden = state.extensionWords.size - EXTENSION_PREVIEW_COUNT
-                        TextButton(onClick = { extensionExpanded = !extensionExpanded }) {
-                            Icon(
-                                imageVector = if (extensionExpanded) {
-                                    Icons.Filled.ExpandLess
-                                } else {
-                                    Icons.Filled.ExpandMore
-                                },
-                                contentDescription = null,
-                            )
-                            Text(
-                                text = if (extensionExpanded) {
-                                    stringResource(R.string.result_extend_less)
-                                } else {
-                                    stringResource(R.string.result_extend_more, hidden)
-                                },
-                                modifier = Modifier.padding(start = 8.dp),
-                            )
-                        }
-                    }
                 }
             }
         }

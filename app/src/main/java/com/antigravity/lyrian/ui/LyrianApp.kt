@@ -262,7 +262,6 @@ fun LyrianApp(
                         onBack = { navController.popBackStack() },
                         onOpenAppearance = { navController.navigate(Routes.SETTINGS_APPEARANCE) },
                         onOpenPlayback = { navController.navigate(Routes.SETTINGS_PLAYBACK) },
-                        onOpenLearning = { navController.navigate(Routes.SETTINGS_LEARNING) },
                         onOpenAiSettings = { navController.navigate(Routes.SETTINGS_AI) },
                         onOpenData = { navController.navigate(Routes.SETTINGS_DATA) },
                         onOpenAbout = { navController.navigate(Routes.ABOUT) },
@@ -275,12 +274,6 @@ fun LyrianApp(
 
                 composable(Routes.SETTINGS_PLAYBACK) {
                     PlaybackSettingsScreen(onBack = { navController.popBackStack() })
-                }
-
-                composable(Routes.SETTINGS_LEARNING) {
-                    com.antigravity.lyrian.ui.screens.settings.LearningSettingsScreen(
-                        onBack = { navController.popBackStack() },
-                    )
                 }
 
                 composable(Routes.SETTINGS_AI) {

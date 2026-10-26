@@ -77,9 +77,9 @@ class LineBoundaryTest {
     private fun question(blankIndex: Int, lineIndex: Int) = FillChoiceQuestion(
         blankIndex = blankIndex,
         lineIndex = lineIndex,
-        prefix = "",
+        prompt = "____",
         answer = "word",
-        suffix = "",
+        surface = "word",
         startMs = 0L,
     )
 

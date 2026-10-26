@@ -92,7 +92,7 @@ class SongSearchRepositoryTest {
         assertEquals(null, result.coverUrl)
         assertEquals(null, result.genre)
         assertEquals("Hello", result.title)
-        assertTrue(result.blankCount > 0)
+        assertEquals(0, result.blankCount) // 題數由呼叫端用 LexiconSource 計算
     }
 
     @Test
@@ -105,7 +105,7 @@ class SongSearchRepositoryTest {
         }
 
         val result = repository.toSearchResult(lrclibEntry(lyricsFile = lyricsFile), emptyList())
-        assertEquals(2, result.blankCount)
+        assertEquals(0, result.blankCount) // 同上
     }
 
     @Test

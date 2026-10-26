@@ -2,10 +2,9 @@ package com.antigravity.lyrian.ui.screens.search
 
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
-import com.antigravity.lyrian.data.lang.LanguageDataStore
+import com.antigravity.lyrian.data.lexicon.LexiconSource
 import com.antigravity.lyrian.data.remote.SongSearchRepository
 import com.antigravity.lyrian.data.remote.SongSearchResult
-import com.antigravity.lyrian.data.settings.UserSettings
 import dagger.hilt.android.lifecycle.HiltViewModel
 import javax.inject.Inject
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -36,8 +35,7 @@ data class SearchUiState(
 @HiltViewModel
 class SearchViewModel @Inject constructor(
     private val repository: SongSearchRepository,
-    private val languageData: LanguageDataStore,
-    private val userSettings: UserSettings,
+    private val lexicon: LexiconSource,
 ) : ViewModel() {
 
     private val _uiState = MutableStateFlow(SearchUiState())
@@ -64,9 +62,7 @@ class SearchViewModel @Inject constructor(
                 repository.search(
                     artist = state.artist,
                     track = state.track,
-                    difficulty = userSettings.difficultyValue,
-                    maxBlanks = userSettings.maxBlanksValue,
-                    levelSource = languageData.get(),
+                    lexicon = lexicon,
                 )
             }
                 .onSuccess { results ->

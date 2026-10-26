@@ -17,22 +17,17 @@ import com.antigravity.lyrian.data.audio.YouTubePlayerController
 import com.antigravity.lyrian.data.audio.YouTubeWebSearch
 import com.antigravity.lyrian.data.dictionary.DictionaryRepository
 import com.antigravity.lyrian.data.dictionary.DictionaryResult
-import com.antigravity.lyrian.data.lang.ESTIMATED_SOURCE_LABELS
-import com.antigravity.lyrian.data.lang.LanguageData
-import com.antigravity.lyrian.data.lang.LanguageDataStore
+import com.antigravity.lyrian.data.lexicon.LexiconSource
 import com.antigravity.lyrian.data.lyrics.LyricsParser
 import com.antigravity.lyrian.data.settings.PlaybackOffsets
 import com.antigravity.lyrian.data.settings.PlaybackSettings
-import com.antigravity.lyrian.data.settings.UserSettings
 import com.antigravity.lyrian.domain.model.CefrLevel
 import com.antigravity.lyrian.domain.model.ChoiceRecord
-import com.antigravity.lyrian.domain.model.BlankDecision
 import com.antigravity.lyrian.domain.model.FillChoiceQuestion
 import com.antigravity.lyrian.domain.model.LyricLine
 import com.antigravity.lyrian.domain.model.PracticeModeId
 import com.antigravity.lyrian.domain.model.ResultWord
-import com.antigravity.lyrian.domain.practice.BlankDifficulty
-import com.antigravity.lyrian.domain.practice.ExtensionPicker
+import com.antigravity.lyrian.domain.practice.BlankPicker
 import com.antigravity.lyrian.domain.practice.FillChoiceBuilder
 import com.antigravity.lyrian.domain.practice.LineBoundary
 import com.antigravity.lyrian.ui.navigation.Routes
@@ -143,22 +138,21 @@ data class PracticeUiState(
     val sessionStartedAtMs: Long = 0L,
     /** 用時（毫秒）；尚未完成時為 null。 */
     val elapsedMs: Long? = null,
-    /** 答錯的題目（正解 + 詞性 + 釋義）。 */
-    val wrongWords: List<ResultWord> = emptyList(),
     /**
-     * 延伸詞彙：本首歌中**沒被挖空**、等級高於設定值的字。
+     * 本首歌的 B1+ 較難單字（**只顯示，不會自動寫入字庫**）。
      *
-     * 依原形去重、等級高者優先，最多 [ExtensionPicker.LIMIT] 條。
+     * 資料來源是本次選詞的候選池：所有通過 B1 門檻、去重、非專名的字，
+     * 不論有沒有被挖空。要收藏得由使用者按「加入」。
      */
-    val extensionWords: List<ResultWord> = emptyList(),
-    /** 原始（未查字典）的延伸詞彙，字典查完後才填 [extensionWords]。 */
-    val extensionCandidates: List<String> = emptyList(),
-    /** 每一句的挖空決策；作答落庫時要靠它知道「這題挖的是哪個原形、什麼等級」。 */
-    val blankDecisions: List<BlankDecision> = emptyList(),
-    /** 這一輪的挖空難度（只影響選詞優先級）。 */
-    val difficulty: BlankDifficulty = BlankDifficulty.DEFAULT,
-    /** 這一輪的題數上限。 */
-    val maxBlanks: Int = FillChoiceBuilder.DEFAULT_MAX_BLANKS,
+    val difficultWords: List<ResultWord> = emptyList(),
+    /** 候選池的原始資料（結果頁組字表用，不落庫）。 */
+    val pool: List<BlankPicker.Candidate> = emptyList(),
+    /**
+     * 距離 20 個挖空還差幾個（0 = 達標）。
+     *
+     * 依規格：不足時如實回報，**不補 A2、不補停用詞、不補專名**。
+     */
+    val shortfall: Int = 0,
     /**
      * 歌詞是否有時間軸。
      *
@@ -351,8 +345,7 @@ class PracticeViewModel @Inject constructor(
     private val youTubeSearch: YouTubeWebSearch,
     private val playbackOffsets: PlaybackOffsets,
     private val playbackSettings: PlaybackSettings,
-    private val languageData: LanguageDataStore,
-    private val userSettings: UserSettings,
+    private val lexicon: LexiconSource,
     private val dictionary: DictionaryRepository,
     val player: YouTubePlayerController,
     savedStateHandle: SavedStateHandle,
@@ -1122,12 +1115,6 @@ class PracticeViewModel @Inject constructor(
     }
 
     private suspend fun loadInternal(songId: Long) {
-        // 語言資料（等級／原形／詞頻）約 6 萬筆，第一次載入要解析 0.9 MB，
-        // 因此在 IO 執行緒完成後才組題——否則第一次進練習頁會掉一格畫面。
-        val language = languageData.get()
-        val difficulty = userSettings.difficultyValue
-        val maxBlanks = userSettings.maxBlanksValue
-
         // 第 1 層：記憶體中的 session（涵蓋設定變更／旋轉螢幕）。
         // 用 get() 而非已移除的 take()——見 PracticeSessionStore 的類別註解。
         sessionStore.get(songId)?.let { session ->
@@ -1146,9 +1133,6 @@ class PracticeViewModel @Inject constructor(
                         plainLyrics = session.plainLyrics,
                     ),
                 ),
-                language = language,
-                difficulty = difficulty,
-                maxBlanks = maxBlanks,
             )
             return
         }
@@ -1157,7 +1141,7 @@ class PracticeViewModel @Inject constructor(
         // 這條路徑需要第 1 次作答時寫入的 song / lyric_line（見 ensureSongPersisted）。
         val restored = restoreFromCache(songId)
         if (restored != null) {
-            applySource(restored, language, difficulty, maxBlanks)
+            applySource(restored)
         } else {
             failWith(ERROR_NO_SESSION)
         }
@@ -1199,12 +1183,7 @@ class PracticeViewModel @Inject constructor(
     }.getOrNull()
 
     /** 把一份歌詞來源轉成 UI 狀態。兩條來源路徑共用，確保行為一致。 */
-    private fun applySource(
-        source: SongSource,
-        language: LanguageData,
-        difficulty: BlankDifficulty,
-        maxBlanks: Int,
-    ) {
+    private suspend fun applySource(source: SongSource) {
         songHead = source.head
 
         // 播放器是單例，可能還留著上一首歌的狀態 → 每次都清乾淨
@@ -1216,15 +1195,11 @@ class PracticeViewModel @Inject constructor(
         checkedLines.clear()
         lastSeenLine = null
 
-        val dataset = FillChoiceBuilder.buildDataset(
-            lines = source.lines,
-            difficulty = difficulty,
-            maxBlanks = maxBlanks,
-            levelSource = language,
-            songTitle = source.head.title,
-        )
+        // 選詞：B1+、去重、排除專名與查無此詞，全域取 20 個、每句最多 2 個
+        val pick = BlankPicker.pick(lines = source.lines, lexicon = lexicon)
+        val dataset = FillChoiceBuilder.fromBlanks(source.lines, pick.blanks)
 
-        logBlankDecisions(dataset.debug, difficulty, maxBlanks)
+        logPick(pick, source.head.title)
 
         if (dataset.questions.isEmpty()) {
             _uiState.update {
@@ -1236,6 +1211,8 @@ class PracticeViewModel @Inject constructor(
                     coverUrl = source.head.coverUrl,
                     lines = dataset.lines,
                     hasTimeline = dataset.lines.any { line -> line.startMs > 0L },
+                    pool = pick.pool,
+                    shortfall = pick.shortfall,
                 )
             }
             return
@@ -1290,21 +1267,10 @@ class PracticeViewModel @Inject constructor(
                 // 結果頁的統計只存在這一次的 session，不落庫
                 sessionStartedAtMs = System.currentTimeMillis(),
                 elapsedMs = null,
-                wrongWords = emptyList(),
-                extensionWords = emptyList(),
-                difficulty = difficulty,
-                maxBlanks = maxBlanks,
+                difficultWords = emptyList(),
+                pool = pick.pool,
+                shortfall = pick.shortfall,
                 hasTimeline = hasTimeline,
-                blankDecisions = dataset.debug,
-                extensionCandidates = ExtensionPicker.pick(
-                    lines = source.lines,
-                    difficulty = difficulty,
-                    language = language,
-                    // 用**原形**排除：挖了 `dreaming` 之後，`dream` 不該再出現在延伸詞彙
-                    // （舊版比對字面，所以同一家族的字會重複推薦）
-                    blankedLemmas = dataset.debug.mapNotNull { it.chosenLemma }.toSet(),
-                    songTitle = source.head.title,
-                ),
             )
         }
 
@@ -1363,53 +1329,32 @@ class PracticeViewModel @Inject constructor(
     }
 
     /**
-     * 印出「每句選中的詞、原形、等級、詞頻、排序依據」，讓擁有者能直接驗證選詞。
+     * 印出本次選詞結果（logcat 標籤 `LyrianPractice`），供驗收核對。
      *
-     * 輸出長這樣（可在 logcat 用 `LyrianPractice` 過濾）：
      * ```
-     * D/LyrianPractice: 挖空統計：48 句 → 22 題（起點 B1，全部）；過濾 96 個高頻詞
-     * D/LyrianPractice: 挖空 L3: silhouettes | 原形 silhouette | 等級 C1 | 詞頻 BNC 11637 | 同級取罕見（BNC 11637 而非 BNC 6159）
-     * D/LyrianPractice:   L3 過濾: love(Top 1000 高頻詞), the(冠詞)
+     * D/LyrianPractice: 選詞：48 句 → 20 題（差 0 題達標）；候選池 23 個 B1+
+     * D/LyrianPractice: L3  silhouettes (C1, BNC 11637)
+     * D/LyrianPractice: 排除: hello(A1), the(功能詞), Vegas(專名)
      * ```
      */
-    private fun logBlankDecisions(
-        decisions: List<BlankDecision>,
-        difficulty: BlankDifficulty,
-        maxBlanks: Int,
-    ) {
-        if (decisions.isEmpty()) return
-
-        val blanks = decisions.count { it.chosenWord != null }
-        val filtered = decisions.sumOf { it.rejected.size }
-        val filler = decisions.count { it.chosenWord == null && it.rejected.isEmpty() }
-
+    private fun logPick(result: BlankPicker.Result, title: String) {
         android.util.Log.d(
             TAG,
-            "挖空統計：${decisions.size} 句 → $blanks 題（難度 ${difficulty.label}，上限 $maxBlanks）" +
-                "；過濾 $filtered 個字；無實詞略過 $filler 句",
+            "選詞《$title》：${result.blanks.size} 題" +
+                if (result.shortfall > 0) "（不足 ${result.shortfall} 題，候選池耗盡）" else "（達標）" +
+                "；B1+ 候選 ${result.pool.size} 個；排除 ${result.rejected.size} 筆",
         )
-
-        decisions.forEach { decision ->
-            if (decision.chosenWord != null) {
-                val freq = decision.frequencyRank?.let { "BNC $it" } ?: "未收錄"
-                android.util.Log.d(
-                    TAG,
-                    "挖空 L${decision.lineIndex}: ${decision.chosenWord} | 原形 " +
-                        "${decision.chosenLemma ?: decision.chosenWord} | 等級 " +
-                        "${decision.chosenLevel ?: "未收錄"}（${decision.chosenLevelSource}）" +
-                        " | 詞頻 $freq | ${decision.basis ?: "—"}",
-                )
-            } else if (decision.rejected.isNotEmpty()) {
-                android.util.Log.d(
-                    TAG,
-                    "挖空 L${decision.lineIndex}: （未選）${decision.basis ?: "非本次選句"}",
-                )
-            }
-
-            if (decision.rejected.isNotEmpty()) {
-                val detail = decision.rejected.joinToString { "${it.word}(${it.levelSource})" }
-                android.util.Log.d(TAG, "  L${decision.lineIndex} 過濾: $detail")
-            }
+        result.blanks.forEach { blank ->
+            val candidate = result.pool.firstOrNull { it.lemma == blank.lemma }
+            android.util.Log.d(
+                TAG,
+                "  L${blank.lineIndex} ${blank.surface} → ${blank.answer}" +
+                    "（${candidate?.cefr?.label ?: "—"}，" +
+                    "${candidate?.frequencyRank?.let { "BNC $it" } ?: "無詞頻"}）",
+            )
+        }
+        result.rejected.take(20).forEach {
+            android.util.Log.d(TAG, "  排除 ${it.word}：${it.reason}")
         }
     }
 
@@ -1437,7 +1382,7 @@ class PracticeViewModel @Inject constructor(
             )
         }
 
-        // 答錯仍照常進字庫（擁有者指定）——不論對錯都落庫，錯的才進字庫
+        // 作答**只寫入 attempt**。字庫一律由使用者手動加入（規格 §四）。
         persist(question, choice, attempt.isCorrect)
 
         // ---- B-1 第三條因果 ----
@@ -1496,27 +1441,18 @@ class PracticeViewModel @Inject constructor(
         _uiState.update { it.copy(elapsedMs = elapsed) }
 
         viewModelScope.launch {
-            val wrong = state.questions
-                .filter { question -> state.selections[question.blankIndex]?.isCorrect == false }
-                .map { toResultWord(it.answer) }
-
-            val extension = state.extensionCandidates.map { toResultWord(it) }
-
-            _uiState.update { it.copy(wrongWords = wrong, extensionWords = extension) }
-        }
-    }
-
-    /** 查一個字的詞性與中文釋義；查不到時只留單字本身。 */
-    private suspend fun toResultWord(word: String): ResultWord {
-        val hit = dictionary.lookup(word)
-        return if (hit is DictionaryResult.Found) {
-            ResultWord(
-                word = word,
-                partOfSpeech = hit.entry.partOfSpeech,
-                meaning = hit.entry.translation,
-            )
-        } else {
-            ResultWord(word = word)
+            // 結果頁的「較難單字」＝ 本次候選池（B1+、已去重、非專名）。
+            // 這是**顯示**用的清單，不會寫入字庫。
+            val words = state.pool.map { candidate ->
+                ResultWord(
+                    word = candidate.lemma,
+                    partOfSpeech = candidate.displayPos,
+                    meaning = candidate.gloss,
+                    lemma = candidate.lemma,
+                    level = candidate.cefr,
+                )
+            }
+            _uiState.update { it.copy(difficultWords = words) }
         }
     }
 
@@ -1561,8 +1497,7 @@ class PracticeViewModel @Inject constructor(
                 // 結果頁的統計歸零重算（延伸詞彙不必重查，字是一樣的）
                 sessionStartedAtMs = System.currentTimeMillis(),
                 elapsedMs = null,
-                wrongWords = emptyList(),
-                extensionWords = emptyList(),
+                difficultWords = emptyList(),
             )
         }
 
@@ -1572,75 +1507,27 @@ class PracticeViewModel @Inject constructor(
     }
 
     /**
-     * 把一次作答落庫：作答紀錄 →（依等級）字庫 → 每日統計。
+     * 把一次作答落庫：**只寫 attempt 與每日統計**。
      *
-     * ## 入庫規則是「依 CEFR 等級」，不是「依對錯」（模組 D）
+     * ## 字庫不在這裡寫
      *
-     * ```
-     * B1 以上：不論答對答錯，一律入庫
-     * A1 / A2：一律不入庫（使用者要的話，結果頁有「加入字庫」按鈕）
-     * ```
-     *
-     * 理由：這個 App 的字庫是「學習清單」，不是「錯題本」。B1 的字已經
-     * 超出使用者的舒適區，就算猜對也值得排進複習；A1/A2 的字猜錯只是手滑，
-     * 收進字庫只會把清單灌滿早就會的字。
-     *
-     * 答錯時仍然會記 `errorCount`（供日後排複習順序），但**入不入庫由等級決定**。
-     *
-     * **失敗不中斷練習**——與「AI 不在關鍵路徑上」同一原則。
+     * 依規格 §四：答對、答錯、練習完成都**不得**自動寫入生詞本。
+     * 唯一的寫入點是 [onAddToWordbank]（使用者按「加入」）。
+     * 舊版的「B1 以上不論對錯一律入庫」與 `addFromError` 已完全移除。
      */
     private fun persist(question: FillChoiceQuestion, choice: String, isCorrect: Boolean) {
         viewModelScope.launch {
             runCatching {
                 val songId = ensureSongPersisted()
 
-                val decision = _uiState.value.blankDecisions.firstOrNull {
-                    it.lineIndex == question.lineIndex
-                }
-                val level = CefrLevel.fromLabel(decision?.chosenLevel)
-                    ?: CefrLevel.C2 // 未收錄的字視為高階
-                val lemma = decision?.chosenLemma
-                    ?: FillChoiceBuilder.normalizeAnswer(question.answer)
-
-                // 只有**官方 CEFR 清單**（CEFR-J／Octanove）的等級才寫進字庫。
-                //
-                // 考試標籤與 BNC 詞頻都是推估：寫進字庫等於聲稱一個官方清單
-                // 從未做過的判定（擁有者就是這樣看到「blah = C2」的）。寧可留空。
-                val cefrLabel = decision?.chosenLevel
-                    ?.takeIf { decision.chosenLevelSource !in ESTIMATED_SOURCE_LABELS }
-
-                val shouldAddToWordbank = level >= WORDBANK_MIN_LEVEL ||
-                    (decision?.score ?: 0) >= WORDBANK_MIN_SCORE
-
-                val vocabId = when {
-                    !shouldAddToWordbank -> null
-
-                    isCorrect -> vocabDao.ensureInWordbank(
-                        lemma = lemma,
-                        surfaceForm = question.answer,
-                        contextLine = question.originalLine,
-                        songId = songId,
-                        cefr = cefrLabel,
-                        now = System.currentTimeMillis(),
-                    )
-
-                    else -> vocabDao.addFromError(
-                        lemma = lemma,
-                        surfaceForm = question.answer,
-                        contextLine = question.originalLine,
-                        songId = songId,
-                        cefr = cefrLabel,
-                        now = System.currentTimeMillis(),
-                    ).first
-                }
-
                 attemptDao.insert(
                     AttemptEntity(
                         modeId = PracticeModeId.FILL_CHOICE.name,
                         songId = songId,
                         lineIndex = question.lineIndex,
-                        vocabId = vocabId,
-                        prompt = "${question.prefix}____${question.suffix}",
+                        // 沒有字庫關聯：作答不再對應任何 vocab 列
+                        vocabId = null,
+                        prompt = question.prompt,
                         userAnswer = choice,
                         correctAnswer = question.answer,
                         score = if (isCorrect) 1f else 0f,
@@ -1685,10 +1572,7 @@ class PracticeViewModel @Inject constructor(
 
             _uiState.update { state ->
                 state.copy(
-                    wrongWords = state.wrongWords.map {
-                        if (it.word == word) it.copy(addedToWordbank = true) else it
-                    },
-                    extensionWords = state.extensionWords.map {
+                    difficultWords = state.difficultWords.map {
                         if (it.word == word) it.copy(addedToWordbank = true) else it
                     },
                 )

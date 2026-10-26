@@ -33,7 +33,6 @@ fun SettingsScreen(
     onBack: () -> Unit,
     onOpenAppearance: () -> Unit,
     onOpenPlayback: () -> Unit,
-    onOpenLearning: () -> Unit,
     onOpenAiSettings: () -> Unit,
     onOpenData: () -> Unit,
     onOpenAbout: () -> Unit,
@@ -69,14 +68,6 @@ fun SettingsScreen(
 
             item {
                 SettingsSection(title = stringResource(R.string.settings_group_learning)) {
-                    SettingsActionRow(
-                        title = stringResource(R.string.settings_learning),
-                        subtitle = stringResource(R.string.settings_learning_level),
-                        icon = Icons.Filled.School,
-                        trailingChevron = true,
-                        onClick = onOpenLearning,
-                    )
-                    SettingsDivider()
                     SettingsActionRow(
                         title = stringResource(R.string.settings_ai),
                         subtitle = stringResource(R.string.ai_description),

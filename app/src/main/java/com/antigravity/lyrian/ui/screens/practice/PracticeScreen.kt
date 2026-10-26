@@ -1050,11 +1050,6 @@ private fun LyricsViewport(
     selections: Map<Int, ChoiceRecord>,
     listState: LazyListState,
 ) {
-    // 行序 → blankIndex 的對照（一行最多一題）
-    val blankIndexByLine = androidx.compose.runtime.remember(questions) {
-        questions.associate { it.lineIndex to it.blankIndex }
-    }
-
     Box(modifier = Modifier.fillMaxSize()) {
         // 底部內距只留 LYRICS_BOTTOM_PADDING（32dp）：滾到底時最後一句與選項區
         // 之間不會再出現一整片空白（舊版用 maxHeight）。
@@ -1080,11 +1075,10 @@ private fun LyricsViewport(
             verticalArrangement = Arrangement.spacedBy(LYRIC_LINE_SPACING),
         ) {
             itemsIndexed(items = lines, key = { _, line -> line.index }) { _, line ->
-                val blankIndex = blankIndexByLine[line.index]
                 LyricRow(
                     line = line,
                     isCurrent = highlightLineIndex != null && line.index == highlightLineIndex,
-                    record = blankIndex?.let { selections[it] },
+                    selections = selections,
                 )
             }
         }
@@ -1112,7 +1106,7 @@ private fun LyricsViewport(
 private fun LyricRow(
     line: LyricLine,
     isCurrent: Boolean,
-    record: ChoiceRecord?,
+    selections: Map<Int, ChoiceRecord>,
 ) {
     val alpha by animateFloatAsState(
         targetValue = if (isCurrent) 1f else LYRIC_DIM_ALPHA,
@@ -1135,31 +1129,36 @@ private fun LyricRow(
             return@buildAnnotatedString
         }
 
-        append(line.prefix)
+        // 一行最多兩個空（BlankPicker.MAX_BLANKS_PER_LINE），
+        // 每個空各自顯示自己的作答狀態。
+        var cursor = 0
+        line.blanks.forEach { blank ->
+            if (blank.start < cursor) return@forEach
+            append(line.text, cursor, blank.start)
 
-        when {
-            // 已作答：顯示使用者填的字（對綠錯紅，皆為淺色系以確保在封面上可讀）
-            record != null -> withStyle(
-                SpanStyle(
-                    color = if (record.isCorrect) FEEDBACK_CORRECT else FEEDBACK_WRONG,
-                    fontWeight = FontWeight.SemiBold,
-                ),
-            ) {
-                append(record.choice)
-            }
+            when (val record = selections[blank.blankIndex]) {
+                // 已作答：對綠錯紅（淺色系，在封面上仍可讀）
+                null -> withStyle(
+                    SpanStyle(
+                        color = if (isCurrent) ON_IMAGE_PRIMARY else ON_IMAGE_SECONDARY,
+                        fontWeight = if (isCurrent) FontWeight.SemiBold else FontWeight.Normal,
+                    ),
+                ) {
+                    append("____")
+                }
 
-            // 未作答：底線。當前句用純白強調
-            else -> withStyle(
-                SpanStyle(
-                    color = if (isCurrent) ON_IMAGE_PRIMARY else ON_IMAGE_SECONDARY,
-                    fontWeight = if (isCurrent) FontWeight.SemiBold else FontWeight.Normal,
-                ),
-            ) {
-                append("____")
+                else -> withStyle(
+                    SpanStyle(
+                        color = if (record.isCorrect) FEEDBACK_CORRECT else FEEDBACK_WRONG,
+                        fontWeight = FontWeight.SemiBold,
+                    ),
+                ) {
+                    append(record.choice)
+                }
             }
+            cursor = blank.end
         }
-
-        append(line.suffix)
+        append(line.text, cursor, line.text.length)
     }
 
     Text(

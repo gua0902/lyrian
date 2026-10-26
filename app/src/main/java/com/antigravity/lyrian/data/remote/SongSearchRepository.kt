@@ -1,9 +1,8 @@
 package com.antigravity.lyrian.data.remote
 
-import com.antigravity.lyrian.data.lang.WordLevelSource
+import com.antigravity.lyrian.data.lexicon.LexiconSource
 import com.antigravity.lyrian.data.lyrics.LyricsParser
 import com.antigravity.lyrian.domain.model.CefrLevel
-import com.antigravity.lyrian.domain.practice.BlankDifficulty
 import com.antigravity.lyrian.domain.practice.FillChoiceBuilder
 import javax.inject.Inject
 import javax.inject.Singleton
@@ -106,9 +105,7 @@ class SongSearchRepository @Inject constructor(
     suspend fun search(
         artist: String,
         track: String,
-        difficulty: BlankDifficulty = BlankDifficulty.DEFAULT,
-        maxBlanks: Int = FillChoiceBuilder.DEFAULT_MAX_BLANKS,
-        levelSource: WordLevelSource = WordLevelSource.None,
+        lexicon: LexiconSource,
     ): List<SongSearchResult> = coroutineScope {
         // ---- 兩個外呼同時打 ----
         // LRCLIB（歌詞）與 iTunes（封面／曲風／長度）**互不依賴**，
@@ -142,8 +139,17 @@ class SongSearchRepository @Inject constructor(
         // 「搜尋變慢了」。同時把筆數上限收斂，避免極端回應拖垮手機。
         withContext(Dispatchers.Default) {
             dedupe(
-                entries.take(MAX_CANDIDATES).map {
-                    toSearchResult(it, itunesTracks, difficulty, maxBlanks, levelSource)
+                entries.take(MAX_CANDIDATES).map { entry ->
+                    val lines = LyricsParser.parse(
+                        lyricsFile = entry.lyricsfile,
+                        syncedLyrics = entry.syncedLyrics,
+                        plainLyrics = entry.plainLyrics,
+                    )
+                    toSearchResult(
+                        entry = entry,
+                        itunesTracks = itunesTracks,
+                        blankCount = FillChoiceBuilder.countBlanks(lines, lexicon),
+                    )
                 },
             ).filter { it.blankCount > 0 }
         }
@@ -164,9 +170,7 @@ class SongSearchRepository @Inject constructor(
     fun toSearchResult(
         entry: LrclibTrackDto,
         itunesTracks: List<ItunesTrackDto>,
-        difficulty: BlankDifficulty = BlankDifficulty.DEFAULT,
-        maxBlanks: Int = FillChoiceBuilder.DEFAULT_MAX_BLANKS,
-        levelSource: WordLevelSource = WordLevelSource.None,
+        blankCount: Int = 0,
     ): SongSearchResult {
         val artist = NameMatcher.normalizeArtist(entry.artistName)
         val match = NameMatcher.pickBest(entry.trackName, artist, itunesTracks)
@@ -191,14 +195,7 @@ class SongSearchRepository @Inject constructor(
                 ?: entry.duration?.let { Math.round(it * 1000) },
             coverUrl = NameMatcher.artworkUrlAtSize(match?.artworkUrl100),
             genre = NameMatcher.translateGenre(match?.primaryGenreName),
-            blankCount = FillChoiceBuilder.countBlankableLines(
-                lines,
-                difficulty = difficulty,
-                maxBlanks = maxBlanks,
-                levelSource = levelSource,
-                // 與練習頁用同一個歌名，清單上的題數才會與進去後一致
-                songTitle = match?.trackName ?: entry.trackName,
-            ),
+            blankCount = blankCount,
             lyricsFile = entry.lyricsfile,
             syncedLyrics = entry.syncedLyrics,
             plainLyrics = entry.plainLyrics,
