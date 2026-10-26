@@ -49,6 +49,20 @@ object LyricStopWords {
     /**
      * 這個（正規化後的）詞是不是填充音。
      */
+    /**
+     * 字典把這些字收成**一般名詞**，但它們在歌詞裡幾乎只當專名用。
+     *
+     * 這是 AHH 那類「大小寫證據不足」的補漏機制；真正的解法是建置時
+     * 多存一個 uppercaseOnly／proper 旗標，在那之前先用清單擋。
+     */
+    private val KNOWN_PROPER = setOf(
+        "santa", "claus", "jesus", "christ", "christmas", "xmas",
+        "halloween", "thanksgiving", "easter", "buddha", "allah",
+    )
+
+    /** 專名黑名單（與填充音分開，理由不同）。 */
+    fun isProperNounWord(word: String): Boolean = word in KNOWN_PROPER
+
     fun isFiller(word: String): Boolean {
         if (word.isEmpty()) return true
         if (word in FILLERS) return true

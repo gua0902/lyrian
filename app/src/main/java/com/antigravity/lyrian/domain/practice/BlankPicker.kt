@@ -127,6 +127,10 @@ object BlankPicker {
                     reject(word, "填充音／感嘆詞")
                     return@forEach
                 }
+                if (LyricStopWords.isProperNounWord(word)) {
+                    reject(word, "專有名詞（黑名單）")
+                    return@forEach
+                }
 
                 // 1. 停用詞／功能詞（冠詞、代名詞、介系詞、連接詞、助動詞、數詞、感嘆詞）
                 if (CommonWordFilter.classify(word).isFunctionWord()) {
