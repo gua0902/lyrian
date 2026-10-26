@@ -38,8 +38,8 @@ object BlankPicker {
     /** 同一句最多幾個空。 */
     const val MAX_BLANKS_PER_LINE = 2
 
-    /** 太短的字不挖（`a`、`of`、`oh`）。 */
-    const val MIN_WORD_LENGTH = 3
+    /** 太短的字不挖；4 以下幾乎都是填充音（`ahh`、`ooh`、`la`）。 */
+    const val MIN_WORD_LENGTH = 4
 
     /** 候選門檻：B1 及以上。 */
     val MIN_LEVEL: CefrLevel = CefrLevel.B1
@@ -60,15 +60,12 @@ object BlankPicker {
         val cefr: CefrLevel,
         val frequencyRank: Int?,
         val partsOfSpeech: Set<PartOfSpeech>,
+        /** 已截斷的多義項釋義（最多 2 個）。 */
         val gloss: String?,
+        /** 已串好的詞性（`v. · n.`），不是只取第一個。 */
+        val displayPos: String?,
         val occurrences: List<Occurrence>,
-    ) {
-        /** 顯示用的詞性（優先實詞）。 */
-        val displayPos: String?
-            get() = partsOfSpeech
-                .firstOrNull { it != PartOfSpeech.UNKNOWN && it != PartOfSpeech.OTHER }
-                ?.label
-    }
+    )
 
     /** 一個挖空位置。 */
     data class Blank(
@@ -125,6 +122,12 @@ object BlankPicker {
                 val word = TextNormalizer.normalize(surface)
                 if (word.length < MIN_WORD_LENGTH) return@forEach
 
+                // 0. 歌詞填充音（ahh / ooh / la / mmm）——**查詞典之前**就剃除
+                if (LyricStopWords.isFiller(word)) {
+                    reject(word, "填充音／感嘆詞")
+                    return@forEach
+                }
+
                 // 1. 停用詞／功能詞（冠詞、代名詞、介系詞、連接詞、助動詞、數詞、感嘆詞）
                 if (CommonWordFilter.classify(word).isFunctionWord()) {
                     reject(word, "功能詞")
@@ -177,7 +180,8 @@ object BlankPicker {
                     cefr = cefr,
                     frequencyRank = entry.frequencyRank?.takeIf { it > 0 },
                     partsOfSpeech = entry.partsOfSpeech,
-                    gloss = entry.gloss,
+                    gloss = entry.displayGloss,
+                    displayPos = entry.displayPos,
                     occurrences = occ.toList(),
                 )
             } else {

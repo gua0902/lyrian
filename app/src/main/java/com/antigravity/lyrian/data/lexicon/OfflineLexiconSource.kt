@@ -48,6 +48,13 @@ class OfflineLexiconSource @Inject constructor(
             frequencyRank = level.commonnessRank,
             partsOfSpeech = mapPositions(level, entry.partOfSpeech),
             gloss = entry.translation?.takeIf { it.isNotBlank() },
+            // 全部義項都帶出去，由顯示層決定要顯示幾個（預設 2 個）
+            senses = entry.senses.map { sense ->
+                LexiconSense(
+                    partOfSpeech = sense.partOfSpeech?.let { singlePos(it) },
+                    text = sense.text,
+                )
+            },
         )
     }
 

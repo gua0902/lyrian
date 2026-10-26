@@ -1,6 +1,7 @@
 package com.antigravity.lyrian.domain.practice
 
 import com.antigravity.lyrian.data.lexicon.LexiconEntry
+import com.antigravity.lyrian.data.lexicon.LexiconSense
 import com.antigravity.lyrian.data.lexicon.LexiconSource
 import com.antigravity.lyrian.data.lexicon.PartOfSpeech
 import com.antigravity.lyrian.domain.model.CefrLevel
@@ -164,6 +165,71 @@ class BlankPickerTest {
         val result = BlankPicker.pick(listOf(line(0, "nofreq ranked")), lexicon)
 
         assertEquals(listOf("ranked", "nofreq"), result.pool.map { it.lemma })
+    }
+
+    @Test
+    fun `填充音在查詞典之前就被剃除`() = runTest {
+        // 舊版把 ahh 查到 ECDICT 的 AHH（芳基烴羥化酶）→ 變成 B1+ 候選
+        val lexicon = FakeLexicon(
+            mapOf(
+                "ahh" to entry("ahh", CefrLevel.B2),
+                "platinum" to entry("platinum", CefrLevel.B2),
+            ),
+        )
+
+        val result = BlankPicker.pick(listOf(line(0, "ahhh platinum")), lexicon)
+
+        assertEquals(listOf("platinum"), result.blanks.map { it.answer })
+        assertTrue(result.rejected.any { it.word == "ahhh" && it.reason.contains("填充音") })
+    }
+
+    @Test
+    fun `三個字母以下不進候選池`() = runTest {
+        val lexicon = FakeLexicon(
+            mapOf("yacht" to entry("yacht", CefrLevel.B2), "deed" to entry("deed", CefrLevel.B2)),
+        )
+
+        val result = BlankPicker.pick(listOf(line(0, "ahs yacht deed")), lexicon)
+
+        assertEquals(listOf("yacht", "deed"), result.blanks.map { it.answer })
+    }
+
+    @Test
+    fun `多義項的詞性與釋義都要保留`() {
+        val entry = LexiconEntry(
+            headword = "trim",
+            lemma = "trim",
+            cefr = CefrLevel.B1,
+            frequencyRank = 8_000,
+            partsOfSpeech = setOf(PartOfSpeech.VERB, PartOfSpeech.NOUN),
+            gloss = "修剪",
+            senses = listOf(
+                LexiconSense(PartOfSpeech.VERB, "修剪"),
+                LexiconSense(PartOfSpeech.NOUN, "整齊"),
+            ),
+        )
+
+        assertEquals("v. · n.", entry.displayPos)
+        assertEquals("v. 修剪；n. 整齊", entry.displayGloss)
+    }
+
+    @Test
+    fun `釋義最多顯示兩個義項`() {
+        val entry = LexiconEntry(
+            headword = "x",
+            lemma = "x",
+            cefr = CefrLevel.B2,
+            frequencyRank = 20_000,
+            partsOfSpeech = setOf(PartOfSpeech.NOUN),
+            gloss = null,
+            senses = listOf(
+                LexiconSense(PartOfSpeech.NOUN, "一"),
+                LexiconSense(PartOfSpeech.NOUN, "二"),
+                LexiconSense(PartOfSpeech.NOUN, "三"),
+            ),
+        )
+
+        assertEquals("n. 一；n. 二", entry.displayGloss)
     }
 
     @Test
