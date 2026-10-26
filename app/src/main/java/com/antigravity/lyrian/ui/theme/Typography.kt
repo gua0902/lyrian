@@ -31,7 +31,7 @@ import androidx.compose.ui.unit.sp
  * | Body | **Medium**（比 Regular 有存在感，仍可長時間閱讀） |
  * | Label（按鈕、膠囊） | **Medium** |
  */
-private const val USE_CUSTOM_FONT = false
+private const val USE_CUSTOM_FONT = true
 
 /**
  * 全局字體。切換點只有這一個常數。
@@ -44,7 +44,9 @@ private const val USE_CUSTOM_FONT = false
  * )
  * `
  */
-val LyrianFontFamily: FontFamily = FontFamily.Default
+val LyrianFontFamily: FontFamily = FontFamily(
+    androidx.compose.ui.text.font.Font(resId = com.antigravity.lyrian.R.font.fake_pearl_semibold, weight = FontWeight.SemiBold),
+)
 
 /**
  * 字級：沿用 M3 的 scale，但**字體與字重**統一改寫。
