@@ -85,7 +85,7 @@ object LyricTextStyles {
     /** 當前句：最大、Bold。 */
     val Current = TextStyle(
         fontFamily = LyrianFontFamily,
-        fontWeight = FontWeight.Bold,
+        fontWeight = FontWeight.Black,
         fontSize = 22.sp,
         lineHeight = 36.sp,
     )
@@ -93,7 +93,7 @@ object LyricTextStyles {
     /** 上下文（上一句／下一句）：縮小並降低對比。 */
     val Context = TextStyle(
         fontFamily = LyrianFontFamily,
-        fontWeight = FontWeight.Medium,
+        fontWeight = FontWeight.SemiBold,
         fontSize = 16.sp,
         lineHeight = 27.sp,
     )

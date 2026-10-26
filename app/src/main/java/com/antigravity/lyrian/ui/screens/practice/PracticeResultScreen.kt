@@ -330,7 +330,7 @@ private fun WordRow(
                     color = MaterialTheme.colorScheme.primary,
                     maxLines = 1,
                     overflow = TextOverflow.Ellipsis,
-                    modifier = Modifier.weight(1f, fill = false),
+                    modifier = Modifier.weight(1f),
                 )
 
                 if (!word.partOfSpeech.isNullOrBlank()) {
@@ -347,8 +347,6 @@ private fun WordRow(
                         )
                     }
                 }
-
-                Spacer(Modifier.weight(1f))
 
                 if (word.addedToWordbank) {
                     Icon(
@@ -372,7 +370,7 @@ private fun WordRow(
 
             Text(
                 text = word.meaning?.trim()?.takeIf { it.isNotBlank() } ?: "—",
-                style = MaterialTheme.typography.bodyMedium,
+                style = MaterialTheme.typography.bodyMedium.copy(fontWeight = FontWeight.SemiBold),
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
                 maxLines = 2,
                 overflow = TextOverflow.Ellipsis,

@@ -1376,7 +1376,11 @@ class PracticeViewModel @Inject constructor(
         val attempt = FillChoiceBuilder.grade(question, choice)
         val wasWaitingForThis = state.waitingForBlankIndex == question.blankIndex
 
-        // 同一行還有下一個未答的空？如果有，作答完要**立刻**把它端上來。
+        // 作答完要**立刻**把下一個未答的空端上來。
+        //
+        // 先找同一行的下一個空；沒有就找全曲下一個未答的空。
+        // （只找同一行時，跨行的下一題要等播放器 tick 才會出現，
+        //   使用者看到的就變成「填完第一格就卡住」。）
         val nextInLine = state.lines
             .firstOrNull { it.index == question.lineIndex }
             ?.blanks
@@ -1385,15 +1389,19 @@ class PracticeViewModel @Inject constructor(
             }
             ?.blankIndex
 
+        val nextBlank = nextInLine ?: state.questions
+            .firstOrNull { it.blankIndex != question.blankIndex && state.selections[it.blankIndex] == null }
+            ?.blankIndex
+
         _uiState.update {
             it.copy(
                 selections = it.selections + (question.blankIndex to ChoiceRecord(choice, attempt.isCorrect)),
                 // 同句第二個空：立即切換，不等下一句
-                activeBlankIndex = nextInLine ?: it.activeBlankIndex,
-                options = nextInLine?.let { blank -> optionsByBlank[blank].orEmpty() } ?: it.options,
+                activeBlankIndex = nextBlank ?: it.activeBlankIndex,
+                options = nextBlank?.let { blank -> optionsByBlank[blank].orEmpty() } ?: it.options,
                 // 停在同一個交界等第二個空：保持等待狀態，不恢復播放
                 waitingForBlankIndex = when {
-                    nextInLine == null -> if (wasWaitingForThis) null else it.waitingForBlankIndex
+                    nextBlank == null -> if (wasWaitingForThis) null else it.waitingForBlankIndex
                     wasWaitingForThis -> nextInLine
                     else -> it.waitingForBlankIndex
                 },

@@ -1129,7 +1129,7 @@ private fun LyricRow(
         val id = "blank-${blank.blankIndex}"
         inline[id] = androidx.compose.foundation.text.InlineTextContent(
             placeholder = androidx.compose.ui.text.Placeholder(
-                width = 56.sp,
+                width = (maxOf(blank.surface.length, blank.answer.length) * 13 + 22).sp,
                 height = 26.sp,
                 placeholderVerticalAlign = androidx.compose.ui.text.PlaceholderVerticalAlign.Center,
             ),
@@ -1161,6 +1161,7 @@ private fun LyricRow(
         color = ON_IMAGE_PRIMARY,
         modifier = Modifier
             .fillMaxWidth()
+            .padding(vertical = 4.dp)
             .graphicsLayer { this.alpha = alpha },
     )
 }
@@ -1184,7 +1185,7 @@ private fun BlankSlot(record: ChoiceRecord?, isCurrent: Boolean) {
     ) {
         Text(
             text = record?.choice ?: "____",
-            style = MaterialTheme.typography.titleSmall,
+            style = MaterialTheme.typography.titleSmall.copy(fontWeight = FontWeight.SemiBold),
             color = content,
             maxLines = 1,
         )
