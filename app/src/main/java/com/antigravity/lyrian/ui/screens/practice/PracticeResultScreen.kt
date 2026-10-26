@@ -29,7 +29,9 @@ import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Scaffold
+import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
+import androidx.compose.material3.Surface
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
 import androidx.compose.runtime.Composable
@@ -300,10 +302,10 @@ private fun PlaceholderCard(text: String) {
 }
 
 /**
- * 一份字表的單列：**只有 eng、詞性、中文釋義**（擁有者指定的三項）。
+ * 單字卡（M3E）：大字 + 詞性膠囊 + 乾淨釋義 + 手動「＋」。
  *
- * 點擊進入單字詳情（[onClick]）。右側的「＋」是模組 D.3 的手動加入——
- * A1/A2 的字不會自動入庫，使用者要就得自己按。整列可點，最小高度 48dp。
+ * 釋義在資料層已經去掉詞性前綴（`LexiconEntry.displayGloss`），
+ * 所以這裡不會再出現「n. n. 名詞」這種重複。
  */
 @Composable
 private fun WordRow(
@@ -312,59 +314,73 @@ private fun WordRow(
     onAdd: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
-    Row(
-        modifier = modifier
-            .fillMaxWidth()
-            .clip(MaterialTheme.shapes.medium)
-            .clickable(onClick = onClick)
-            .padding(start = 8.dp, top = 4.dp, bottom = 4.dp, end = 0.dp),
-        verticalAlignment = Alignment.CenterVertically,
+    Card(
+        onClick = onClick,
+        modifier = modifier.fillMaxWidth(),
+        shape = MaterialTheme.shapes.large,
+        colors = CardDefaults.cardColors(
+            containerColor = MaterialTheme.colorScheme.surfaceContainerHigh,
+        ),
     ) {
-        Text(
-            text = word.word,
-            style = MaterialTheme.typography.titleSmall,
-            fontWeight = FontWeight.SemiBold,
-        )
-        if (!word.partOfSpeech.isNullOrBlank()) {
-            Text(
-                text = word.partOfSpeech,
-                style = MaterialTheme.typography.labelSmall,
-                color = MaterialTheme.colorScheme.primary,
-                modifier = Modifier.padding(start = 8.dp),
-            )
-        }
-        Text(
-            text = word.meaning ?: "—",
-            style = MaterialTheme.typography.bodySmall,
-            color = MaterialTheme.colorScheme.onSurfaceVariant,
-            maxLines = 2,
-            overflow = TextOverflow.Ellipsis,
-            modifier = Modifier
-                .weight(1f)
-                .padding(start = 12.dp),
-        )
-
-        if (word.addedToWordbank) {
-            Icon(
-                imageVector = Icons.Filled.Check,
-                contentDescription = stringResource(R.string.result_added_to_wordbank),
-                tint = MaterialTheme.colorScheme.primary,
-                modifier = Modifier
-                    .padding(horizontal = 12.dp)
-                    .size(20.dp),
-            )
-        } else {
-            IconButton(onClick = onAdd, modifier = Modifier.size(48.dp)) {
-                Icon(
-                    imageVector = Icons.Filled.Add,
-                    contentDescription = stringResource(R.string.result_add_to_wordbank),
-                    tint = MaterialTheme.colorScheme.onSurfaceVariant,
+        Column(modifier = Modifier.padding(start = 16.dp, end = 4.dp, top = 12.dp, bottom = 12.dp)) {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Text(
+                    text = word.word,
+                    style = MaterialTheme.typography.titleLarge,
+                    color = MaterialTheme.colorScheme.primary,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                    modifier = Modifier.weight(1f, fill = false),
                 )
+
+                if (!word.partOfSpeech.isNullOrBlank()) {
+                    Surface(
+                        shape = com.antigravity.lyrian.ui.theme.LyrianCorner.full,
+                        color = MaterialTheme.colorScheme.secondaryContainer,
+                        contentColor = MaterialTheme.colorScheme.onSecondaryContainer,
+                        modifier = Modifier.padding(start = 8.dp),
+                    ) {
+                        Text(
+                            text = word.partOfSpeech,
+                            style = MaterialTheme.typography.labelMedium,
+                            modifier = Modifier.padding(horizontal = 10.dp, vertical = 3.dp),
+                        )
+                    }
+                }
+
+                Spacer(Modifier.weight(1f))
+
+                if (word.addedToWordbank) {
+                    Icon(
+                        imageVector = Icons.Filled.Check,
+                        contentDescription = stringResource(R.string.result_added_to_wordbank),
+                        tint = MaterialTheme.colorScheme.primary,
+                        modifier = Modifier
+                            .padding(horizontal = 12.dp)
+                            .size(22.dp),
+                    )
+                } else {
+                    IconButton(onClick = onAdd) {
+                        Icon(
+                            imageVector = Icons.Filled.Add,
+                            contentDescription = stringResource(R.string.result_add_to_wordbank),
+                            tint = MaterialTheme.colorScheme.primary,
+                        )
+                    }
+                }
             }
+
+            Text(
+                text = word.meaning?.trim()?.takeIf { it.isNotBlank() } ?: "—",
+                style = MaterialTheme.typography.bodyMedium,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                maxLines = 2,
+                overflow = TextOverflow.Ellipsis,
+                modifier = Modifier.padding(top = 2.dp, end = 12.dp),
+            )
         }
     }
 }
-
 @Composable
 private fun ResultActions(
     onReplay: () -> Unit,

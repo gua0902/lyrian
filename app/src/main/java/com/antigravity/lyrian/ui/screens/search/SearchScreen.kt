@@ -176,7 +176,7 @@ private fun SearchForm(
             label = { Text(stringResource(R.string.search_artist_label)) },
             leadingIcon = { Icon(Icons.Filled.Person, contentDescription = null) },
             singleLine = true,
-            shape = MaterialTheme.shapes.extraSmall,
+            shape = MaterialTheme.shapes.medium,
         )
 
         OutlinedTextField(
@@ -186,7 +186,7 @@ private fun SearchForm(
             label = { Text(stringResource(R.string.search_track_label)) },
             leadingIcon = { Icon(Icons.Filled.MusicNote, contentDescription = null) },
             singleLine = true,
-            shape = MaterialTheme.shapes.extraSmall,
+            shape = MaterialTheme.shapes.medium,
         )
 
         Button(

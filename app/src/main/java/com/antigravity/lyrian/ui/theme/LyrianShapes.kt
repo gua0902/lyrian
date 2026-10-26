@@ -52,11 +52,11 @@ object LyrianCorner {
     val none = RoundedCornerShape(0.dp)
     val extraSmall = RoundedCornerShape(4.dp)
     val small = RoundedCornerShape(8.dp)
-    val medium = RoundedCornerShape(12.dp)
-    val large = RoundedCornerShape(16.dp)
-    val largeIncreased = RoundedCornerShape(20.dp)
-    val extraLarge = RoundedCornerShape(28.dp)
-    val extraLargeIncreased = RoundedCornerShape(32.dp)
+    val medium = RoundedCornerShape(16.dp)
+    val large = RoundedCornerShape(24.dp)
+    val largeIncreased = RoundedCornerShape(28.dp)
+    val extraLarge = RoundedCornerShape(32.dp)
+    val extraLargeIncreased = RoundedCornerShape(36.dp)
     val extraExtraLarge = RoundedCornerShape(48.dp)
 
     /** 膠囊形（按鈕、chip）。用百分比而不是固定 dp，矮元件才不會變形。 */

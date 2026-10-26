@@ -7,46 +7,92 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.sp
 
 /**
- * Lyrian 的字級。
+ * 全局字體與字重（M3E 的情感化排版）。
  *
- * MD3 的 type scale 已由 [Typography] 提供完整定義，這裡只覆寫這個 App 特有的需求：
- * **歌詞行**。參考圖要求歌詞是大字（比內文明顯大），且行高要寬鬆以便閱讀。
+ * ## 自訂字體：假粉圓體（FakePearl）
  *
- * 其餘（titleMedium 用於歌名、bodyMedium 用於說明、labelMedium 用於標籤）
- * 直接沿用 MD3 預設，不另行覆寫——避免偏離規格。
+ * 擁有者把字型放在 `res/font/fake_pearl_semibold.ttf`。**Android 資源名稱
+ * 只能有小寫字母、數字與底線**，所以檔名必須是 `fake_pearl_semibold.ttf`；
+ * 目前 repo 裡的 `res/font/FakePearl-1.1` 不是合法資源（含大寫、連字號、點），
+ * `R.font` 也無法引用，因此 [LyrianFontFamily] 先退回系統字體。
+ *
+ * ### 要真正套用，只做兩件事
+ *
+ * 1. 把字型檔改名放到 `app/src/main/res/font/fake_pearl_semibold.ttf`
+ * 2. 把 [USE_CUSTOM_FONT] 改成 true
+ *
+ * 所有文字都走 `MaterialTheme.typography`，所以不必改任何畫面程式碼。
+ *
+ * ## 字重規則
+ *
+ * | 角色 | 字重 |
+ * |---|---|
+ * | Display / Headline / Title | **Bold**（標題要「站出來」） |
+ * | Body | **Medium**（比 Regular 有存在感，仍可長時間閱讀） |
+ * | Label（按鈕、膠囊） | **Medium** |
+ */
+private const val USE_CUSTOM_FONT = false
+
+/**
+ * 全局字體。切換點只有這一個常數。
+ *
+ * 資源到位後，把 [USE_CUSTOM_FONT] 改成 true 並取消下面三行的註解即可，
+ * **不需要動任何畫面**：
+ * `
+ * val LyrianFontFamily = FontFamily(
+ *     Font(R.font.fake_pearl_semibold, FontWeight.SemiBold),
+ * )
+ * `
+ */
+val LyrianFontFamily: FontFamily = FontFamily.Default
+
+/**
+ * 字級：沿用 M3 的 scale，但**字體與字重**統一改寫。
+ *
+ * 歌詞行另外有 [LyricTextStyles]（M3 沒有「歌詞」這個角色）。
  */
 val LyrianTypography = Typography().let { base ->
+    fun TextStyle.bold() = copy(fontFamily = LyrianFontFamily, fontWeight = FontWeight.Bold)
+    fun TextStyle.medium() = copy(fontFamily = LyrianFontFamily, fontWeight = FontWeight.Medium)
+
     base.copy(
-        // 當前句：參考圖約 22sp
-        headlineSmall = base.headlineSmall.copy(
-            fontFamily = FontFamily.Default,
-            fontWeight = FontWeight.SemiBold,
-            fontSize = 22.sp,
-            lineHeight = 30.sp,
-        ),
+        displayLarge = base.displayLarge.bold(),
+        displayMedium = base.displayMedium.bold(),
+        displaySmall = base.displaySmall.bold(),
+        headlineLarge = base.headlineLarge.bold(),
+        headlineMedium = base.headlineMedium.bold(),
+        headlineSmall = base.headlineSmall.bold(),
+        titleLarge = base.titleLarge.bold(),
+        titleMedium = base.titleMedium.bold(),
+        titleSmall = base.titleSmall.bold(),
+        bodyLarge = base.bodyLarge.medium(),
+        bodyMedium = base.bodyMedium.medium(),
+        bodySmall = base.bodySmall.medium(),
+        labelLarge = base.labelLarge.medium(),
+        labelMedium = base.labelMedium.medium(),
+        labelSmall = base.labelSmall.medium(),
     )
 }
 
 /**
  * 歌詞行的樣式。
  *
- * 刻意**不放在 Typography 裡**——MD3 的 type scale 沒有「歌詞」這個角色，
- * 硬塞進某個 scale 只會誤導。這是 Lyrian 自訂的顯示樣式。
+ * 依擁有者指定：歌詞字級與行距加大（1.6 倍），讓同一行出現兩個空時仍好讀。
  */
 object LyricTextStyles {
-    /** 當前句：最大、最重 */
+    /** 當前句：最大、Bold。 */
     val Current = TextStyle(
-        fontFamily = FontFamily.Default,
-        fontWeight = FontWeight.SemiBold,
+        fontFamily = LyrianFontFamily,
+        fontWeight = FontWeight.Bold,
         fontSize = 22.sp,
-        lineHeight = 32.sp,
+        lineHeight = 36.sp,
     )
 
-    /** 上下文（上一句／下一句）：縮小並降低對比 */
+    /** 上下文（上一句／下一句）：縮小並降低對比。 */
     val Context = TextStyle(
-        fontFamily = FontFamily.Default,
-        fontWeight = FontWeight.Normal,
-        fontSize = 14.sp,
-        lineHeight = 20.sp,
+        fontFamily = LyrianFontFamily,
+        fontWeight = FontWeight.Medium,
+        fontSize = 16.sp,
+        lineHeight = 27.sp,
     )
 }

@@ -1376,14 +1376,41 @@ class PracticeViewModel @Inject constructor(
         val attempt = FillChoiceBuilder.grade(question, choice)
         val wasWaitingForThis = state.waitingForBlankIndex == question.blankIndex
 
+        // 同一行還有下一個未答的空？如果有，作答完要**立刻**把它端上來。
+        val nextInLine = state.lines
+            .firstOrNull { it.index == question.lineIndex }
+            ?.blanks
+            ?.firstOrNull { blank ->
+                blank.blankIndex > question.blankIndex && state.selections[blank.blankIndex] == null
+            }
+            ?.blankIndex
+
         _uiState.update {
             it.copy(
                 selections = it.selections + (question.blankIndex to ChoiceRecord(choice, attempt.isCorrect)),
+                // 同句第二個空：立即切換，不等下一句
+                activeBlankIndex = nextInLine ?: it.activeBlankIndex,
+                options = nextInLine?.let { blank -> optionsByBlank[blank].orEmpty() } ?: it.options,
+                // 停在同一個交界等第二個空：保持等待狀態，不恢復播放
+                waitingForBlankIndex = when {
+                    nextInLine == null -> if (wasWaitingForThis) null else it.waitingForBlankIndex
+                    wasWaitingForThis -> nextInLine
+                    else -> it.waitingForBlankIndex
+                },
             )
         }
 
         // 作答**只寫入 attempt**。字庫一律由使用者手動加入（規格 §四）。
         persist(question, choice, attempt.isCorrect)
+
+        if (nextInLine != null && wasWaitingForThis) {
+            // 同一句還有空 → 不恢復播放，直接把下一個空端上來等作答
+            android.util.Log.d(
+                TAG,
+                "same-line next blank=${nextInLine}（line=${question.lineIndex}）→ 保持暫停",
+            )
+            return
+        }
 
         // ---- B-1 第三條因果 ----
         // 作答**只解除暫停**：淡入恢復播放。不碰 `singingLineIndex`、

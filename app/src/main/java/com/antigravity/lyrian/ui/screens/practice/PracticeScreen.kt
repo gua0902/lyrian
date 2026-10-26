@@ -82,7 +82,9 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalHapticFeedback
 import androidx.compose.ui.res.stringResource
+import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.SpanStyle
+import androidx.compose.foundation.text.appendInlineContent
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.buildAnnotatedString
 import androidx.compose.ui.text.font.FontWeight
@@ -100,6 +102,7 @@ import com.antigravity.lyrian.R
 import com.antigravity.lyrian.data.settings.PlaybackOffsets
 import com.antigravity.lyrian.domain.model.ChoiceRecord
 import com.antigravity.lyrian.domain.model.LyricLine
+import com.antigravity.lyrian.ui.theme.LyricTextStyles
 import com.antigravity.lyrian.ui.theme.LyrianCorner
 import com.antigravity.lyrian.ui.theme.LyrianMotion
 import com.antigravity.lyrian.ui.theme.rememberPlaybackAccent
@@ -1117,45 +1120,35 @@ private fun LyricRow(
         label = "lyricAlpha",
     )
 
-    val style = if (isCurrent) {
-        TextStyle(fontSize = 22.sp, lineHeight = 31.sp, fontWeight = FontWeight.SemiBold)
-    } else {
-        TextStyle(fontSize = 17.sp, lineHeight = 26.sp, fontWeight = FontWeight.Normal)
+    val style = if (isCurrent) LyricTextStyles.Current else LyricTextStyles.Context
+
+    // 每個空是一個 inline placeholder（不是 ____ 符號），
+    // 這樣才能給它底色、圓角與「已作答」的顏色。
+    val inline = LinkedHashMap<String, androidx.compose.foundation.text.InlineTextContent>()
+    line.blanks.forEach { blank ->
+        val id = "blank-${blank.blankIndex}"
+        inline[id] = androidx.compose.foundation.text.InlineTextContent(
+            placeholder = androidx.compose.ui.text.Placeholder(
+                width = 56.sp,
+                height = 26.sp,
+                placeholderVerticalAlign = androidx.compose.ui.text.PlaceholderVerticalAlign.Center,
+            ),
+        ) {
+            BlankSlot(record = selections[blank.blankIndex], isCurrent = isCurrent)
+        }
     }
 
     val text = buildAnnotatedString {
-        if (!line.hasBlank) {
+        if (line.blanks.isEmpty()) {
             append(line.text)
             return@buildAnnotatedString
         }
 
-        // 一行最多兩個空（BlankPicker.MAX_BLANKS_PER_LINE），
-        // 每個空各自顯示自己的作答狀態。
         var cursor = 0
         line.blanks.forEach { blank ->
             if (blank.start < cursor) return@forEach
             append(line.text, cursor, blank.start)
-
-            when (val record = selections[blank.blankIndex]) {
-                // 已作答：對綠錯紅（淺色系，在封面上仍可讀）
-                null -> withStyle(
-                    SpanStyle(
-                        color = if (isCurrent) ON_IMAGE_PRIMARY else ON_IMAGE_SECONDARY,
-                        fontWeight = if (isCurrent) FontWeight.SemiBold else FontWeight.Normal,
-                    ),
-                ) {
-                    append("____")
-                }
-
-                else -> withStyle(
-                    SpanStyle(
-                        color = if (record.isCorrect) FEEDBACK_CORRECT else FEEDBACK_WRONG,
-                        fontWeight = FontWeight.SemiBold,
-                    ),
-                ) {
-                    append(record.choice)
-                }
-            }
+            appendInlineContent(id = "blank-${blank.blankIndex}", alternateText = "____")
             cursor = blank.end
         }
         append(line.text, cursor, line.text.length)
@@ -1163,6 +1156,7 @@ private fun LyricRow(
 
     Text(
         text = text,
+        inlineContent = inline,
         style = style,
         color = ON_IMAGE_PRIMARY,
         modifier = Modifier
@@ -1171,6 +1165,31 @@ private fun LyricRow(
     )
 }
 
+/** 填空框本體：淡色底 + 圓角；答對綠、答錯紅、未答用 primary 淡底。 */
+@Composable
+private fun BlankSlot(record: ChoiceRecord?, isCurrent: Boolean) {
+    val (container, content) = when {
+        record == null -> MaterialTheme.colorScheme.primary.copy(alpha = if (isCurrent) 0.28f else 0.16f) to
+            ON_IMAGE_PRIMARY
+        record.isCorrect -> FEEDBACK_CORRECT.copy(alpha = 0.28f) to FEEDBACK_CORRECT
+        else -> FEEDBACK_WRONG.copy(alpha = 0.28f) to FEEDBACK_WRONG
+    }
+
+    Box(
+        modifier = Modifier
+            .fillMaxSize()
+            .clip(LyrianCorner.small)
+            .background(container),
+        contentAlignment = Alignment.Center,
+    ) {
+        Text(
+            text = record?.choice ?: "____",
+            style = MaterialTheme.typography.titleSmall,
+            color = content,
+            maxLines = 1,
+        )
+    }
+}
 /** 2×2 選項網格。不用帶 border 的 Surface 的 onClick——那會讓點擊失效。 */
 @Composable
 private fun OptionGrid(
