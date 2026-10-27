@@ -35,3 +35,9 @@ Thumbs.db
 
 # Kotlin 編譯器暫存
 .kotlin/
+
+# 本機暫存與大型素材（不納入版控）
+.tmp-ref/
+promo/
+__pycache__/
+*.pyc
