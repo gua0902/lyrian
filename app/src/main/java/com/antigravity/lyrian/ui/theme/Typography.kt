@@ -1,9 +1,11 @@
 package com.antigravity.lyrian.ui.theme
 
 import androidx.compose.material3.Typography
+import androidx.compose.ui.text.PlatformTextStyle
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.LineHeightStyle
 import androidx.compose.ui.unit.sp
 
 /**
@@ -12,14 +14,7 @@ import androidx.compose.ui.unit.sp
  * ## 自訂字體：假粉圓體（FakePearl）
  *
  * 擁有者把字型放在 `res/font/fake_pearl_semibold.ttf`。**Android 資源名稱
- * 只能有小寫字母、數字與底線**，所以檔名必須是 `fake_pearl_semibold.ttf`；
- * 目前 repo 裡的 `res/font/FakePearl-1.1` 不是合法資源（含大寫、連字號、點），
- * `R.font` 也無法引用，因此 [LyrianFontFamily] 先退回系統字體。
- *
- * ### 要真正套用，只做兩件事
- *
- * 1. 把字型檔改名放到 `app/src/main/res/font/fake_pearl_semibold.ttf`
- * 2. 把 [USE_CUSTOM_FONT] 改成 true
+ * 只能有小寫字母、數字與底線**，所以檔名必須是 `fake_pearl_semibold.ttf`。
  *
  * 所有文字都走 `MaterialTheme.typography`，所以不必改任何畫面程式碼。
  *
@@ -79,15 +74,51 @@ val LyrianTypography = Typography().let { base ->
 /**
  * 歌詞行的樣式。
  *
- * 依擁有者指定：歌詞字級與行距加大（1.6 倍），讓同一行出現兩個空時仍好讀。
+ * 依擁有者指定：歌詞字級與行距加大（1.8 倍），讓同一行出現兩個空時仍好讀。
+ *
+ * ## ⚠️ `includeFontPadding = true` 是「g / y / j 尾巴不被切」的關鍵
+ *
+ * Compose 從 1.4 起預設 **`includeFontPadding = false`**：行盒只算
+ * 「宣告的 ascender + descender + lineGap」，不含字型真正的墨跡範圍。
+ *
+ * 假粉圓體宣告的 `descender = −153/1024 = −0.149 em`，但它真正的字形
+ * （`g` 的尾巴、`y`、`j`、`,`）低到 **`yMin = −298/1024 = −0.291 em`**
+ * （`winDescent = 300/1024` 才是對的量）。少掉的 0.142 em，
+ * 在 16sp 時就是 2.3sp——剛好是尾巴的寬度，所以**每一行都會被切**。
+ *
+ * 打開 `includeFontPadding` 之後，行盒改用字型的 top/bottom（≈ ±0.29 em），
+ * 尾巴就落在盒子裡。搭配 `LineHeightStyle(Trim.None)` 避免行首行尾再被裁一次。
  */
 object LyricTextStyles {
-    /** 當前句：最大、Bold。 */
+    /**
+     * 行距倍率：字級 × 1.8。
+     *
+     * 見 [LyricLineMetrics] 與 `LyricLineHeightTest`：這是「整行文字都畫得進去」
+     * 的安全倍率。
+     */
+    const val LINE_HEIGHT_FACTOR = 1.8f
+
+    /**
+     * 讓行盒包含字型的完整墨跡（含 `g` 的下伸）。
+     *
+     * 三個歌詞相關樣式**都必須**帶上這個值；少一個，那個地方的字就會被切。
+     */
+    private val INCLUDE_FONT_PADDING = PlatformTextStyle(includeFontPadding = true)
+
+    /** 行高置中、不裁掉任何一端。 */
+    private val LINE_HEIGHT_STYLE = LineHeightStyle(
+        alignment = LineHeightStyle.Alignment.Center,
+        trim = LineHeightStyle.Trim.None,
+    )
+
+    /** 當前句：最大、最粗。 */
     val Current = TextStyle(
         fontFamily = LyrianFontFamily,
         fontWeight = FontWeight.Black,
         fontSize = 22.sp,
-        lineHeight = 36.sp,
+        lineHeight = 22.sp * LINE_HEIGHT_FACTOR,
+        platformStyle = INCLUDE_FONT_PADDING,
+        lineHeightStyle = LINE_HEIGHT_STYLE,
     )
 
     /** 上下文（上一句／下一句）：縮小並降低對比。 */
@@ -95,6 +126,21 @@ object LyricTextStyles {
         fontFamily = LyrianFontFamily,
         fontWeight = FontWeight.SemiBold,
         fontSize = 16.sp,
-        lineHeight = 27.sp,
+        lineHeight = 16.sp * LINE_HEIGHT_FACTOR,
+        platformStyle = INCLUDE_FONT_PADDING,
+        lineHeightStyle = LINE_HEIGHT_STYLE,
+    )
+
+    /**
+     * 選項卡上的字（`yacht` / `convertible`）：字型與本行歌詞相同，行高同樣要給足，
+     * 否則按鈕高度一收緊就會削掉尾巴。
+     */
+    val Option = TextStyle(
+        fontFamily = LyrianFontFamily,
+        fontWeight = FontWeight.Medium,
+        fontSize = 16.sp,
+        lineHeight = 16.sp * LINE_HEIGHT_FACTOR,
+        platformStyle = INCLUDE_FONT_PADDING,
+        lineHeightStyle = LINE_HEIGHT_STYLE,
     )
 }

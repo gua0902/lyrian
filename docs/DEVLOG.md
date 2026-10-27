@@ -38,7 +38,7 @@ error: invalid source release: 21
 
 ### APK 預期路徑（build 成功後）
 ```
-C:\Antigravity\lyrian\android\app\build\outputs\apk\debug\app-debug.apk
+C:\AgentWorkspace\lyrian\android\app\build\outputs\apk\debug\app-debug.apk
 ```
 
 > ⚠️ **2026-10-06 更新**：此 APK 與整個 `android/` 目錄已在 TASK-02 清除（視為產物）。需要時重新產生即可。
@@ -2488,3 +2488,112 @@ app bar 家族**。真正的 `MaterialExpressiveTheme`、八級 Shapes、彈性 
 - `assembleDebug` BUILD SUCCESSFUL，APK **25.36 MB**（Compose 1.9 比 1.7 大約 +2.8 MB）
 - 全專案搜尋 `ZH_TRANSLATE` / `reviewTranslation` / `PracticeModeSheet` / 翻譯字串 → 0 筆
 - **實機未驗證（無裝置）**：大標題收合、AI 測試 Sheet 的實際呈現
+
+## TASK-30：填空流程硬化（連點、進度、生命週期、離線、版面、效能）
+
+擁有者以「QA／UI／狀態／效能／紅隊」五個視角要求一次邊緣情況盤點。
+這一輪把盤點結果直接做成防護，**每一項都留下一個測試**。
+
+### 一、連點會答錯下一題（最嚴重，會污染資料）
+
+`onSelectOption(choice)` 只收到「使用者點了哪個字」，沒有收到「他點的是哪一題」。
+作答之後 `activeBlankIndex` 立刻換到下一空，而選項格是固定的 2×2 版面：
+
+```
+第一下：答了 blank 5（deed）
+         ↑ 同一格在 100ms 內換成 blank 6 的選項
+第二下：打到「platinum」→ 被記成 blank 6 的錯答（寫進 attempt、拉低正確率）
+```
+
+修法兩層：
+
+1. **UI 帶著 blankIndex**：`AnimatedContent { blankIndex -> OptionGrid(...) }`，
+   回呼改成 `onSelectOption(blankIndex, choice)`。交叉淡入期間舊格仍可點，
+   但它的 `blankIndex` 已經不是 `activeBlankIndex`。
+2. **`AnswerGate`（純函式、可測）** 判斷四種結果：
+   `Accept` / `AlreadyAnswered` / `StaleGrid` / `TooSoon`。
+   換題後 300ms 內的點擊視為殘點；`AlreadyAnswered` 不寫 log（那是最常見的正常情況）。
+
+### 二、程序被回收後進度全失、統計重複累加
+
+`PracticeViewModel` 會從 Room 重建歌詞與挖空（種子固定，題目一致），
+但 `selections` 是空的 → 使用者重答一次，`attempt` 與每日統計就**多算一次**。
+
+新增 `ProgressSnapshot`：把作答結果與開始時間寫進 `SavedStateHandle`
+（跟著 NavBackStackEntry 的 saved state 一起被系統保存）。**沒有動 Room schema**。
+
+- 只採用「同一首歌」且 `blankIndex` 還在題數範圍內的進度。
+- 重玩時清掉（否則下次程序被回收會「復活」舊進度）。
+
+### 三、切到別的 App 音樂繼續播
+
+manifest 的註解寫著「切到別的 App 就暫停」，但**沒有任何 lifecycle 觀察者**。
+用 `LifecycleEventEffect(ON_STOP)` → 暫停（不淡出：使用者已經離開畫面，
+淡出的 0.5 秒只是讓聲音在別的 App 上多響一下），`ON_START` **不自動恢復**。
+同時把 50ms 的位置輪詢一起關掉（`foreground` 旗標），避免「在背景被交界判定暫停、
+回來看到一個莫名其妙的暫停」。
+
+### 四、WebView 從未 destroy（真的記憶體洩漏）
+
+`detach()` 只把參考設成 null，`release()` 沒有呼叫端，`WebView.destroy()` 從沒被呼叫。
+WebView 內有 JS `setInterval(100ms)` 與 Java-JS 橋接，**每次進出練習頁都漏一個**
+（含影片解碼器）。現在：`detach()` 把實例存進 `pendingDestroy`（設定變更要能接續播放），
+`onCleared()` → `release()` 先 `removeView` 再 `destroy()`；下次 `attach()` 也會銷毀舊的。
+
+順帶修一個既有 bug：設定變更重建後 `attach()` 用 `pendingLoad.startAtMs`（**原始起點**）
+重播，切一次深色模式就被拉回歌曲開頭。改成從 `lastPositionMs` 接續。
+
+### 五、斷網時顯示「找不到錄音版本」
+
+`YouTubeWebSearch` 把 `IOException` 吞成空清單，於是「連不上」與「沒有結果」
+在 UI 上完全一樣。改成回傳 `Result<List<YouTubeVideo>>`：連線層失敗往上丟，
+伺服器有回應但沒有結果才是空清單。VM 分兩條文案（`NO_AUDIO_OFFLINE` / `NO_AUDIO_MATCH`）。
+
+### 六、g / y / j 的下伸部被切（第三次修，這次有量測）
+
+前兩次都猜錯層級（先猜遮罩、再猜行高）。這次直接讀字型的度量表：
+
+```
+hhea.descender = -153/1024 = -0.149 em   ← Compose 量測只認這個
+font bbox yMin = -298/1024 = -0.291 em   ← g 的尾巴實際到這裡
+OS/2 winDescent = 300/1024
+```
+
+Compose 從 1.4 起預設 **`includeFontPadding = false`**，行盒只算宣告的
+ascender + descender，真實墨跡超出盒子的部分在圖層／裁剪處就會被切。
+
+修法：三個歌詞樣式全部加上 `PlatformTextStyle(includeFontPadding = true)` 與
+`LineHeightStyle(Alignment.Center, Trim.None)`。測試 `LyricLineHeightTest` 斷言
+`platformStyle.toString()` 含 `includeFontPadding=true`（該欄位是 internal，讀不到）。
+
+### 七、其他
+
+| 問題 | 修法 |
+|---|---|
+| 空框寬度無上限（窄螢幕 + 長答案會把字推出畫面） | `BlankPlaceholderMetrics.widthSp()` 夾在可用寬度內（純函式 + 6 個測試） |
+| 字庫只顯示 200 筆，卻顯示總數 | `WordbankPaging.hasMore()` + 「載入更多」（沒有加 Paging3） |
+| 小螢幕／大字級把歌詞區壓成 0 高 | 選項區 `heightIn(max = min(220dp, 視窗高 × 0.32))` + 區塊內捲動 |
+| 選項卡 `height(56dp)` 削字 | 改 `heightIn(min = 56.dp)`，文字可撐開 |
+| `lineIndexAt` 每 50ms O(n) 掃描 | 抽出 `LyricTimeline.lineAt()` 二分搜尋（歌詞時間軸依建構就是單調的） |
+| 每秒 20 次全頁重組 | `playbackPositionMs` 從 `PracticeUiState` 抽成獨立 `StateFlow`，只有 `TimelineScrubber` 訂閱 |
+| `LyricRow` 每次重組都重建 `AnnotatedString` | `remember(line, selections, isCurrent, maxWidthSp, …)` |
+| TalkBack 唸 `____`、選項沒有角色 | `alternateText` 改「空格」、`BlankSlot` 加 contentDescription、`OptionChip` 加 `Role.Button` + `disabled()` |
+| `VocabDao.addFromError` 死碼 | 刪除；instrumented test 改用 `ensureInWordbank`（手動加入是唯一入口） |
+| 字庫空狀態寫「答錯的字會自動進來」 | 改成「在結果頁按「＋」就能把單字收藏進來」 |
+| `AGENTS.md` 宣稱 Expo、`UI-GUIDE.md` 寫 `constants/theme.ts` | 兩份都改寫成 Compose 版 |
+
+### 驗證
+
+- **235 個單元測試全過**（新增 `AnswerGateTest` 8、`ProgressSnapshotTest` 6、
+  `BlankPlaceholderMetricsTest` 6、`WordbankPagingTest` 5、`LyricTimelineTest` 7，
+  `LyricLineHeightTest` +2）
+- `assembleDebug` BUILD SUCCESSFUL，APK 29.65 MB
+- **實機仍未驗證**：g 的下伸、小螢幕版面、切 App 回來的暫停狀態
+
+### 已知風險
+
+- `includeFontPadding = true` 是我第三次修這個問題。若仍被切，代表裁切來源不是
+  行盒——下一步是加一個只在 `DEBUG` 開啟的邊界覆蓋層，用一張截圖定位真正的裁切點，
+  不要再盲改。
+- 300ms 的防抖是經驗值：它必須大於換題動畫的視覺穩定時間、小於人看清題目的時間。
+  若使用者覺得「換題後要等一下才能點」，調 `AnswerGate.DEBOUNCE_MS` 一個常數即可。

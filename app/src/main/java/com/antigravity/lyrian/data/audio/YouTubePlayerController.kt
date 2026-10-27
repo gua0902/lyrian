@@ -70,6 +70,15 @@ class YouTubePlayerController @Inject constructor() {
 
     private var webView: WebView? = null
 
+    /**
+     * 已經 `detach()`、但還沒 `destroy()` 的 WebView。
+     *
+     * `detach()` 發生在畫面被處置時（可能是設定變更重建），那時不能 destroy——
+     * 新的 `attach()` 要用 `pendingLoad` 接續播放。真正的 destroy 在
+     * [release]（離開練習頁）或下一次 [attach]（舊的已被新的一個取代）。
+     */
+    private var pendingDestroy: WebView? = null
+
     /** 目前要載入的影片；WebView 重建（旋轉）後用它恢復。 */
     private var pendingLoad: LoadRequest? = null
 
@@ -126,6 +135,17 @@ class YouTubePlayerController @Inject constructor() {
     @SuppressLint("SetJavaScriptEnabled")
     fun attach(view: WebView) {
         if (webView === view) return
+
+        // 上一次 detach() 留下的舊 WebView：新的已經要接手，舊的一定要 destroy，
+        // 否則每次設定變更就漏一個（含 100ms 的 JS timer 與影片解碼器）。
+        pendingDestroy?.takeIf { it !== view }?.let { old ->
+            pendingDestroy = null
+            runCatching {
+                (old.parent as? android.view.ViewGroup)?.removeView(old)
+                old.destroy()
+            }.onFailure { log("銷毀舊 WebView 失敗：$it") }
+        }
+
         webView = view
         injected = false
 
@@ -182,18 +202,49 @@ class YouTubePlayerController @Inject constructor() {
         view.addJavascriptInterface(Bridge(), "Bridge")
 
         pendingLoad?.let { request ->
-            log("attach：恢復播放 ${request.videoId} @${request.startAtMs}ms")
-            view.post { load(request.videoId, request.startAtMs, request.autoPlay) }
+            // 重新綁定（設定變更重建 Activity）時從**目前位置**接續，
+            // 而不是從 `request.startAtMs`（那是第一次載入時的起點）。
+            // 舊版用 startAtMs，於是切一次深色模式就會被拉回歌曲開頭。
+            val resumeMs = lastPositionMs.coerceAtLeast(request.startAtMs)
+            log("attach：恢復播放 ${request.videoId} @${resumeMs}ms")
+            view.post { load(request.videoId, resumeMs, request.autoPlay) }
         } ?: run {
             log("attach：尚無影片，等待 prepareAudio()")
         }
     }
 
-    /** 畫面結束時解除綁定。播放器的狀態刻意保留，回到同一頁時可直接恢復。 */
+    /**
+     * 畫面結束時解除綁定。**不 destroy**——設定變更（深色模式、字級）會重建
+     * Activity，新的 `attach()` 需要 `pendingLoad` 才能接續播放。
+     * 真正的釋放交給 [release]。
+     */
     fun detach() {
-        webView?.removeJavascriptInterface("Bridge")
+        val view = webView ?: return
+        view.removeJavascriptInterface("Bridge")
+        pendingDestroy = view
         webView = null
         injected = false
+    }
+
+    /**
+     * 真的釋放 WebView（離開練習頁時由 `ViewModel.onCleared` 呼叫）。
+     *
+     * WebView 內部有 JS `setInterval`（每 100ms 回報一次）與 Java-JS 橋接，
+     * 只把參考設成 null **不會**停掉它們：舊版每次進出練習頁都漏掉一個
+     * WebView（連同它的影片解碼器）。一定要先從 parent 移除再 `destroy()`。
+     */
+    fun release() {
+        stop()
+        val doomed = listOfNotNull(webView, pendingDestroy).distinct()
+        webView = null
+        pendingDestroy = null
+        injected = false
+        doomed.forEach { view ->
+            runCatching {
+                (view.parent as? android.view.ViewGroup)?.removeView(view)
+                view.destroy()
+            }.onFailure { log("destroy WebView 失敗：$it") }
+        }
     }
 
     // ---------- 指令 ----------
@@ -362,11 +413,6 @@ class YouTubePlayerController @Inject constructor() {
               return 'stopped';
             })()
         """ }
-    }
-
-    fun release() {
-        stop()
-        detach()
     }
 
     // ---------- JS 注入 ----------

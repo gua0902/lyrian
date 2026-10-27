@@ -61,18 +61,28 @@ object LineBoundary {
         return line.startMs + LAST_LINE_WINDOW_MS
     }
 
-    /** 這一行對應的題目；這一行沒有挖空時回傳 null。 */
-    fun questionOf(lineIndex: Int, questions: List<FillChoiceQuestion>): FillChoiceQuestion? =
-        questions.firstOrNull { it.lineIndex == lineIndex }
-
     /**
-     * 這個題目算不算「已作答」。
+     * 這一行**還沒作答**的第一題；沒有東西要答時回傳 null。
      *
-     * - 沒有題目（該行沒挖空）→ true：**沒有東西要檢查**，交界直接通過
-     * - 有題目 → `selections` 裡有這個 blankIndex 才算答過
+     * ## ⚠️ 這裡是「同一句兩個空」的關鍵
      *
-     * 判定刻意只看「有沒有作答」，不看對錯——擁有者要求的是「答了就可以繼續」。
+     * 舊版只問「這一行有沒有題目」（不看答了沒），於是播放中的輪詢每 50ms 就把
+     * `activeBlankIndex` 拉回**這一行第一題**——使用者剛填完第一個空、正要答第二個，
+     * 50 毫秒後選項又被換回已作答的那一題，看起來就是「填完第一格就卡住」。
+     *
+     * 現在只回傳「還沒答」的那一題：
+     * ```
+     * 這一行還有空 → 端上它的選項（同一句第二個空立刻出現）
+     * 這一行全答完 → null（呼叫端**不得**改動焦點，讓下一題自然接上）
+     * ```
+     *
+     * 判定只看「有沒有作答」，不看對錯——擁有者要求的是「答了就可以繼續」。
      */
-    fun isAnswered(question: FillChoiceQuestion?, selections: Map<Int, ChoiceRecord>): Boolean =
-        question == null || selections.containsKey(question.blankIndex)
+    fun firstUnansweredOf(
+        lineIndex: Int,
+        questions: List<FillChoiceQuestion>,
+        selections: Map<Int, ChoiceRecord>,
+    ): FillChoiceQuestion? = questions.firstOrNull {
+        it.lineIndex == lineIndex && !selections.containsKey(it.blankIndex)
+    }
 }

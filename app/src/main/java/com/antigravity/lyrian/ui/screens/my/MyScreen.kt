@@ -16,13 +16,11 @@ import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Bookmarks
 import androidx.compose.material.icons.filled.ChevronRight
-import androidx.compose.material.icons.filled.History
-import androidx.compose.material.icons.filled.Notifications
-import androidx.compose.material.icons.filled.Person
 import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.ExperimentalMaterial3Api
+import androidx.compose.material3.FilledTonalButton
 import androidx.compose.material3.Icon
 import androidx.compose.material3.ListItem
 import androidx.compose.material3.ListItemDefaults
@@ -30,12 +28,10 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
-import androidx.compose.material3.TopAppBar
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
@@ -48,13 +44,25 @@ import com.antigravity.lyrian.ui.theme.LyrianMotion
 /**
  * 「我的」頁。
  *
- * 依 PRD v2：**只留連勝、學會幾個字、今天待複習**，右上角齒輪進設定。
- * 刻意不塞其他資訊。
+ * ## 這一頁的定位：儀表板，不是設定頁
+ *
+ * 只回答三個問題（擁有者指定的 PRD v2）：**我連續練了幾天、學了幾個字、
+ * 今天還有多少要複習**。加上一個「今天的練習量」與一個「開始練習」按鈕——
+ * 這是使用者進來最可能想做的事。
+ *
+ * ## 舊版被拿掉的东西
+ *
+ * - 「每日學習提醒」「學習紀錄」兩列——兩個都只是寫著「即將推出」的死入口。
+ *   一個按了沒反應的列，比沒有那一列更糟：使用者會以為 App 壞了。
+ *   真的要做時再連同通知權限、歷史頁一起加回來。
+ * - 一組「保留給未來圖示」的 `unusedIcons`（那是為了消 unused import 警告而存在的
+ *   假資料，現在不需要）。
  */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun MyScreen(
     onOpenSettings: () -> Unit,
+    onStartPractice: () -> Unit,
     viewModel: MyViewModel = hiltViewModel(),
 ) {
     val state by viewModel.uiState.collectAsStateWithLifecycle()
@@ -76,6 +84,8 @@ fun MyScreen(
         ) {
             StreakCard(streakDays = state.streakDays, week = state.weekActivity)
 
+            // 2×2 統計。原本「今天待複習」單獨佔一整列，長得比旁邊兩張卡片大，
+            // 看起來像重點——但它只是四個數字裡的一個。
             Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
                 StatCard(
                     value = state.totalScore,
@@ -88,38 +98,33 @@ fun MyScreen(
                     modifier = Modifier.weight(1f),
                 )
             }
+            Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+                StatCard(
+                    value = state.dueForReview,
+                    label = stringResource(R.string.my_due_today),
+                    modifier = Modifier.weight(1f),
+                )
+                StatCard(
+                    value = state.todayAttempts,
+                    label = stringResource(R.string.my_today_practice),
+                    modifier = Modifier.weight(1f),
+                )
+            }
 
-            StatCard(
-                value = state.dueForReview,
-                label = stringResource(R.string.my_due_today),
-                modifier = Modifier.fillMaxWidth(),
-            )
-
-            Text(
-                text = stringResource(R.string.my_section_learning),
-                style = MaterialTheme.typography.titleMedium,
-                modifier = Modifier.padding(top = 8.dp),
-            )
+            FilledTonalButton(
+                onClick = onStartPractice,
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(top = 4.dp),
+            ) {
+                Text(stringResource(R.string.my_action_practice))
+            }
 
             SettingsRow(
                 icon = Icons.Filled.Settings,
                 title = stringResource(R.string.settings_title),
                 subtitle = stringResource(R.string.settings_subtitle),
                 onClick = onOpenSettings,
-            )
-            SettingsRow(
-                icon = Icons.Filled.Notifications,
-                title = stringResource(R.string.settings_daily_reminder),
-                subtitle = stringResource(R.string.settings_coming_soon),
-                onClick = {},
-                enabled = false,
-            )
-            SettingsRow(
-                icon = Icons.Filled.History,
-                title = stringResource(R.string.settings_history),
-                subtitle = stringResource(R.string.settings_coming_soon),
-                onClick = {},
-                enabled = false,
             )
 
             Text(
@@ -228,11 +233,10 @@ private fun StatCard(value: Int, label: String, modifier: Modifier = Modifier) {
 
 @Composable
 private fun SettingsRow(
-    icon: ImageVector,
+    icon: androidx.compose.ui.graphics.vector.ImageVector,
     title: String,
     subtitle: String,
     onClick: () -> Unit,
-    enabled: Boolean = true,
 ) {
     ListItem(
         headlineContent = { Text(title) },
@@ -244,16 +248,6 @@ private fun SettingsRow(
         ),
         modifier = Modifier
             .fillMaxWidth()
-            .then(
-                if (enabled) Modifier.clickableRow(onClick) else Modifier,
-            ),
+            .clickable(onClick = onClick),
     )
 }
-
-/** ListItem 本身不吃 onClick，這裡補上。 */
-private fun Modifier.clickableRow(onClick: () -> Unit): Modifier =
-    this.then(Modifier.clickable(onClick = onClick))
-
-/** 保留給尚未使用的圖示，避免 unused import 警告。 */
-@Suppress("unused")
-private val unusedIcons = listOf(Icons.Filled.Person, Icons.Filled.Bookmarks)

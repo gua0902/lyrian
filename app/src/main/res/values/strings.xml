@@ -44,6 +44,7 @@
     <string name="practice_audio_coming_soon">音源開發中</string>
     <string name="practice_play">播放</string>
     <string name="practice_pause">暫停</string>
+    <string name="practice_blank_slot">空格</string>
 
     <!-- 字庫 -->
     <string name="wordbank_banner_title">每個錯字，都是進步</string>
@@ -53,23 +54,23 @@
     <string name="wordbank_filter_reviewing">待複習</string>
     <string name="wordbank_empty">還沒有收藏任何單字。去練習一首歌吧！</string>
     <string name="wordbank_empty_filtered">這個分類目前沒有單字。</string>
-    <string name="wordbank_empty_hint">答錯的字會自動進來；延伸詞彙也可以用「加入字庫」手動收藏。</string>
+    <string name="wordbank_empty_hint">在結果頁按「＋」就能把單字收藏進來。</string>
     <string name="wordbank_error_count">錯誤 %1$d 次</string>
+    <string name="wordbank_load_more">載入更多</string>
 
     <!-- 我的 -->
     <string name="my_streak">連續學習 %1$d 天</string>
     <string name="my_total_score">累積總分</string>
     <string name="my_mastered_words">已學會的單字</string>
     <string name="my_due_today">今天待複習</string>
+    <string name="my_today_practice">今天的練習</string>
+    <string name="my_action_practice">開始練習</string>
     <string name="my_section_learning">依你的節奏學習</string>
     <string name="my_footer">今天的旋律，也會成為明天的進步。</string>
 
     <!-- 設定 -->
     <string name="settings_title">設定</string>
     <string name="settings_subtitle">外觀、播放、學習、AI、資料</string>
-    <string name="settings_daily_reminder">每日學習提醒</string>
-    <string name="settings_history">學習紀錄</string>
-    <string name="settings_coming_soon">即將推出</string>
     <string name="settings_appearance">外觀與語言</string>
     <string name="settings_playback">播放與音源</string>
     <string name="settings_learning">學習與複習</string>

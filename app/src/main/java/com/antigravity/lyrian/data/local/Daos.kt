@@ -149,68 +149,18 @@ interface VocabDao {
     )
 
     /**
-     * 把一個答錯的單字收進字庫。
-     *
-     * 已存在時：`errorCount` +1、更新語境、狀態由 `mastered` 退回 `learning`
-     * （答錯代表還沒真的學會），但**保留最初的 `firstSongId` 與 `createdAt`**。
-     *
-     * @param cefr 這個字的 CEFR 等級（模組 D 之後字庫會用到）
-     * @return `Pair<vocabId, isNew>`；`isNew` 供每日「新單字」統計使用
-     */
-    @Transaction
-    suspend fun addFromError(
-        lemma: String,
-        surfaceForm: String?,
-        contextLine: String?,
-        songId: Long?,
-        now: Long,
-        cefr: String? = null,
-    ): Pair<Long, Boolean> {
-        val existing = findByLemma(lemma)
-        if (existing == null) {
-            val id = insert(
-                VocabEntity(
-                    lemma = lemma,
-                    surfaceForm = surfaceForm,
-                    firstSongId = songId,
-                    contextLine = contextLine,
-                    cefr = cefr,
-                    errorCount = 1,
-                    createdAt = now,
-                    updatedAt = now,
-                ),
-            )
-            return id to true
-        }
-
-        update(
-            existing.copy(
-                errorCount = existing.errorCount + 1,
-                surfaceForm = surfaceForm ?: existing.surfaceForm,
-                contextLine = contextLine ?: existing.contextLine,
-                cefr = existing.cefr ?: cefr,
-                firstSongId = existing.firstSongId ?: songId,
-                status = if (existing.status == VocabEntity.STATUS_MASTERED) {
-                    VocabEntity.STATUS_LEARNING
-                } else {
-                    existing.status
-                },
-                updatedAt = now,
-            ),
-        )
-        return existing.id to false
-    }
-
-    /**
      * 把一個字收進字庫，**已存在時完全不動它**（模組 D）。
      *
-     * 與 [addFromError] 的差別：
-     *  - 不做 `errorCount + 1`（答對也算學習，不是錯誤）
-     *  - 不改 `status`（不把已掌握的字打回學習中）
-     *  - 只補上還缺的欄位（CEFR、語境）
+     * ## 這是字庫唯一的寫入入口
      *
-     * 這是「B1 以上不論對錯都入庫」與「結果頁手動加入」共用的入口，
-     * 因此同一首歌重練幾次都不會把字庫灌爆。
+     * 依規格 §四：答對、答錯、練習完成都**不得**自動寫入生詞本。
+     * 唯一的呼叫端是結果頁的「＋」（見 `PracticeViewModel.onAddToWordbank`）。
+     *
+     * 舊版還有一個 `addFromError`（答錯自動入庫、`errorCount + 1`、把已掌握的字
+     * 打回學習中）——那個功能已依擁有者指示移除，對應的 DAO 方法也一併刪掉，
+     * 不留一個「看起來還能用」的死接口。
+     *
+     * 語意上它是冪等的：同一首歌重練幾次都不會把字庫灌爆。
      *
      * @return 該字的 `vocabId`
      */

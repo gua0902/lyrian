@@ -220,6 +220,9 @@ fun LyrianApp(
                 composable(TopLevelDestination.MY.route) {
                     MyScreen(
                         onOpenSettings = { navController.navigate(Routes.SETTINGS) },
+                        // 「開始練習」＝回到首頁搜尋。用頂層導覽的規則（saveState）而不是
+                        // 直接 navigate，才不會在 back stack 疊出一堆首頁。
+                        onStartPractice = { navigateToTopLevel(TopLevelDestination.HOME) },
                     )
                 }
 

@@ -21,6 +21,7 @@ import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBarDefaults
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
@@ -114,6 +115,18 @@ fun WordbankScreen(
                         // 切換篩選或加入新字時，卡片是滑順移動而不是瞬間重排
                         modifier = Modifier.animateItem(),
                     )
+                }
+
+                // 視窗被填滿就還有下一頁：字庫超過一頁時，舊單字不會再「消失」
+                if (state.hasMore) {
+                    item(key = "load-more") {
+                        TextButton(
+                            onClick = viewModel::onLoadMore,
+                            modifier = Modifier.fillMaxWidth(),
+                        ) {
+                            Text(stringResource(R.string.wordbank_load_more))
+                        }
+                    }
                 }
             }
         }
@@ -256,30 +269,6 @@ private fun VocabCard(
             }
 
         }
-    }
-}
-
-@Composable
-private fun TagChip(text: String, emphasized: Boolean) {
-    Card(
-        colors = CardDefaults.cardColors(
-            containerColor = if (emphasized) {
-                MaterialTheme.colorScheme.secondaryContainer
-            } else {
-                MaterialTheme.colorScheme.surfaceContainerHigh
-            },
-        ),
-    ) {
-        Text(
-            text = text,
-            style = MaterialTheme.typography.labelSmall,
-            color = if (emphasized) {
-                MaterialTheme.colorScheme.onSecondaryContainer
-            } else {
-                MaterialTheme.colorScheme.onSurfaceVariant
-            },
-            modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp),
-        )
     }
 }
 

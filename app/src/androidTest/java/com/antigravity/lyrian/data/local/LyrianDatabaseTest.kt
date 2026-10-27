@@ -118,11 +118,12 @@ class LyrianDatabaseTest {
     @Test
     fun `刪除歌曲時字庫必須保留`() = runTest {
         val songId = db.songDao().upsertByLrclibId(song(1))
-        val (vocabId, _) = db.vocabDao().addFromError(
+        val vocabId = db.vocabDao().ensureInWordbank(
             lemma = "hope",
             surfaceForm = "Hope",
             contextLine = "I keep a little hope inside",
             songId = songId,
+            cefr = null,
             now = 1_760_000_000_000L,
         )
 
@@ -155,34 +156,33 @@ class LyrianDatabaseTest {
     }
 
     @Test
-    fun `重複答錯同一個字時累加_errorCount_而不新增一列`() = runTest {
+    fun `手動加入同一個字兩次只會有一列`() = runTest {
+        // 自動入庫（`addFromError`）已依規格移除，字庫只剩「使用者手動加入」這條路徑；
+        // 它必須是冪等的，否則重練同一首歌會把字庫灌爆。
         val now = 1_760_000_000_000L
-        val (firstId, isNew1) = db.vocabDao().addFromError("hope", "hope", "ctx 1", null, now)
-        val (secondId, isNew2) = db.vocabDao().addFromError("hope", "HOPE", "ctx 2", null, now + 100)
+        val firstId = db.vocabDao().ensureInWordbank("hope", "hope", "ctx 1", null, null, now)
+        val secondId = db.vocabDao().ensureInWordbank("hope", "HOPE", "ctx 2", null, null, now + 100)
 
         assertEquals(firstId, secondId)
-        assertEquals(true, isNew1)
-        assertEquals(false, isNew2)
 
         val vocab = db.vocabDao().observeAll().first()
         assertEquals(1, vocab.size)
-        assertEquals(2, vocab[0].errorCount)
-        assertEquals("ctx 2", vocab[0].contextLine)
+        assertEquals("ctx 1", vocab[0].contextLine)
         assertEquals(now, vocab[0].createdAt)
     }
 
     @Test
-    fun `已掌握的單字再答錯時退回_learning`() = runTest {
+    fun `已掌握的單字再被加入時維持已掌握`() = runTest {
         val now = 1_760_000_000_000L
-        val (id, _) = db.vocabDao().addFromError("hope", null, null, null, now)
+        val id = db.vocabDao().ensureInWordbank("hope", null, null, null, null, now)
         val vocab = db.vocabDao().observeAll().first().first()
         db.vocabDao().update(vocab.copy(status = VocabEntity.STATUS_MASTERED))
 
-        db.vocabDao().addFromError("hope", null, null, null, now + 1)
+        db.vocabDao().ensureInWordbank("hope", null, null, null, null, now + 1)
 
         val updated = db.vocabDao().observeAll().first().first()
         assertEquals(id, updated.id)
-        assertEquals(VocabEntity.STATUS_LEARNING, updated.status)
+        assertEquals(VocabEntity.STATUS_MASTERED, updated.status)
     }
 
     @Test
@@ -207,8 +207,8 @@ class LyrianDatabaseTest {
     @Test
     fun `字庫統計可依狀態查詢`() = runTest {
         val now = 1_760_000_000_000L
-        db.vocabDao().addFromError("alpha", null, null, null, now)
-        val (betaId, _) = db.vocabDao().addFromError("bravo", null, null, null, now)
+        db.vocabDao().ensureInWordbank("alpha", null, null, null, null, now)
+        val betaId = db.vocabDao().ensureInWordbank("bravo", null, null, null, null, now)
         val beta = db.vocabDao().observeAll().first().first { it.id == betaId }
         db.vocabDao().update(beta.copy(status = VocabEntity.STATUS_MASTERED))
 

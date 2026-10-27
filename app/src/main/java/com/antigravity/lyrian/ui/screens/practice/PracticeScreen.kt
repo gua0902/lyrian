@@ -21,6 +21,7 @@ import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
@@ -29,6 +30,7 @@ import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
@@ -66,13 +68,20 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.blur
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.drawWithContent
 import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.IntOffset
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
+import androidx.compose.ui.graphics.BlendMode
+import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.CompositingStrategy
 import androidx.compose.ui.graphics.graphicsLayer
 import kotlin.math.roundToInt
 import kotlin.math.sin
@@ -82,12 +91,14 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalHapticFeedback
 import androidx.compose.ui.res.stringResource
-import androidx.compose.ui.text.AnnotatedString
+import androidx.compose.ui.semantics.Role
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.disabled
+import androidx.compose.ui.semantics.role
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.SpanStyle
 import androidx.compose.foundation.text.appendInlineContent
-import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.buildAnnotatedString
-import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.text.withStyle
@@ -95,6 +106,8 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import android.webkit.WebView
 import androidx.hilt.navigation.compose.hiltViewModel
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.compose.LifecycleEventEffect
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import coil.compose.AsyncImage
 import coil.request.ImageRequest
@@ -174,6 +187,53 @@ private val PREVIOUS_LINE_PEEK = 48.dp
 
 /** 歌詞行距（仿 Apple Music 的寬鬆排版）。 */
 private val LYRIC_LINE_SPACING = 22.dp
+
+/** 歌詞區左右內距。空框寬度上限要用「扣掉這個之後」的寬度算。 */
+private val LYRIC_CONTENT_PADDING = 20.dp
+
+/**
+ * 選項卡的最小高度。
+ *
+ * 只是下限：文字（16sp 字級 + 1.8 行高 ≈ 29sp）加上下內距 8dp 會把高度撐到 61dp，
+ * 長字與放大字級都不會被削。
+ */
+private val OPTION_MIN_HEIGHT = 56.dp
+
+/** 選項區的高度上限（絕對值）。 */
+private val OPTIONS_MAX_HEIGHT = 220.dp
+
+/**
+ * 選項區最多吃掉視窗高度的幾分之幾。
+ *
+ * 0.32 的意思是「至少留 2/3 給歌詞」。小螢幕或字級放大時，選項區在區塊內捲動，
+ * 而不是把上方的歌詞區壓成 0 高（舊版的症狀：整個歌詞區空白）。
+ */
+private const val OPTIONS_MAX_FRACTION = 0.32f
+
+/**
+ * 歌詞文字節點的**量測高度**下限（字級的倍數）。
+ *
+ * ## 為什麼要另外墊高，而不是只調 `lineHeight`
+ *
+ * `lineHeight` 只影響「行距」，量測高度仍是 `行數 × 行高`；
+ * 而文字與其圖層只在**量測尺寸**內繪製。假粉圓體的 descender 宣告 −0.149 em，
+ * 真正的 `g` / `y` / `j` / `p` 尾巴卻到 −0.291 em——超出量測尺寸的部分一律被剪。
+ *
+ * 1.5 倍 = 字身（1.0 em）再留 0.5 em 的緩衝，遠大於 0.291 em 的下伸，
+ * 也吃得下任意 `lineHeight` 調動。
+ */
+private const val LYRIC_TEXT_HEIGHT_SLACK = 1.5f
+
+/**
+ * 三點那一行的淡出帶高。
+ *
+ * 三點行在任何歌詞之上，歌詞捲到這裡時柔和消失（見 `lyricEdgeFade`）。
+ * 取 12dp 只有半行字高，不會讓上一句整個變淡。
+ *
+ * ⚠️ 遮罩**只加在這一條**，不可以加在歌詞清單上：離屏圖層會把畫在清單上緣之外的
+ * g / j / y 下伸部夾掉（擁有者回報的「g 被切」就是這個）。
+ */
+private val DOTS_FADE_HEIGHT = 12.dp
 
 /**
  * 封面／播放器容器的**寬度**（高度依影片比例算）。
@@ -258,6 +318,12 @@ fun PracticeScreen(
 ) {
     val state by viewModel.uiState.collectAsStateWithLifecycle()
 
+    // 切到別的 App 就暫停（manifest 的原則：不做背景播放）。
+    // ⚠️ `ON_STOP` 而不是 `ON_PAUSE`：對話框、通知下拉、權限彈窗都只會 ON_PAUSE，
+    // 那些情況下音樂應該繼續；只有「真的離開畫面」才停。
+    LifecycleEventEffect(Lifecycle.Event.ON_STOP) { viewModel.onAppBackgrounded() }
+    LifecycleEventEffect(Lifecycle.Event.ON_START) { viewModel.onAppForegrounded() }
+
     // contentWindowInsets = 0：insets 由 PlayerHeader 單獨處理，避免重複疊加
     Scaffold(contentWindowInsets = WindowInsets(0)) { innerPadding ->
         when {
@@ -302,7 +368,7 @@ private fun PracticeContent(
     state: PracticeUiState,
     player: com.antigravity.lyrian.data.audio.YouTubePlayerController,
     onBack: () -> Unit,
-    onSelectOption: (String) -> Unit,
+    onSelectOption: (Int, String) -> Unit,
     onNext: () -> Unit,
     onTogglePlayPause: () -> Unit,
     onSeekPlayback: (Long) -> Unit,
@@ -348,8 +414,13 @@ private fun PracticeContent(
         onNext()
     }
 
-    Box(modifier = modifier.fillMaxSize()) {
+    BoxWithConstraints(modifier = modifier.fillMaxSize()) {
         AlbumBackdrop(coverUrl = state.coverUrl)
+
+        // 選項區的最大高度：跟著實際視窗高度縮放，而不是寫死。
+        // 小螢幕或字級放大時，選項區只吃掉約 1/3，剩下的都留給歌詞；
+        // 選項太多就在區塊內捲動，不會把歌詞區壓成 0 高（舊版的症狀是整片空白）。
+        val optionsMaxHeight = minOf(OPTIONS_MAX_HEIGHT, maxHeight * OPTIONS_MAX_FRACTION)
 
         Column(modifier = Modifier.fillMaxSize()) {
             PlayerHeader(
@@ -364,7 +435,6 @@ private fun PracticeContent(
                     isLoading = state.isAudioLoading,
                     isPlaying = state.isPlaying,
                     isBuffering = state.isBuffering,
-                    positionMs = state.playbackPositionMs,
                     durationMs = state.playbackDurationMs,
                     notice = state.playbackError ?: state.audioNotice,
                     lyricOffsetMs = state.lyricOffsetMs,
@@ -381,8 +451,11 @@ private fun PracticeContent(
 
             // 模組 H：全曲只有**一條**進度條（時間軸），且不畫刻度。
             // 時間顯示在條的左右兩端**下方**：左＝當前、右＝總長（未知時 --:--）。
+            //
+            // ⚠️ 位置由 TimelineScrubber **自己**訂閱播放器（而不是從 state 傳進來）：
+            // 位置每秒變 20 次，從呼叫端傳會讓整個 PracticeContent 跟著重組。
             TimelineScrubber(
-                positionMs = state.playbackPositionMs,
+                player = player,
                 durationMs = state.playbackDurationMs,
                 fallbackDurationMs = state.lines.lastOrNull()?.startMs,
                 accent = accent,
@@ -394,7 +467,14 @@ private fun PracticeContent(
                 Column(modifier = Modifier.fillMaxSize()) {
                     // 三點**獨立一行**，放在第一句歌詞之前（擁有者指定）：
                     // 它不代替任何歌詞，只是「還沒唱到」的提示。
-                    DotsLine(visible = state.awaitingFirstLine)
+                    //
+                    // 淡出帶只加在這一條上（12dp）：被推到滑動視窗上緣外的歌詞
+                    // 在這裡柔和收掉，不會硬切在字的一半。
+                    // **不可套在歌詞清單上**——那會把整行推出視窗的行剪掉
+                    // （見 lyricEdgeFade 的說明）。
+                    Box(modifier = Modifier.lyricEdgeFade(top = DOTS_FADE_HEIGHT)) {
+                        DotsLine(visible = state.awaitingFirstLine)
+                    }
 
                     // 歌詞立即完整顯示；三點淡出時只移除那一行，不動歌詞與題目
                     LyricsViewport(
@@ -424,18 +504,30 @@ private fun PracticeContent(
                             fadeOut(animationSpec = LyrianMotion.exit())
                     },
                     label = "options",
-                ) {
+                ) { blankIndex ->
+                    // ⚠️ 選項屬於**哪一個空**由這裡帶進回呼，不是讓 ViewModel 用
+                    // 「目前焦點」去猜：交叉淡入期間舊格仍可點，猜錯就會把殘點
+                    // 記成下一題的作答（擁有者測到的「連點答錯」）。
+                    // 舊格的 `blankIndex` 已經不等於 `activeBlankIndex`，
+                    // `AnswerGate` 會直接判 `StaleGrid` 拒收。
                     OptionGrid(
-                        options = state.options,
-                        answer = state.currentQuestion?.answer,
-                        record = state.currentRecord,
-                        onSelect = onSelectOption,
+                        options = if (blankIndex == state.activeBlankIndex) {
+                            state.options
+                        } else {
+                            emptyList()
+                        },
+                        answer = state.questions.getOrNull(blankIndex)?.answer,
+                        record = state.selections[blankIndex],
+                        maxHeight = optionsMaxHeight,
+                        onSelect = { choice -> onSelectOption(blankIndex, choice) },
                     )
                 }
             }
 
             BottomStats(
-                current = state.activeBlankIndex + 1,
+                // 顯示「已答幾題」而不是「第幾題」：歌曲驅動時焦點會跳去下一個未答的空
+                // （可能是好幾句之後），用 activeBlankIndex 會出現 18/20 卻還在第 6 句的假進度。
+                current = state.selections.size,
                 total = state.total,
                 percent = state.percent,
             )
@@ -581,7 +673,6 @@ private data class AudioControls(
     val isLoading: Boolean,
     val isPlaying: Boolean,
     val isBuffering: Boolean,
-    val positionMs: Long,
     val durationMs: Long?,
     val notice: String?,
     val lyricOffsetMs: Long,
@@ -717,13 +808,18 @@ private fun PlayerHeader(
  */
 @Composable
 private fun TimelineScrubber(
-    positionMs: Long,
+    player: com.antigravity.lyrian.data.audio.YouTubePlayerController,
     durationMs: Long?,
     fallbackDurationMs: Long?,
     accent: Color,
     onSeek: (Long) -> Unit,
     onSeekFinished: () -> Unit,
 ) {
+    // 位置**在這裡**才訂閱：播放器每秒回報 10 次，只有這個元件該被重組。
+    // （從呼叫端傳進來會讓整個練習頁跟著重組，見 PracticeViewModel.positionMs）
+    val playerState by player.state.collectAsStateWithLifecycle()
+    val positionMs = playerState.positionMs
+
     // 幾何用的總長：真實總長優先；還沒拿到時退到「最後一句的時間」，
     // 至少讓條子畫得出來。但**標籤**只認真實總長（否則會謊報一個假的總長）。
     val geometryMs = (durationMs ?: fallbackDurationMs)?.takeIf { it > 0 }
@@ -1053,16 +1149,27 @@ private fun LyricsViewport(
     selections: Map<Int, ChoiceRecord>,
     listState: LazyListState,
 ) {
-    Box(modifier = Modifier.fillMaxSize()) {
+    BoxWithConstraints(modifier = Modifier.fillMaxSize()) {
         // 底部內距只留 LYRICS_BOTTOM_PADDING（32dp）：滾到底時最後一句與選項區
         // 之間不會再出現一整片空白（舊版用 maxHeight）。
         val peekPx = with(LocalDensity.current) { PREVIOUS_LINE_PEEK.roundToPx() }
 
+        // 空框寬度的上限要用「實際可用寬度」算（窄螢幕 + 長答案時，
+        // 舊版的定長空框會比整行還寬，把後面的字推出畫面）。
+        // `toSp()` 會把 dp 換成「與字級同一尺度」的 sp（含字型縮放）。
+        val contentWidthSp = with(LocalDensity.current) {
+            (maxWidth - LYRIC_CONTENT_PADDING * 2).toSp().value
+        }
+
         LaunchedEffect(scrollTargetIndex) {
             if (scrollTargetIndex !in lines.indices) return@LaunchedEffect
-            // key 變更 = 前一次動畫已被取消，這裡直接從現況捲向新目標
+            // key 變更 = 前一次動畫已被取消，這裡直接從現況捲向新目標。
+            // +1 是因為清單最上面多了那個「上一句露出的空間」空白項。
+            //
+            // ⚠️ 這裡的負 offset 就是擁有者要的「上一句還看得到一點」：
+            // 目標行停在頂端下方 PREVIOUS_LINE_PEEK（48dp）處，上一句的尾巴露在上面。
             listState.animateScrollToItem(
-                index = scrollTargetIndex,
+                index = scrollTargetIndex + 1,
                 scrollOffset = -peekPx,
             )
         }
@@ -1071,22 +1178,80 @@ private fun LyricsViewport(
             state = listState,
             modifier = Modifier.fillMaxSize(),
             contentPadding = PaddingValues(
-                start = 20.dp,
-                end = 20.dp,
+                start = LYRIC_CONTENT_PADDING,
+                end = LYRIC_CONTENT_PADDING,
                 bottom = LYRICS_BOTTOM_PADDING,
             ),
             verticalArrangement = Arrangement.spacedBy(LYRIC_LINE_SPACING),
         ) {
+            // 頂端留白：讓**第一句**也能停在「上面露出 [PREVIOUS_LINE_PEEK]」的位置
+            // （沒有這一項時第一句會被清單夾在頂端，負 offset 無處可施）。
+            item(key = "previous-line-peek") {
+                Spacer(Modifier.height(PREVIOUS_LINE_PEEK))
+            }
+
             itemsIndexed(items = lines, key = { _, line -> line.index }) { _, line ->
                 LyricRow(
                     line = line,
                     isCurrent = highlightLineIndex != null && line.index == highlightLineIndex,
                     selections = selections,
+                    maxWidthSp = contentWidthSp,
                 )
             }
         }
     }
 }
+
+/**
+ * 歌詞區上下緣的淡出遮罩。
+ *
+ * ## 為什麼用 `BlendMode.DstOut`，而不是蓋一條黑色漸層
+ *
+ * 底色是「模糊的專輯封面 + 暗色遮罩」，不是單一顏色。蓋上半透明黑色會出現
+ * 一條**看得出來的色帶**；`DstOut` 是直接降低該處內容的 alpha（畫到透明），
+ * 露出來的就是原本的背景，因此不會有任何色差。
+ *
+ * `CompositingStrategy.Offscreen` 是必要的：混合模式要作用在「這個元件的內容」上，
+ * 沒有離屏圖層就會把底下的背景一起算進去。
+ *
+ * ## ⚠️ 只能套在「三點那一行」這種小元件上，不可以套在歌詞清單上
+ *
+ * 套在清單上時（曾用過的版本）：`graphicsLayer` 替清單建立離屏圖層，
+ * 圖層尺寸受限於滑動視窗 → 被負 offset 推出視窗的那一行整行被剪掉，
+ * 擁有者回報的「上一句的 g 直接被切一個平面」就是這個。
+ * 現在清單**沒有任何離屏圖層**，被推出視窗的內容只是畫在視窗外，
+ * 由三點那一行的 12dp 淡出帶柔和收掉。
+ */
+private fun Modifier.lyricEdgeFade(top: Dp, bottom: Dp = 0.dp): Modifier = this
+    .graphicsLayer { compositingStrategy = CompositingStrategy.Offscreen }
+    .drawWithContent {
+        drawContent()
+
+        val topPx = top.toPx()
+        if (topPx > 0f) {
+            drawRect(
+                brush = Brush.verticalGradient(
+                    // 由上而下：頂端完全透明化 → 往下恢復
+                    colors = listOf(Color.Black, Color.Transparent),
+                    startY = 0f,
+                    endY = topPx,
+                ),
+                blendMode = BlendMode.DstOut,
+            )
+        }
+
+        val bottomPx = bottom.toPx()
+        if (bottomPx > 0f) {
+            drawRect(
+                brush = Brush.verticalGradient(
+                    colors = listOf(Color.Transparent, Color.Black),
+                    startY = size.height - bottomPx,
+                    endY = size.height,
+                ),
+                blendMode = BlendMode.DstOut,
+            )
+        }
+    }
 
 /**
  * 單行歌詞（仿 Apple Music 樣式）。
@@ -1099,8 +1264,15 @@ private fun LyricsViewport(
  * 必須保證在任何封面上都可讀，因此固定用白色與其透明度。
  * 其餘元件（按鈕、滑桿、選項卡）仍走 Material 3。
  *
- * **所有挖空的行都顯示底線**（整首歌一開始就挖好），
- * 未輪到的行只是變淡，不是等到輪到才挖。
+ * **挖空有兩種樣子**（擁有者指定）：
+ *
+ * ```
+ * 未作答  The ▢▢▢ to a ▢▢▢▢ mine      ← 圓角空框，不畫底線
+ * 已作答  The deed to a ▢▢▢▢ mine     ← 「deed」直接用歌詞本身的字級與字重，只有顏色變綠
+ * ```
+ *
+ * 已作答的字**不是** inline placeholder：它就是一串文字，因此大小、字重、行高
+ * 都和同一句完全一致（舊版把它塞進 `titleSmall` 的框裡，字硬是比別人小一號）。
  *
  * 三點動畫**不在這裡**——它獨立佔一行、放在第一句之前（見 [DotsLine]），
  * 不會遮住或替換任何歌詞。
@@ -1110,6 +1282,7 @@ private fun LyricRow(
     line: LyricLine,
     isCurrent: Boolean,
     selections: Map<Int, ChoiceRecord>,
+    maxWidthSp: Float,
 ) {
     val alpha by animateFloatAsState(
         targetValue = if (isCurrent) 1f else LYRIC_DIM_ALPHA,
@@ -1121,37 +1294,73 @@ private fun LyricRow(
     )
 
     val style = if (isCurrent) LyricTextStyles.Current else LyricTextStyles.Context
+    val fontSize = style.fontSize.value
 
-    // 每個空是一個 inline placeholder（不是 ____ 符號），
-    // 這樣才能給它底色、圓角與「已作答」的顏色。
-    val inline = LinkedHashMap<String, androidx.compose.foundation.text.InlineTextContent>()
-    line.blanks.forEach { blank ->
-        val id = "blank-${blank.blankIndex}"
-        inline[id] = androidx.compose.foundation.text.InlineTextContent(
-            placeholder = androidx.compose.ui.text.Placeholder(
-                width = (maxOf(blank.surface.length, blank.answer.length) * 13 + 22).sp,
-                height = 26.sp,
-                placeholderVerticalAlign = androidx.compose.ui.text.PlaceholderVerticalAlign.Center,
-            ),
-        ) {
-            BlankSlot(record = selections[blank.blankIndex], isCurrent = isCurrent)
-        }
-    }
+    // 無障礙用的替代文字：畫面上只有空框，但複製／朗讀時要有一句話代表它。
+    // 用「空格」而不是 `____`——後者會被 TalkBack 逐字唸成「底線 底線…」。
+    val blankDescription = stringResource(R.string.practice_blank_slot)
 
-    val text = buildAnnotatedString {
-        if (line.blanks.isEmpty()) {
-            append(line.text)
-            return@buildAnnotatedString
-        }
-
-        var cursor = 0
+    // 每一行的富文字（AnnotatedString）與 inline 表都**只在真的變了才重建**。
+    // 這個 composable 會在歌詞捲動、換行、作答時被重組；每次都重建字串與
+    // Placeholder 是純浪費（可見行數 × 每帧）。
+    val (text, inline) = remember(line, selections, isCurrent, maxWidthSp, blankDescription) {
+        // **未作答**的空＝inline placeholder（一個圓角空框）。
+        // **已作答**的空完全不經過 placeholder：直接當成文字畫進句子裡，
+        // 所以它的大小、字重、行高都跟同一句的其他字一模一樣（只有顏色不同）。
+        val inlineMap = LinkedHashMap<String, androidx.compose.foundation.text.InlineTextContent>()
         line.blanks.forEach { blank ->
-            if (blank.start < cursor) return@forEach
-            append(line.text, cursor, blank.start)
-            appendInlineContent(id = "blank-${blank.blankIndex}", alternateText = "____")
-            cursor = blank.end
+            if (selections.containsKey(blank.blankIndex)) return@forEach
+            inlineMap[blankInlineId(blank.blankIndex)] =
+                androidx.compose.foundation.text.InlineTextContent(
+                    // 空框寬度跟著字級走（當前句 22sp／其他句 16sp），以「答案的長度」為準，
+                    // 填入後不會突然變窄或跳行；但**一定要夾在可用寬度內**，
+                    // 否則窄螢幕遇到長答案時空框會比整行還寬（見 BlankPlaceholderMetrics）。
+                    placeholder = androidx.compose.ui.text.Placeholder(
+                        width = BlankPlaceholderMetrics.widthSp(
+                            charCount = maxOf(blank.surface.length, blank.answer.length),
+                            fontSizeSp = fontSize,
+                            availableWidthSp = maxWidthSp,
+                        ).sp,
+                        height = (fontSize * 1.15f).sp,
+                        placeholderVerticalAlign =
+                            androidx.compose.ui.text.PlaceholderVerticalAlign.Center,
+                    ),
+                ) {
+                    BlankSlot(isCurrent = isCurrent)
+                }
         }
-        append(line.text, cursor, line.text.length)
+
+        val annotated = buildAnnotatedString {
+            if (line.blanks.isEmpty()) {
+                append(line.text)
+                return@buildAnnotatedString
+            }
+
+            var cursor = 0
+            line.blanks.forEach { blank ->
+                if (blank.start < cursor) return@forEach
+                append(line.text, cursor, blank.start)
+
+                val record = selections[blank.blankIndex]
+                if (record == null) {
+                    appendInlineContent(
+                        id = blankInlineId(blank.blankIndex),
+                        alternateText = blankDescription,
+                    )
+                } else {
+                    // 填完之後：框消失、`____` 也消失，只留下「和整句同款式、換成綠色／紅色」的字。
+                    withStyle(
+                        SpanStyle(color = if (record.isCorrect) FEEDBACK_CORRECT else FEEDBACK_WRONG),
+                    ) {
+                        append(record.choice)
+                    }
+                }
+                cursor = blank.end
+            }
+            append(line.text, cursor, line.text.length)
+        }
+
+        annotated to inlineMap
     }
 
     Text(
@@ -1162,47 +1371,67 @@ private fun LyricRow(
         modifier = Modifier
             .fillMaxWidth()
             .padding(vertical = 4.dp)
+            // ⚠️ **不可夾限高度**（擁有者回報 `good` / `girl` 的 g 尾巴被切）。
+            //
+            // `graphicsLayer` 會讓這個節點自成一個圖層，而 Compose 的文字是在
+            // **量測結果的尺寸內**繪製：字形可以畫到量測尺寸之外（下伸部），
+            // 但圖層只保存「量測尺寸」那一塊 → 超出的一律被剪掉。
+            //
+            // 這個文字節點被放在可捲動清單裡，清單量它有界高度；只要量出來的
+            // 高度剛好等於行高，g / j / y / p 的尾巴就整條不見。
+            // 用 `heightIn(min = …)` 把「量測高度」抬到字身的 1.5 倍，
+            // 尾巴就落在量測尺寸之內——這是唯一不受字型宣告值影響的解法。
+            .heightIn(min = (style.fontSize.value * LYRIC_TEXT_HEIGHT_SLACK).dp)
             .graphicsLayer { this.alpha = alpha },
     )
 }
 
-/** 填空框本體：淡色底 + 圓角；答對綠、答錯紅、未答用 primary 淡底。 */
-@Composable
-private fun BlankSlot(record: ChoiceRecord?, isCurrent: Boolean) {
-    val (container, content) = when {
-        record == null -> MaterialTheme.colorScheme.primary.copy(alpha = if (isCurrent) 0.28f else 0.16f) to
-            ON_IMAGE_PRIMARY
-        record.isCorrect -> FEEDBACK_CORRECT.copy(alpha = 0.28f) to FEEDBACK_CORRECT
-        else -> FEEDBACK_WRONG.copy(alpha = 0.28f) to FEEDBACK_WRONG
-    }
+/** inline 內容的 id；`alternateText` 給無障礙與複製用，畫面上不會出現。 */
+private fun blankInlineId(blankIndex: Int) = "blank-$blankIndex"
 
+/**
+ * 還沒作答的空：一個圓角、半透明的空框。
+ *
+ * 舊版框裡還會畫 `____`，填完之後又把框留著、字縮成 `titleSmall`——
+ * 於是同一句裡出現一個明顯比較小的字（擁有者回報「綠框字體大小很奇怪」）。
+ * 現在框只是「這裡可以填」的提示，填入後整塊消失（見 [LyricRow]）。
+ */
+@Composable
+private fun BlankSlot(isCurrent: Boolean) {
+    // 畫面上只有一個空框，沒有文字；不給語意時 TalkBack 只會唸出 `alternateText`（"____"）。
+    // 這裡給一個「空格」的說明，讓螢幕閱讀器講得出這是什麼。
+    val description = stringResource(R.string.practice_blank_slot)
     Box(
         modifier = Modifier
             .fillMaxSize()
             .clip(LyrianCorner.small)
-            .background(container),
-        contentAlignment = Alignment.Center,
-    ) {
-        Text(
-            text = record?.choice ?: "____",
-            style = MaterialTheme.typography.titleSmall.copy(fontWeight = FontWeight.SemiBold),
-            color = content,
-            maxLines = 1,
-        )
-    }
+            .background(
+                MaterialTheme.colorScheme.primary.copy(alpha = if (isCurrent) 0.28f else 0.16f),
+            )
+            .semantics { contentDescription = description },
+    )
 }
-/** 2×2 選項網格。不用帶 border 的 Surface 的 onClick——那會讓點擊失效。 */
+
+/**
+ * 2×2 選項網格。不用帶 border 的 Surface 的 onClick——那會讓點擊失效。
+ *
+ * `maxHeight` 由呼叫端依實際視窗高度算（見 `PracticeContent`）：超過就在區塊內捲動，
+ * 不會把上方的歌詞區壓成 0 高。
+ */
 @Composable
 private fun OptionGrid(
     options: List<String>,
     answer: String?,
     record: ChoiceRecord?,
+    maxHeight: Dp,
     onSelect: (String) -> Unit,
 ) {
     Column(
         modifier = Modifier
             .fillMaxWidth()
-            .padding(horizontal = 16.dp, vertical = 8.dp),
+            .padding(horizontal = 16.dp, vertical = 8.dp)
+            .heightIn(max = maxHeight)
+            .verticalScroll(rememberScrollState()),
         verticalArrangement = Arrangement.spacedBy(12.dp),
     ) {
         options.chunked(2).forEach { row ->
@@ -1263,7 +1492,9 @@ private fun OptionChip(
 
     Box(
         modifier = modifier
-            .height(56.dp)
+            // 高度用**最小高度**而不是固定高度：答案一長（`decorations` / `convertible`）
+            // 或字級被放大時可以撐開，字不會被夾在 56dp 裡削掉（`yacht` 的 y 尾巴）。
+            .heightIn(min = OPTION_MIN_HEIGHT)
             .clip(LyrianCorner.full)
             .background(containerColor)
             .then(
@@ -1272,12 +1503,19 @@ private fun OptionChip(
                     LyrianCorner.full,
                 ),
             )
+            .semantics {
+                // 這是一個「選項按鈕」而不是一段文字：TalkBack 要唸出角色，
+                // 作答後也要知道它已經不能再按（disabled 讓它從「可操作」變成「唯讀」）。
+                role = Role.Button
+                if (record != null) disabled()
+            }
             .clickable(enabled = record == null, onClick = onClick),
         contentAlignment = Alignment.Center,
     ) {
         Row(
             verticalAlignment = Alignment.CenterVertically,
             horizontalArrangement = Arrangement.Center,
+            modifier = Modifier.padding(horizontal = 12.dp, vertical = 8.dp),
         ) {
             when (visualState) {
                 OptionVisualState.Correct -> Icon(
@@ -1297,7 +1535,8 @@ private fun OptionChip(
 
             Text(
                 text = label,
-                style = MaterialTheme.typography.bodyLarge,
+                // 選項字也用歌詞字型；行高給足才不會削掉 y / g / j 的下伸（見 LyricLineMetrics）
+                style = LyricTextStyles.Option,
                 color = contentColor,
                 maxLines = 1,
                 modifier = Modifier.padding(

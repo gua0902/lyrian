@@ -27,9 +27,11 @@ import com.antigravity.lyrian.domain.model.FillChoiceQuestion
 import com.antigravity.lyrian.domain.model.LyricLine
 import com.antigravity.lyrian.domain.model.PracticeModeId
 import com.antigravity.lyrian.domain.model.ResultWord
+import com.antigravity.lyrian.domain.practice.AnswerGate
 import com.antigravity.lyrian.domain.practice.BlankPicker
 import com.antigravity.lyrian.domain.practice.FillChoiceBuilder
 import com.antigravity.lyrian.domain.practice.LineBoundary
+import com.antigravity.lyrian.domain.practice.LyricTimeline
 import com.antigravity.lyrian.ui.navigation.Routes
 import com.antigravity.lyrian.util.toDayKey
 import dagger.hilt.android.lifecycle.HiltViewModel
@@ -37,8 +39,12 @@ import javax.inject.Inject
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.distinctUntilChanged
+import kotlinx.coroutines.flow.map
+import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 import kotlin.random.Random
@@ -72,9 +78,14 @@ data class PracticeUiState(
     val isPlaying: Boolean = false,
     /** 正在緩衝。 */
     val isBuffering: Boolean = false,
-    /** 播放位置（毫秒）。 */
-    val playbackPositionMs: Long = 0L,
-    /** 曲目總長（毫秒）；未知時為 null。 */
+    /**
+     * 曲目總長（毫秒）；未知時為 null。
+     *
+     * ⚠️ **播放位置不在這裡**。位置每秒變化 20 次，放進這個 class 會讓整個
+     * `PracticeUiState` 每次都是新物件 → `PracticeScreen` 整棵樹（歌詞列表、
+     * 選項格）每秒重組 20 次、全部無法 skip。位置另外由
+     * [PracticeViewModel.positionMs] 提供，只有時間軸元件訂閱它。
+     */
     val playbackDurationMs: Long? = null,
     /**
      * 目前**唱到**的歌詞行索引；沒有時間戳時為 null。
@@ -245,6 +256,15 @@ private const val ERROR_LOAD_FAILED = "載入這首歌時發生問題，請按�
 /** 在 YouTube Music 上搜尋不到可配對的版本。 */
 private const val NO_AUDIO_MATCH = "找不到這首歌對應的錄音版本，只能純歌詞練習。"
 
+/**
+ * 連線層失敗（斷網、逾時、被防火牆擋）。
+ *
+ * 與 [NO_AUDIO_MATCH] 分開：那個說的是「這首歌沒有可用的錄音」，
+ * 這個說的是「你現在連不上」。使用者該做的事完全不同。
+ */
+private const val NO_AUDIO_OFFLINE =
+    "離線或連不上網路，無法載入音源。開好網路後按播放鍵即可重試；也可以先純歌詞練習。"
+
 /** 找到了，但時長與歌詞時間戳差距過大，可能不是同一個錄音。 */
 private const val AUDIO_MAY_NOT_ALIGN =
     "找到的版本長度與歌詞不符，歌詞可能會有些對不上。"
@@ -348,11 +368,28 @@ class PracticeViewModel @Inject constructor(
     private val lexicon: LexiconSource,
     private val dictionary: DictionaryRepository,
     val player: YouTubePlayerController,
-    savedStateHandle: SavedStateHandle,
+    /** 作答進度存在這裡，程序被回收後才救得回來（見 [ProgressSnapshot]）。 */
+    private val savedStateHandle: SavedStateHandle,
 ) : ViewModel() {
 
     private val _uiState = MutableStateFlow(PracticeUiState())
     val uiState: StateFlow<PracticeUiState> = _uiState.asStateFlow()
+
+    /**
+     * 播放位置（毫秒），**獨立於 [uiState]**。
+     *
+     * 位置每秒更新 20 次（播放器每 100ms 回報、輪詢每 50ms 讀一次）。放進
+     * `PracticeUiState` 的話每次 `copy()` 都是新物件，`PracticeScreen` 讀的是
+     * 整個 `state` → 整棵樹每秒重組 20 次。現在只有 `TimelineScrubber` 訂閱它。
+     */
+    val positionMs: StateFlow<Long> = player.state
+        .map { it.positionMs }
+        .distinctUntilChanged()
+        .stateIn(
+            scope = viewModelScope,
+            started = SharingStarted.WhileSubscribed(5_000),
+            initialValue = 0L,
+        )
 
     /** 歌詞只在第一次作答時寫入快取，避免每次作答都 delete + insert。 */
     private var lyricsPersisted = false
@@ -368,6 +405,16 @@ class PracticeViewModel @Inject constructor(
 
     /** 全部題目的選項**預先算好**，避免每次換題重算（也讓上下題的選項穩定）。 */
     private var optionsByBlank: Map<Int, List<String>> = emptyMap()
+
+    /**
+     * 上一次**被接受**的作答時間（`SystemClock.elapsedRealtime()`，單調時鐘）。
+     *
+     * 給 [AnswerGate] 判斷「換題後 300ms 內的點擊是殘點」。
+     */
+    private var lastAnswerAtMs = 0L
+
+    /** 畫面是否在前景；背景時停止輪詢（這個 App 不做背景播放）。 */
+    private var foreground = true
 
     // ---------- 音訊 ----------
 
@@ -434,6 +481,24 @@ class PracticeViewModel @Inject constructor(
     }
 
     /**
+     * 只在**值真的變了**才換掉 UI 狀態。
+     *
+     * `data class.copy()` 每次都會產生新實例，即使每個欄位都一樣。播放器的位置
+     * 每秒變 20 次、輪詢每 50ms 跑一次——若照樣 `copy()` 並寫回，
+     * `StateFlow` 會一直發出新物件，`PracticeScreen` 的整棵樹就無法 skip，
+     * 每秒重組 20 次（這是擁有者回報的「卡頓」與耗電來源）。
+     *
+     * `MutableStateFlow` 本身用 `equals` 擋重複值，但前提是我們**傳回同一個實例**，
+     * 所以在這裡先比一次。
+     */
+    private inline fun updateIfChanged(transform: (PracticeUiState) -> PracticeUiState) {
+        _uiState.update { current ->
+            val next = transform(current)
+            if (next == current) current else next
+        }
+    }
+
+    /**
      * 把播放器的狀態同步進 UI 狀態。
      *
      * 播放器是**單例**（旋轉螢幕不中斷音樂），所以它的狀態可能比這個
@@ -442,11 +507,14 @@ class PracticeViewModel @Inject constructor(
     private fun observePlayback() {
         viewModelScope.launch {
             player.state.collect { playback ->
-                _uiState.update {
+                // ⚠️ 用 updateIfChanged：播放器每 100ms 就回報一次（位置變了），
+                // 但這裡關心的欄位（是否播放、是否緩衝、總長、錯誤、比例）大多數時候
+                // 都沒變。不加這層判斷，`copy()` 會每秒產生 10 個新 state，
+                // 整棵畫面又回到「一直在重組」。
+                updateIfChanged {
                     it.copy(
                         isPlaying = playback.isPlaying,
                         isBuffering = playback.isBuffering,
-                        playbackPositionMs = playback.positionMs,
                         playbackDurationMs = playback.durationMs,
                         playbackError = playback.error,
                         videoAspectRatio = playback.videoAspectRatio,
@@ -509,7 +577,6 @@ class PracticeViewModel @Inject constructor(
                     }
 
                     if (currentLine == null) {
-                        _uiState.update { it.copy(playbackPositionMs = position) }
                         delay(POSITION_POLL_MS)
                         continue
                     }
@@ -539,7 +606,6 @@ class PracticeViewModel @Inject constructor(
                             "追回：未答 line=${earliest.lineIndex} 已越過（目前 line=$currentLine）",
                         )
                         checkedLines += earliest.lineIndex
-                        _uiState.update { it.copy(playbackPositionMs = position) }
                         pauseAtBoundary(earliest, reason = "追回")
                         delay(POSITION_POLL_MS)
                         continue
@@ -558,18 +624,25 @@ class PracticeViewModel @Inject constructor(
                         }
                     }
 
-                    // 播放中就把「當前這一句」的題目與選項端上來，讓使用者邊聽邊填。
-                    val question = LineBoundary.questionOf(currentLine, state.questions)
+                    // 播放中就把「當前這一句」**還沒作答**的題目與選項端上來。
+                    //
+                    // ⚠️ 只認未作答的題目（擁有者回報的「填完第一個空就卡住」）：
+                    // 同一句有兩個空時，答完第一個 → 這裡找到第二個 → 選項立刻換過去。
+                    // 整句都答完（`focus == null`）時**不動**焦點——若還原成「這一行第一題」，
+                    // 已作答的題目會被重新端上來，畫面看起來就是卡死。
+                    val focus = LineBoundary.firstUnansweredOf(
+                        lineIndex = currentLine,
+                        questions = state.questions,
+                        selections = state.selections,
+                    )
 
-                    _uiState.update {
-                        val focusBlank = question?.blankIndex
+                    updateIfChanged {
                         it.copy(
-                            playbackPositionMs = position,
                             singingLineIndex = currentLine,
                             isSongDriven = true,
-                            activeBlankIndex = focusBlank ?: it.activeBlankIndex,
-                            options = focusBlank?.let { blank ->
-                                optionsByBlank[blank].orEmpty()
+                            activeBlankIndex = focus?.blankIndex ?: it.activeBlankIndex,
+                            options = focus?.let { question ->
+                                optionsByBlank[question.blankIndex].orEmpty()
                             } ?: it.options,
                         )
                     }
@@ -589,22 +662,25 @@ class PracticeViewModel @Inject constructor(
         if (!checkedLines.add(lineIndex)) return
 
         val state = _uiState.value
-        val question = LineBoundary.questionOf(lineIndex, state.questions)
-        if (question == null) {
-            android.util.Log.d(TAG, "check line=$lineIndex 沒有挖空 → 通過")
-            return
-        }
+        // ⚠️ 要看「這一行**全部**的空」，不是只看第一題。
+        // 一句有兩個空、使用者只答了第一個時，只看第一題會判定「已答」而放行，
+        // 第二個空就永遠沒有機會停下來問。
+        val pending = LineBoundary.firstUnansweredOf(
+            lineIndex = lineIndex,
+            questions = state.questions,
+            selections = state.selections,
+        )
 
-        if (LineBoundary.isAnswered(question, state.selections)) {
-            android.util.Log.d(TAG, "check line=$lineIndex answered=true → 直接進入下一句")
+        if (pending == null) {
+            android.util.Log.d(TAG, "check line=$lineIndex 沒有未答的挖空 → 通過")
             return
         }
 
         android.util.Log.d(
             TAG,
-            "check line=$lineIndex answered=false → fadeOut 0.5s → pause",
+            "check line=$lineIndex blank=${pending.blankIndex} answered=false → fadeOut 0.5s → pause",
         )
-        pauseAtBoundary(question, reason = "交界")
+        pauseAtBoundary(pending, reason = "交界")
     }
 
     /**
@@ -673,7 +749,6 @@ class PracticeViewModel @Inject constructor(
                 _uiState.update {
                     it.copy(
                         isPlaying = false,
-                        playbackPositionMs = player.currentPositionMs(),
                         singingLineIndex = question.lineIndex,
                     )
                 }
@@ -720,7 +795,6 @@ class PracticeViewModel @Inject constructor(
         if (seekToStart) {
             val target = (question.startMs - _uiState.value.lyricOffsetMs).coerceAtLeast(0L)
             player.seekTo(target)
-            _uiState.update { it.copy(playbackPositionMs = target) }
             android.util.Log.d(
                 TAG,
                 "focus line=${question.lineIndex} blank=${question.blankIndex} @${formatLogTime(target)}",
@@ -750,7 +824,14 @@ class PracticeViewModel @Inject constructor(
 
         viewModelScope.launch {
             val query = "${head.artist} ${head.title}".trim()
-            val videos = youTubeSearch.search(query)
+
+            // 連線層失敗（斷網／逾時）與「連得到但沒有結果」是兩件不同的事，
+            // 文案也不一樣——見 `YouTubeWebSearch.search` 的說明。
+            val videos = youTubeSearch.search(query).getOrElse { error ->
+                android.util.Log.w(TAG, "音源搜尋失敗（連線層）", error)
+                failEntry(NO_AUDIO_OFFLINE)
+                return@launch
+            }
 
             if (videos.isEmpty()) {
                 failEntry(NO_AUDIO_MATCH)
@@ -860,7 +941,7 @@ class PracticeViewModel @Inject constructor(
         val state = _uiState.value
 
         // ---- 換源前記錄三件事（擁有者指定）----
-        val resumeAtMs = state.playbackPositionMs.coerceAtLeast(0L)
+        val resumeAtMs = player.state.value.positionMs.coerceAtLeast(0L)
         val wasWaiting = state.waitingForBlankIndex != null
         val keepPaused = wasWaiting
 
@@ -996,7 +1077,6 @@ class PracticeViewModel @Inject constructor(
     /** 拖曳進度條過程中的即時 seek（不判斷未答，放手時才算）。 */
     fun onSeekPlayback(positionMs: Long) {
         player.seekTo(positionMs)
-        _uiState.update { it.copy(playbackPositionMs = positionMs) }
     }
 
     /**
@@ -1011,8 +1091,9 @@ class PracticeViewModel @Inject constructor(
      */
     fun onTimelineSeekFinished() {
         val state = _uiState.value
+        val droppedAtMs = player.state.value.positionMs
         val next = state.unansweredQuestions
-            .filter { it.startMs >= state.playbackPositionMs - SNAP_TOLERANCE_MS }
+            .filter { it.startMs >= droppedAtMs - SNAP_TOLERANCE_MS }
             .minByOrNull { it.startMs }
             ?: state.unansweredQuestions.minByOrNull { it.lineIndex }
             ?: return
@@ -1030,14 +1111,8 @@ class PracticeViewModel @Inject constructor(
      * 取「開始時間 <= 位置」的最後一行；位置在所有行之前時回傳 null。
      * 沒有時間戳（純文字歌詞）時全部為 0，此時回傳 null 讓 UI 不要跟隨。
      */
-    fun lineIndexAt(positionMs: Long): Int? {
-        val lines = _uiState.value.lines
-        if (lines.isEmpty()) return null
-        // 純文字歌詞每行都有間隔（LyricsParser 會補），但仍要防禦全為 0 的情況
-        if (lines.all { it.startMs <= 0L }) return null
-
-        return lines.lastOrNull { it.startMs <= positionMs }?.index
-    }
+    fun lineIndexAt(positionMs: Long): Int? =
+        LyricTimeline.lineAt(_uiState.value.lines, positionMs)
 
     /**
      * 歌曲是否已經播完（修正 5）。
@@ -1087,12 +1162,39 @@ class PracticeViewModel @Inject constructor(
 
     override fun onCleared() {
         super.onCleared()
-        // 使用者真的離開練習頁（不是旋轉）→ 停掉播放。
-        // WebView 本身由畫面的 DisposableEffect 解除綁定（見 PracticeScreen）。
+        // 使用者真的離開練習頁（不是旋轉）→ 停掉播放，並**釋放 WebView**。
+        //
+        // `release()` 會 destroy 掉 WebView：它裡面有一個 100ms 的 JS timer 與
+        // Java-JS 橋接，只把參考設成 null 不會停掉它們——舊版就是這樣，
+        // 每次進出練習頁都漏一個 WebView（還有它的影片解碼器）。
         pauseJob?.cancel()
         fadeInJob?.cancel()
         dotsTimeoutJob?.cancel()
-        player.stop()
+        player.release()
+    }
+
+    /**
+     * 切到別的 App（`ON_STOP`）。
+     *
+     * 依 manifest 的原則「不做背景播放」：直接暫停。
+     * 這裡**不淡出**——淡出要 0.5 秒，而使用者已經離開畫面，
+     * 那 0.5 秒只是讓聲音在別的 App 上多響一下。
+     *
+     * 暫停後**不自動恢復**：使用者可能只是切出去看通知，回頭仍希望音樂是停的。
+     */
+    fun onAppBackgrounded() {
+        foreground = false
+        if (!_uiState.value.isPlaying) return
+
+        stopFadeIn()
+        player.pause()
+        _uiState.update { it.copy(isPlaying = false) }
+        android.util.Log.d(TAG, "切到背景 → 暫停（不做背景播放）")
+    }
+
+    /** 回到前景。**刻意不自動播放**。 */
+    fun onAppForegrounded() {
+        foreground = true
     }
 
     private suspend fun load(songId: Long?) {
@@ -1240,6 +1342,33 @@ class PracticeViewModel @Inject constructor(
         val awaitingFirstLine = playbackSettings.autoPlayValue &&
             hasTimeline && firstLineStart > DOTS_MIN_WAIT_MS
 
+        // ---- 程序被回收前的作答進度 ----
+        // 只有「同一首歌」而且 blankIndex 還在範圍內才採用；否則整份丟棄。
+        // 這條路徑的價值：死亡前已寫入的 attempt 不會因為重答而被寫第二次。
+        val restored = ProgressSnapshot.read(savedStateHandle)
+            ?.takeIf { it.songId == source.head.songId }
+            ?.let { snapshot ->
+                val valid = snapshot.selections
+                    .filterKeys { it in dataset.questions.indices }
+                if (valid.isEmpty()) {
+                    null
+                } else {
+                    snapshot.copy(
+                        selections = valid,
+                        activeBlankIndex = snapshot.activeBlankIndex
+                            .takeIf { it in dataset.questions.indices } ?: 0,
+                    )
+                }
+            }
+
+        if (restored != null) {
+            android.util.Log.d(
+                TAG,
+                "回復作答進度：${restored.selections.size}/${dataset.questions.size} 題" +
+                    "（active=${restored.activeBlankIndex}）",
+            )
+        }
+
         _uiState.update {
             it.copy(
                 isLoading = false,
@@ -1248,13 +1377,15 @@ class PracticeViewModel @Inject constructor(
                 coverUrl = source.head.coverUrl,
                 lines = dataset.lines,
                 questions = dataset.questions,
+                // 從 SavedStateHandle 回來的作答結果（沒有就是空的）
+                selections = restored?.selections.orEmpty(),
+                activeBlankIndex = restored?.activeBlankIndex ?: 0,
                 // 選項**照常產生**，只是三點期間先不顯示（由 UI 依 awaitingFirstLine 控制）
-                options = optionsByBlank[0].orEmpty(),
+                options = optionsByBlank[restored?.activeBlankIndex ?: 0].orEmpty(),
                 // 換歌時把節奏狀態歸零，避免上一首的暫停／行號黏過來
                 isSongDriven = false,
                 singingLineIndex = null,
                 waitingForBlankIndex = null,
-                playbackPositionMs = 0L,
                 // 每首歌有自己的歌詞偏移；沒調過就用設定頁的預設值
                 lyricOffsetMs = playbackSettings.offsetFor(source.head.songId),
                 playerVersionIndex = 0,
@@ -1265,7 +1396,7 @@ class PracticeViewModel @Inject constructor(
                 awaitingFirstLine = awaitingFirstLine,
                 songFinished = false,
                 // 結果頁的統計只存在這一次的 session，不落庫
-                sessionStartedAtMs = System.currentTimeMillis(),
+                sessionStartedAtMs = restored?.startedAtMs ?: System.currentTimeMillis(),
                 elapsedMs = null,
                 difficultWords = emptyList(),
                 pool = pick.pool,
@@ -1368,11 +1499,43 @@ class PracticeViewModel @Inject constructor(
      */
     private fun randomFor(seed: Long): Random = Random(seed.hashCode())
 
-    fun onSelectOption(choice: String) {
+    /**
+     * 使用者點了某一個選項。
+     *
+     * ## ⚠️ `blankIndex` 一定要由 UI 帶進來（不能只收 `choice`）
+     *
+     * 作答之後 `activeBlankIndex` 會**立刻**換到下一空，而選項格是固定版面：
+     * 同一格在 100ms 內就變成下一題的選項。只知道「點了哪個字」的話，
+     * 第二下（連點、或手指還停在原處）會被記成**下一題的作答**。
+     *
+     * 真正的防護在 [AnswerGate]：它同時擋「已答過」「殘留的上一組選項」
+     * 「換題後的殘點」三件事。
+     */
+    fun onSelectOption(blankIndex: Int, choice: String) {
         val state = _uiState.value
-        val question = state.currentQuestion ?: return
-        if (state.currentRecord != null) return // 已作答，忽略重複點擊
+        val question = state.questions.getOrNull(blankIndex)
 
+        val now = android.os.SystemClock.elapsedRealtime()
+        val decision = AnswerGate.evaluate(
+            target = blankIndex,
+            active = state.activeBlankIndex,
+            answered = state.selections.keys,
+            nowMs = now,
+            lastAnswerAtMs = lastAnswerAtMs,
+        )
+
+        if (decision != AnswerGate.Decision.Accept || question == null) {
+            if (decision != AnswerGate.Decision.AlreadyAnswered) {
+                android.util.Log.d(
+                    TAG,
+                    "忽略作答 blank=$blankIndex choice=$choice：$decision" +
+                        "（active=${state.activeBlankIndex}，已答 ${state.selections.size} 題）",
+                )
+            }
+            return
+        }
+
+        lastAnswerAtMs = now
         val attempt = FillChoiceBuilder.grade(question, choice)
         val wasWaitingForThis = state.waitingForBlankIndex == question.blankIndex
 
@@ -1410,6 +1573,19 @@ class PracticeViewModel @Inject constructor(
 
         // 作答**只寫入 attempt**。字庫一律由使用者手動加入（規格 §四）。
         persist(question, choice, attempt.isCorrect)
+
+        // 進度同步寫進 SavedStateHandle：程序被回收後回來，不必重答已經答過的題
+        // （重答會讓 attempt 與每日統計重複累加）。
+        songHead?.let { head ->
+            val snapshotState = _uiState.value
+            ProgressSnapshot.save(
+                handle = savedStateHandle,
+                songId = head.songId,
+                selections = snapshotState.selections,
+                activeBlankIndex = snapshotState.activeBlankIndex,
+                startedAtMs = snapshotState.sessionStartedAtMs,
+            )
+        }
 
         if (nextInLine != null && wasWaitingForThis) {
             // 同一句還有空 → 不恢復播放，直接把下一個空端上來等作答
@@ -1535,6 +1711,10 @@ class PracticeViewModel @Inject constructor(
                 difficultWords = emptyList(),
             )
         }
+
+        // 重玩＝新的進度；舊的作答紀錄不能留著，否則下次程序被回收時會「復活」。
+        ProgressSnapshot.clear(savedStateHandle)
+        lastAnswerAtMs = 0L
 
         if (state.isAudioReady) {
             onSeekPlayback(0L)

@@ -4,9 +4,7 @@ import com.antigravity.lyrian.domain.model.ChoiceRecord
 import com.antigravity.lyrian.domain.model.FillChoiceQuestion
 import com.antigravity.lyrian.domain.model.LyricLine
 import org.junit.Assert.assertEquals
-import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNull
-import org.junit.Assert.assertTrue
 import org.junit.Test
 
 /**
@@ -72,7 +70,7 @@ class LineBoundaryTest {
         assertEquals(5_000L, LineBoundary.endMsOf(lines, 3, durationMs = 100_000))
     }
 
-    // ---------- 已作答判定 ----------
+    // ---------- 「這一行還有哪一題沒答」 ----------
 
     private fun question(blankIndex: Int, lineIndex: Int) = FillChoiceQuestion(
         blankIndex = blankIndex,
@@ -83,31 +81,63 @@ class LineBoundaryTest {
         startMs = 0L,
     )
 
+    private fun answered(vararg blankIndexes: Int): Map<Int, ChoiceRecord> =
+        blankIndexes.associateWith { ChoiceRecord("x", true) }
+
     @Test
-    fun `沒有題目的行視為通過`() {
-        assertTrue(LineBoundary.isAnswered(null, emptyMap()))
-        assertNull(LineBoundary.questionOf(2, listOf(question(0, 0))))
+    fun `沒有題目的行回傳 null`() {
+        assertNull(
+            LineBoundary.firstUnansweredOf(2, listOf(question(0, 0)), emptyMap()),
+        )
     }
 
     @Test
-    fun `有題目且有作答才算通過`() {
-        val q = question(blankIndex = 4, lineIndex = 2)
+    fun `同一句兩個空：答了第一個就要回傳第二個`() {
+        // 擁有者回報的「填完第一個空就卡住」就是這裡：舊版回傳的是這一行
+        // 第一題（已作答），於是輪詢每 50ms 把焦點拉回去。
+        val questions = listOf(question(0, 2), question(1, 2), question(2, 5))
 
-        assertFalse(LineBoundary.isAnswered(q, emptyMap()))
-        assertFalse(
-            "答了別的題不算",
-            LineBoundary.isAnswered(q, mapOf(3 to ChoiceRecord("x", false))),
+        val next = LineBoundary.firstUnansweredOf(
+            lineIndex = 2,
+            questions = questions,
+            selections = answered(0),
         )
-        assertTrue(
-            LineBoundary.isAnswered(q, mapOf(4 to ChoiceRecord("x", false))),
+
+        assertEquals(1, next?.blankIndex)
+    }
+
+    @Test
+    fun `整句都答完時回傳 null`() {
+        // null 的語意是「不要動焦點」：呼叫端不得把已作答的題目重新端上來。
+        val questions = listOf(question(0, 2), question(1, 2))
+
+        assertNull(
+            LineBoundary.firstUnansweredOf(2, questions, answered(0, 1)),
+        )
+    }
+
+    @Test
+    fun `別的行作答不影響這一行的判定`() {
+        val questions = listOf(question(4, 2), question(3, 7))
+
+        // 只有 line 7 的 blank 3 被答過 → line 2 仍有未答的 blank 4
+        assertEquals(
+            4,
+            LineBoundary.firstUnansweredOf(2, questions, answered(3))?.blankIndex,
+        )
+        // blankIndex 是**全曲序號**，不是行內序號：line 2 的題目是 4 不是 3
+        assertNull(
+            LineBoundary.firstUnansweredOf(7, questions, answered(3)),
         )
     }
 
     @Test
     fun `答錯也算已作答`() {
-        val q = question(blankIndex = 0, lineIndex = 0)
-
         // 擁有者要求「答了就可以繼續」，對錯不影響暫停判斷
-        assertTrue(LineBoundary.isAnswered(q, mapOf(0 to ChoiceRecord("wrong", false))))
+        val questions = listOf(question(0, 0))
+
+        assertNull(
+            LineBoundary.firstUnansweredOf(0, questions, mapOf(0 to ChoiceRecord("wrong", false))),
+        )
     }
 }

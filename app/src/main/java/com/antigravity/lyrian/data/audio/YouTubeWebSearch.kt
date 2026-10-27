@@ -56,8 +56,23 @@ class YouTubeWebSearch @Inject constructor(
     private val client: okhttp3.OkHttpClient,
     private val json: Json,
 ) {
-    /** 搜尋並回傳原始候選（排序由 [YouTubeCandidateScorer] 負責）。 */
-    suspend fun search(query: String, limit: Int = 12): List<YouTubeVideo> =
+    /**
+     * 搜尋並回傳原始候選（排序由 [YouTubeCandidateScorer] 負責）。
+     *
+     * ## 為什麼回傳 `Result` 而不是「失敗就回空清單」
+     *
+     * 空清單無法區分兩種完全不同的狀況：
+     * ```
+     * 連得到，但這個關鍵字沒有結果   → 「找不到錄音版本」，使用者該換版本或純歌詞練習
+     * 根本連不上（斷網、逾時）       → 「離線」，使用者該開網路後重試
+     * ```
+     * 舊版把 `IOException` 吞成空清單，於是斷網時顯示「找不到這首歌對應的錄音版本」——
+     * 擁有者回報的誤導文案就是這樣來的。
+     *
+     * 因此：**連線層的失敗往上丟**（`Result.failure`），伺服器有回應但沒有結果
+     * 才是 `Result.success(emptyList())`。
+     */
+    suspend fun search(query: String, limit: Int = 12): Result<List<YouTubeVideo>> =
         withContext(Dispatchers.IO) {
             val url = "https://www.youtube.com/results?search_query=" +
                 java.net.URLEncoder.encode(query, "UTF-8") + "&hl=en&gl=US"
@@ -83,13 +98,14 @@ class YouTubeWebSearch @Inject constructor(
                             TAG,
                             "YouTube 搜尋回應 ${response.code}（$finalHost）",
                         )
-                        return@withContext emptyList()
+                        return@withContext Result.success(emptyList())
                     }
                     response.body?.string().orEmpty()
                 }
-            }.getOrElse {
-                android.util.Log.w(TAG, "YouTube 搜尋失敗", it)
-                return@withContext emptyList()
+            }.getOrElse { error ->
+                // 連線層失敗：讓呼叫端知道「是網路，不是沒有結果」
+                android.util.Log.w(TAG, "YouTube 搜尋失敗（連線層）", error)
+                return@withContext Result.failure(error)
             }
 
             if (finalHost != "www.youtube.com") {
@@ -100,17 +116,19 @@ class YouTubeWebSearch @Inject constructor(
                 )
             }
 
-            parseSearchResults(html, json, limit).also { videos ->
-                android.util.Log.d(
-                    TAG,
-                    "搜尋「$query」解析出 ${videos.size} 個候選" +
-                        "（HTML ${html.length} 字元，實際主機 $finalHost）" +
-                        videos.take(3).joinToString(
-                            prefix = "：",
-                            separator = " | ",
-                        ) { "\"${it.title}\" @${it.channel} ${it.durationMs?.div(1000)}s" },
-                )
-            }
+            Result.success(
+                parseSearchResults(html, json, limit).also { videos ->
+                    android.util.Log.d(
+                        TAG,
+                        "搜尋「$query」解析出 ${videos.size} 個候選" +
+                            "（HTML ${html.length} 字元，實際主機 $finalHost）" +
+                            videos.take(3).joinToString(
+                                prefix = "：",
+                                separator = " | ",
+                            ) { "\"${it.title}\" @${it.channel} ${it.durationMs?.div(1000)}s" },
+                    )
+                },
+            )
         }
 
     companion object {

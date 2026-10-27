@@ -1,41 +1,43 @@
-This is an Expo/React Native mobile application. Prioritize mobile-first patterns, performance, and cross-platform compatibility.
+This is a **native Android app written in Kotlin + Jetpack Compose** (not React Native / Expo).
+Everything under `node_modules/` and any `*.ts`/`*.tsx` references in `docs/` are leftovers from the
+earlier React Native prototype and must not be used as a source of truth.
 
-## Expo has changed — do not trust your training data
+## Stack
 
-Expo ships breaking changes every SDK release. APIs you remember are likely renamed, moved, or removed. Before writing any code that touches an Expo, EAS, or React Native API:
-
-1. Read the major version of the `expo` package in `package.json`.
-2. Fetch the matching versioned docs: `https://docs.expo.dev/versions/v<major>.0.0/`
-3. For anything else, fetch https://docs.expo.dev/llms.txt — an index of all Expo docs with corrections to common LLM misconceptions. Follow its links to the specific page you need; never answer from memory.
+| 項目 | 版本 / 位置 |
+|---|---|
+| Kotlin / AGP | 2.1.0 / 8.7.3 |
+| compileSdk / minSdk | 36 / 26 |
+| Compose BOM | 2025.10.00（material3 1.4.0、ui 1.9.3） |
+| Hilt / Room | 2.54 / 2.6.1 |
+| 原始碼 | `app/src/main/java/com/antigravity/lyrian/` |
 
 ## Commands
 
-Use `bunx` instead of `npx` if the project uses bun (`bun.lock` present).
-
-```bash
-npx expo install <package>  # ALWAYS use instead of npm/yarn/pnpm/bun add — resolves SDK-compatible versions
-npx expo start              # start the dev server
-npx expo lint               # lint
-npx tsc --noEmit            # typecheck
-npx expo-doctor             # diagnose dependency and config issues
-npx expo install --fix      # fix incompatible package versions
+```bat
+gradlew.bat :app:testDebugUnitTest     :: JVM 單元測試（不需要裝置）
+gradlew.bat :app:assembleDebug         :: 建 APK（app/build/outputs/apk/debug/）
+gradlew.bat :app:compileDebugKotlin    :: 只編譯，最快的回饋
 ```
 
-Run lint and typecheck before declaring any task done.
+`gradlew.bat :app:connectedDebugAndroidTest` **需要實體裝置**——不要在未取得擁有者同意的
+情況下插上裝置或執行 adb。
 
-## Navigation & Routing
+修改後至少要讓 `testDebugUnitTest` 全綠、`assembleDebug` 成功，才能說「做完了」。
 
-- Use **Expo Router** for all navigation. Routes live in `src/app/` — every file there is a screen, `_layout.tsx` files define navigators. Keep non-route code (components, hooks, utils) outside `src/app/`.
-- Import `Link`, `router`, and `useLocalSearchParams` from `expo-router`.
-- Docs: https://docs.expo.dev/router/introduction.md
+## 架構慣例
 
-## Building with EAS
-
-Use EAS to build, sign, and submit the app in the cloud (`eas build`, `eas submit`) and to ship over-the-air updates (`eas update`) — no local Xcode or Android Studio required. Run EAS CLI as `bunx eas-cli <command>` in Bun projects, or `npx eas-cli@latest <command>` otherwise; substitute that for bare `eas` in docs examples.
-Docs: https://docs.expo.dev/eas/index.md
+- 畫面：`ui/screens/<feature>/`（Screen + ViewModel 成對）。狀態一律是單一 data class +
+  `StateFlow`，不要散落的 `mutableStateOf`。
+- 網域邏輯：`domain/`，**純 Kotlin、不碰 Android**，因此可以直接寫 JVM 測試。
+  規則（選詞、作答防抖、歌詞時間軸）都應該抽成這種可測物件。
+- 資料：`data/local`（Room）、`data/remote`（Retrofit）、`data/lexicon`（離線詞典）。
+- 每一個「擁有者回報過的 bug」都要留一個測試，並在 KDoc 寫清楚**當時錯在哪**。
 
 ## Rules
 
-- If `ios/` and `android/` directories do not exist, they are generated (Continuous Native Generation). Never create or edit them by hand — configure native behavior in `app.json` and config plugins.
-- Expo Go only includes its bundled native modules. After adding a library with native code, the app needs a development build: `npx expo run:ios|android` locally, or `eas build --profile development`.
-- Prefer recommended Expo modules over third-party libraries, and check your available skills before adding dependencies. Docs: https://docs.expo.dev/versions/latest/index.md
+- **不做背景播放**：切到別的 App 就暫停（`LifecycleEventEffect(ON_STOP)`）。
+- **不自動寫入字庫**：字庫唯一入口是結果頁的「＋」（`VocabDao.ensureInWordbank`）。
+- **選詞規則凍結**：只挖 B1 以上、去重、排除專名與停用詞、不足 20 題如實回報 shortfall。
+- 不新增依賴除非真的必要；能用既有 API 解決就不要加函式庫（例如字庫分頁沒有用 Paging3）。
+- 註解寫「為什麼」，不要寫「做了什麼」；被否決的做法也要留下原因，避免下次重犯。
