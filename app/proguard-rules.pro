@@ -61,6 +61,10 @@
 # 真正的缺失不會發生（沒有綁定時 slf4j 會退回 NOP logger）。
 -dontwarn org.slf4j.**
 
+# --- Tink（androidx.security.crypto）---
+# errorprone 的註解只在編譯期使用，執行期不需要
+-dontwarn com.google.errorprone.annotations.**
+
 # --- 保留行號，讓 crash report 可讀 ---
 -keepattributes SourceFile,LineNumberTable
 -renamesourcefileattribute SourceFile
